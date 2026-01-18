@@ -24,6 +24,7 @@ When the user runs this command:
 The notification will include:
 - The unique instance name (e.g., "cosmic-phoenix-scarlet-breeze")
 - The hostname and terminal location (e.g., "macbook (iterm-tmux /dev/ttys010)")
+- Context about what was happening (e.g., "Finished: Running command (45s)")
 - A clickable "Focus Terminal" button that switches to the correct terminal tab
 
 If they need help getting a webhook URL:

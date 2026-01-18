@@ -65,6 +65,7 @@ echo_info "Installed Claude command to $COMMANDS_DIR/"
 # macOS-specific: Install ClaudeFocus.app and LaunchAgent
 if [[ "$(uname)" == "Darwin" ]]; then
     # Create LaunchAgent that watches for focus requests
+    # Uses ~/.claude/focus-request (user-owned, not world-writable /tmp)
     cat > "$LAUNCHAGENT_PATH" << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -76,7 +77,7 @@ if [[ "$(uname)" == "Darwin" ]]; then
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>while true; do if [ -f /tmp/claude-focus-request ]; then URL=$(cat /tmp/claude-focus-request); rm -f /tmp/claude-focus-request; ~/.claude/bin/focus-helper "$URL"; fi; sleep 0.2; done</string>
+        <string>FOCUS_FILE="$HOME/.claude/focus-request"; while true; do if [ -f "$FOCUS_FILE" ]; then URL=$(cat "$FOCUS_FILE"); rm -f "$FOCUS_FILE"; ~/.claude/bin/focus-helper "$URL"; fi; sleep 0.2; done</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -92,8 +93,10 @@ EOF
     echo_info "LaunchAgent installed and loaded"
 
     # Create minimal AppleScript app that writes URL to file
+    # Uses ~/.claude/focus-request (user-owned, not world-writable /tmp)
+    # File is created with 0600 permissions for security
     SCRIPT_SOURCE='on open location theURL
-    do shell script "echo " & quoted form of theURL & " > /tmp/claude-focus-request"
+    do shell script "umask 077 && echo " & quoted form of theURL & " > ~/.claude/focus-request"
 end open location'
 
     TEMP_SCRIPT=$(mktemp /tmp/ClaudeFocus.XXXXXX.applescript)

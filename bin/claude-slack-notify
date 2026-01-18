@@ -8,6 +8,14 @@ MIN_DURATION="${CLAUDE_NOTIFY_MIN_SECONDS:-30}"
 
 # Get instance ID - use parent PID to be consistent across hook calls
 INSTANCE_ID="${CLAUDE_INSTANCE_ID:-$PPID}"
+
+# Validate INSTANCE_ID to prevent path traversal attacks
+# Only allow alphanumeric characters, underscore, and hyphen
+if [[ ! "$INSTANCE_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo "Error: Invalid INSTANCE_ID format" >&2
+    exit 1
+fi
+
 INSTANCE_FILE="${INSTANCES_DIR}/${INSTANCE_ID}.json"
 TIMESTAMP_FILE="/tmp/claude-prompt-start-${INSTANCE_ID}"
 
@@ -15,8 +23,32 @@ TIMESTAMP_FILE="/tmp/claude-prompt-start-${INSTANCE_ID}"
 # Detect terminal environment and build focus URL
 # Sets: TERM_TYPE, TERM_TARGET, FOCUS_URL
 # -----------------------------------------------------------------------------
+# URL encode a string (encode all non-alphanumeric except - _ . ~)
 url_encode() {
-    echo "$1" | sed 's/\//%2F/g; s/:/%3A/g; s/\./%2E/g'
+    local string="$1"
+    local length="${#string}"
+    local encoded=""
+    local c
+    for (( i = 0; i < length; i++ )); do
+        c="${string:i:1}"
+        case "$c" in
+            [a-zA-Z0-9._~-]) encoded+="$c" ;;
+            *) encoded+=$(printf '%%%02X' "'$c") ;;
+        esac
+    done
+    echo "$encoded"
+}
+
+# Escape string for safe embedding in JSON
+# Handles: backslash, double quote, newline, carriage return, tab
+json_escape() {
+    local str="$1"
+    str="${str//\\/\\\\}"      # Escape backslashes first
+    str="${str//\"/\\\"}"      # Escape double quotes
+    str="${str//$'\n'/\\n}"    # Escape newlines
+    str="${str//$'\r'/\\r}"    # Escape carriage returns
+    str="${str//$'\t'/\\t}"    # Escape tabs
+    echo "$str"
 }
 
 get_tmux_target() {
@@ -201,7 +233,14 @@ if [[ -n "$TERM_TYPE" && "$TERM_TYPE" != "unknown" ]]; then
     LOCATION="$HOSTNAME ($TERM_TYPE ${TERM_TARGET})"
 fi
 
-PREVIEW_TEXT="${INSTANCE_NAME} on ${HOSTNAME}: ${MESSAGE}"
+# Escape all user-controllable values for safe JSON embedding
+SAFE_INSTANCE_NAME=$(json_escape "$INSTANCE_NAME")
+SAFE_HOSTNAME=$(json_escape "$HOSTNAME")
+SAFE_LOCATION=$(json_escape "$LOCATION")
+SAFE_MESSAGE=$(json_escape "$MESSAGE")
+SAFE_FOCUS_URL=$(json_escape "$FOCUS_URL")
+
+PREVIEW_TEXT="${SAFE_INSTANCE_NAME} on ${SAFE_HOSTNAME}: ${SAFE_MESSAGE}"
 
 # Build button block if we have a focus URL
 BUTTON_BLOCK=""
@@ -216,7 +255,7 @@ if [[ -n "$FOCUS_URL" ]]; then
             \"text\": \"Focus Terminal\",
             \"emoji\": true
           },
-          \"url\": \"${FOCUS_URL}\",
+          \"url\": \"${SAFE_FOCUS_URL}\",
           \"style\": \"primary\"
         }
       ]
@@ -234,7 +273,7 @@ curl -s -X POST -H 'Content-type: application/json' \
             \"type\": \"section\",
             \"text\": {
               \"type\": \"mrkdwn\",
-              \"text\": \"*${INSTANCE_NAME}* on \`${LOCATION}\`\n${MESSAGE}\"
+              \"text\": \"*${SAFE_INSTANCE_NAME}* on \`${SAFE_LOCATION}\`\n${SAFE_MESSAGE}\"
             }
           }${BUTTON_BLOCK}
         ]

@@ -2,21 +2,53 @@
 # Focus helper - switches to the correct iTerm2/Terminal.app tab and/or tmux window
 # Called by LaunchAgent when ClaudeFocus.app receives a claude-focus:// URL
 
+# Secure log file in user-owned directory (not world-readable /tmp)
+LOG_DIR="$HOME/.claude/logs"
+LOG_FILE="$LOG_DIR/focus-debug.log"
+mkdir -p "$LOG_DIR" && chmod 700 "$LOG_DIR"
+
 URL="$1"
-echo "$(date): Helper received: $URL" >> /tmp/focus-debug.log
+echo "$(date): Helper received: $URL" >> "$LOG_FILE"
 
 # Parse URL
 URL_PATH="${URL#claude-focus://}"
 IFS='/' read -r TYPE ARG1 ARG2 <<< "$URL_PATH"
 
-# URL decode arguments
+# URL decode arguments (handles common percent-encoded characters)
 url_decode() {
-    echo "$1" | sed 's/%2F/\//g; s/%3A/:/g; s/%2E/./g'
+    local encoded="$1"
+    # Use printf to decode percent-encoded sequences
+    printf '%b' "${encoded//%/\\x}"
 }
+
+# Sanitize string for safe use in AppleScript
+# Escapes backslashes and double quotes to prevent injection
+sanitize_applescript() {
+    local input="$1"
+    # Reject any input containing characters that shouldn't be in TTY paths or session IDs
+    # Valid chars: alphanumeric, dash, underscore, dot, slash, colon (for tmux targets)
+    if [[ ! "$input" =~ ^[a-zA-Z0-9_./:=-]+$ ]]; then
+        echo "INVALID_INPUT"
+        return 1
+    fi
+    # Escape backslashes first, then double quotes
+    echo "$input" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
 ARG1=$(url_decode "$ARG1")
 ARG2=$(url_decode "$ARG2")
 
-echo "$(date): Type=$TYPE ARG1=$ARG1 ARG2=$ARG2" >> /tmp/focus-debug.log
+# Validate and sanitize inputs
+ARG1=$(sanitize_applescript "$ARG1")
+ARG2=$(sanitize_applescript "$ARG2")
+
+# Exit if inputs are invalid
+if [[ "$ARG1" == "INVALID_INPUT" ]] || [[ "$ARG2" == "INVALID_INPUT" ]]; then
+    echo "$(date): Rejected invalid input - potential injection attempt" >> $LOG_FILE
+    exit 1
+fi
+
+echo "$(date): Type=$TYPE ARG1=$ARG1 ARG2=$ARG2" >> $LOG_FILE
 
 # Tmux utilities
 TMUX_BIN=$(which tmux 2>/dev/null || echo /opt/homebrew/bin/tmux)
@@ -28,7 +60,7 @@ TMUX_SOCKET="/private/tmp/tmux-$(id -u)/default"
 switch_iterm_session() {
     local property="$1"
     local target="$2"
-    echo "$(date): Looking for iTerm2 session with $property=$target" >> /tmp/focus-debug.log
+    echo "$(date): Looking for iTerm2 session with $property=$target" >> $LOG_FILE
 
     local result
     result=$(osascript << APPLESCRIPT 2>&1
@@ -51,13 +83,13 @@ tell application "iTerm2"
 end tell
 APPLESCRIPT
 )
-    echo "$(date): iTerm2 result: $result" >> /tmp/focus-debug.log
+    echo "$(date): iTerm2 result: $result" >> $LOG_FILE
 }
 
 # Switch Terminal.app to the tab with the given TTY
 switch_terminal_tab() {
     local target_tty="$1"
-    echo "$(date): Looking for Terminal.app tab with tty=$target_tty" >> /tmp/focus-debug.log
+    echo "$(date): Looking for Terminal.app tab with tty=$target_tty" >> $LOG_FILE
 
     local result
     result=$(osascript << APPLESCRIPT 2>&1
@@ -78,7 +110,7 @@ tell application "Terminal"
 end tell
 APPLESCRIPT
 )
-    echo "$(date): Terminal.app result: $result" >> /tmp/focus-debug.log
+    echo "$(date): Terminal.app result: $result" >> $LOG_FILE
 }
 
 # Switch tmux to the specified session:window and return the client TTY
@@ -88,17 +120,17 @@ switch_tmux_window() {
     local window="${tmux_target#*:}"
     window="${window%%.*}"
 
-    echo "$(date): Switching tmux to session=$session window=$window" >> /tmp/focus-debug.log
+    echo "$(date): Switching tmux to session=$session window=$window" >> $LOG_FILE
 
     local client_tty
     client_tty=$($TMUX_BIN -S "$TMUX_SOCKET" list-clients -t "$session" -F '#{client_tty}' 2>/dev/null | head -1)
 
     if [[ -n "$client_tty" ]]; then
         $TMUX_BIN -S "$TMUX_SOCKET" switch-client -c "$client_tty" -t "$session:$window" 2>/dev/null
-        echo "$(date): Switched tmux client $client_tty to $session:$window" >> /tmp/focus-debug.log
+        echo "$(date): Switched tmux client $client_tty to $session:$window" >> $LOG_FILE
     else
         $TMUX_BIN -S "$TMUX_SOCKET" select-window -t "$session:$window" 2>/dev/null
-        echo "$(date): Selected tmux window $session:$window directly" >> /tmp/focus-debug.log
+        echo "$(date): Selected tmux window $session:$window directly" >> $LOG_FILE
     fi
 
     echo "$client_tty"

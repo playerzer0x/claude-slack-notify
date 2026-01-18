@@ -53,6 +53,31 @@ json_escape() {
 }
 
 get_tmux_target() {
+    # Get the controlling TTY for this process tree
+    # We need to find the TTY that corresponds to our tmux pane
+    local my_tty=""
+
+    # Try to get TTY from PPID (the Claude process's shell)
+    # Use CLAUDE_INSTANCE_ID if set (it's the Claude process PID)
+    local check_pid="${CLAUDE_INSTANCE_ID:-$PPID}"
+    my_tty=$(ps -p "$check_pid" -o tty= 2>/dev/null | tr -d ' ')
+
+    # Normalize TTY format (add /dev/ prefix if missing)
+    if [[ -n "$my_tty" && "$my_tty" != "??" && "$my_tty" != "?" ]]; then
+        [[ "$my_tty" != /dev/* ]] && my_tty="/dev/$my_tty"
+
+        # Look up which tmux pane has this TTY
+        local pane_info
+        pane_info=$(tmux list-panes -a -F '#{pane_tty} #{session_name}:#{window_index}.#{pane_index}' 2>/dev/null | grep "^${my_tty} " | head -1)
+
+        if [[ -n "$pane_info" ]]; then
+            # Extract session:window.pane from the output
+            echo "${pane_info#* }"
+            return
+        fi
+    fi
+
+    # Fallback to display-message (works when called from the active pane)
     local session window pane
     session=$(tmux display-message -p '#{session_name}' 2>/dev/null)
     window=$(tmux display-message -p '#{window_index}' 2>/dev/null)

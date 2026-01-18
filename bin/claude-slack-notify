@@ -261,12 +261,59 @@ fi
 # -----------------------------------------------------------------------------
 # Start timing (optionally with context)
 # Usage: claude-slack-notify start [context]
+# Hooks receive tool input via stdin as JSON
 # -----------------------------------------------------------------------------
 if [[ "$1" == "start" ]]; then
     date +%s > "$TIMESTAMP_FILE"
-    # Store context if provided (e.g., tool name or description)
-    if [[ -n "$2" ]]; then
-        echo "$2" > "$CONTEXT_FILE"
+
+    # Try to extract context from stdin (Claude Code hook JSON input)
+    CONTEXT=""
+    if [[ ! -t 0 ]]; then
+        # Read stdin (non-blocking, with timeout)
+        STDIN_DATA=$(timeout 1 cat 2>/dev/null || true)
+        if [[ -n "$STDIN_DATA" ]]; then
+            # Try to extract useful context from JSON
+            # For Bash: get description or command
+            # For other tools: get tool_name
+            if command -v jq &>/dev/null; then
+                TOOL_NAME=$(echo "$STDIN_DATA" | jq -r '.tool_name // empty' 2>/dev/null)
+                DESCRIPTION=$(echo "$STDIN_DATA" | jq -r '.tool_input.description // empty' 2>/dev/null)
+                COMMAND=$(echo "$STDIN_DATA" | jq -r '.tool_input.command // empty' 2>/dev/null)
+                FILE_PATH=$(echo "$STDIN_DATA" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
+
+                # Build context string
+                if [[ -n "$DESCRIPTION" ]]; then
+                    CONTEXT="$DESCRIPTION"
+                elif [[ -n "$COMMAND" ]]; then
+                    # Truncate long commands
+                    if [[ ${#COMMAND} -gt 80 ]]; then
+                        CONTEXT="${COMMAND:0:77}..."
+                    else
+                        CONTEXT="$COMMAND"
+                    fi
+                elif [[ -n "$FILE_PATH" ]]; then
+                    CONTEXT="$TOOL_NAME: ${FILE_PATH##*/}"
+                elif [[ -n "$TOOL_NAME" ]]; then
+                    CONTEXT="$TOOL_NAME"
+                fi
+            else
+                # Fallback: try grep for common fields
+                DESCRIPTION=$(echo "$STDIN_DATA" | grep -o '"description"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
+                if [[ -n "$DESCRIPTION" ]]; then
+                    CONTEXT="$DESCRIPTION"
+                fi
+            fi
+        fi
+    fi
+
+    # Fallback to argument if no stdin context
+    if [[ -z "$CONTEXT" && -n "$2" ]]; then
+        CONTEXT="$2"
+    fi
+
+    # Store context
+    if [[ -n "$CONTEXT" ]]; then
+        echo "$CONTEXT" > "$CONTEXT_FILE"
     else
         rm -f "$CONTEXT_FILE"
     fi

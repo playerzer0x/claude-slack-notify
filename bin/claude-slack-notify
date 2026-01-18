@@ -65,40 +65,144 @@ detect_terminal() {
     TERM_TARGET=""
     FOCUS_URL=""
 
-    if [[ -n "$TMUX" ]]; then
-        local tmux_target client_tty term_app
-        tmux_target=$(get_tmux_target)
-        client_tty=$(tmux display-message -p '#{client_tty}' 2>/dev/null)
+    # Detect OS
+    local os_type
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) os_type="windows" ;;
+        Linux)
+            if [[ -n "$WSL_DISTRO_NAME" ]] || grep -qi microsoft /proc/version 2>/dev/null; then
+                os_type="wsl"
+            else
+                os_type="linux"
+            fi
+            ;;
+        Darwin) os_type="macos" ;;
+        *) os_type="unknown" ;;
+    esac
 
-        # Detect which terminal app is running tmux
-        # iTerm2 always sets ITERM_SESSION_ID, so if it's not set, assume Terminal.app
-        if [[ -n "$ITERM_SESSION_ID" ]]; then
-            term_app="iterm"
-        else
-            term_app="terminal"
+    # ---------------------------------------------------------------------
+    # Windows Terminal detection (runs in WSL, Git Bash, MSYS2, Cygwin)
+    # ---------------------------------------------------------------------
+    if [[ "$os_type" == "wsl" || "$os_type" == "windows" ]]; then
+        if [[ -n "$WT_SESSION" ]]; then
+            # Windows Terminal detected
+            if [[ -n "$TMUX" ]]; then
+                local tmux_target
+                tmux_target=$(get_tmux_target)
+                TERM_TYPE="wt-tmux"
+                TERM_TARGET="${WT_SESSION}|${tmux_target}"
+                FOCUS_URL="claude-focus://wt-tmux/$(url_encode "$WT_SESSION")/$(url_encode "$tmux_target")"
+            else
+                TERM_TYPE="windows-terminal"
+                TERM_TARGET="$WT_SESSION"
+                FOCUS_URL="claude-focus://windows-terminal/$(url_encode "$WT_SESSION")"
+            fi
+            return
+        elif [[ -n "$ConEmuPID" ]]; then
+            # ConEmu/Cmder detected
+            TERM_TYPE="conemu"
+            TERM_TARGET="$ConEmuPID"
+            FOCUS_URL="claude-focus://conemu/$(url_encode "$ConEmuPID")"
+            return
+        elif [[ "$os_type" == "wsl" ]]; then
+            # WSL without Windows Terminal - identify by WSL distro and window
+            local wsl_window_id
+            wsl_window_id="${WSL_DISTRO_NAME:-wsl}-$$"
+            if [[ -n "$TMUX" ]]; then
+                local tmux_target
+                tmux_target=$(get_tmux_target)
+                TERM_TYPE="wsl-tmux"
+                TERM_TARGET="${wsl_window_id}|${tmux_target}"
+                FOCUS_URL="claude-focus://wsl-tmux/$(url_encode "$wsl_window_id")/$(url_encode "$tmux_target")"
+            else
+                TERM_TYPE="wsl"
+                TERM_TARGET="$wsl_window_id"
+                FOCUS_URL="claude-focus://wsl/$(url_encode "$wsl_window_id")"
+            fi
+            return
+        elif [[ "$os_type" == "windows" ]]; then
+            # Git Bash / MSYS2 / Cygwin without Windows Terminal
+            local mintty_pid="${MINTTY_PID:-$PPID}"
+            TERM_TYPE="mintty"
+            TERM_TARGET="$mintty_pid"
+            FOCUS_URL="claude-focus://mintty/$(url_encode "$mintty_pid")"
+            return
         fi
+    fi
 
-        if [[ -n "$client_tty" ]]; then
-            TERM_TYPE="${term_app}-tmux"
-            TERM_TARGET="${client_tty}|${tmux_target}"
-            FOCUS_URL="claude-focus://${term_app}-tmux/$(url_encode "$client_tty")/$(url_encode "$tmux_target")"
-        else
-            TERM_TYPE="tmux"
-            TERM_TARGET="$tmux_target"
-            FOCUS_URL="claude-focus://tmux/$(url_encode "$tmux_target")"
+    # ---------------------------------------------------------------------
+    # macOS terminal detection
+    # ---------------------------------------------------------------------
+    if [[ "$os_type" == "macos" ]]; then
+        if [[ -n "$TMUX" ]]; then
+            local tmux_target client_tty term_app client_termtype
+            tmux_target=$(get_tmux_target)
+            client_tty=$(tmux display-message -p '#{client_tty}' 2>/dev/null)
+            client_termtype=$(tmux display-message -p '#{client_termtype}' 2>/dev/null)
+
+            # Detect which terminal app is running tmux
+            # Use client_termtype (most reliable), fall back to ITERM_SESSION_ID
+            if [[ "$client_termtype" == *"iTerm"* ]] || [[ -n "$ITERM_SESSION_ID" ]]; then
+                term_app="iterm"
+            else
+                term_app="terminal"
+            fi
+
+            if [[ -n "$client_tty" ]]; then
+                TERM_TYPE="${term_app}-tmux"
+                TERM_TARGET="${client_tty}|${tmux_target}"
+                FOCUS_URL="claude-focus://${term_app}-tmux/$(url_encode "$client_tty")/$(url_encode "$tmux_target")"
+            else
+                TERM_TYPE="tmux"
+                TERM_TARGET="$tmux_target"
+                FOCUS_URL="claude-focus://tmux/$(url_encode "$tmux_target")"
+            fi
+        elif [[ -n "$ITERM_SESSION_ID" ]]; then
+            TERM_TYPE="iterm2"
+            TERM_TARGET="${ITERM_SESSION_ID#*:}"
+            FOCUS_URL="claude-focus://iterm2/${TERM_TARGET}"
+        elif [[ "$__CFBundleIdentifier" == "com.apple.Terminal" || "$TERM_PROGRAM" == "Apple_Terminal" ]]; then
+            # Terminal.app - get TTY of current tab via AppleScript (works even in subshells)
+            local terminal_tty
+            terminal_tty=$(osascript -e 'tell application "Terminal" to return tty of selected tab of front window' 2>/dev/null)
+            if [[ -n "$terminal_tty" ]]; then
+                TERM_TYPE="terminal"
+                TERM_TARGET="$terminal_tty"
+                FOCUS_URL="claude-focus://terminal/$(url_encode "$terminal_tty")"
+            fi
         fi
-    elif [[ -n "$ITERM_SESSION_ID" ]]; then
-        TERM_TYPE="iterm2"
-        TERM_TARGET="${ITERM_SESSION_ID#*:}"
-        FOCUS_URL="claude-focus://iterm2/${TERM_TARGET}"
-    elif [[ "$__CFBundleIdentifier" == "com.apple.Terminal" || "$TERM_PROGRAM" == "Apple_Terminal" ]]; then
-        # Terminal.app - get TTY of current tab via AppleScript (works even in subshells)
-        local terminal_tty
-        terminal_tty=$(osascript -e 'tell application "Terminal" to return tty of selected tab of front window' 2>/dev/null)
-        if [[ -n "$terminal_tty" ]]; then
-            TERM_TYPE="terminal"
-            TERM_TARGET="$terminal_tty"
-            FOCUS_URL="claude-focus://terminal/$(url_encode "$terminal_tty")"
+        return
+    fi
+
+    # ---------------------------------------------------------------------
+    # Linux terminal detection (non-WSL)
+    # ---------------------------------------------------------------------
+    if [[ "$os_type" == "linux" ]]; then
+        if [[ -n "$TMUX" ]]; then
+            local tmux_target client_tty
+            tmux_target=$(get_tmux_target)
+            client_tty=$(tmux display-message -p '#{client_tty}' 2>/dev/null)
+            if [[ -n "$client_tty" ]]; then
+                TERM_TYPE="linux-tmux"
+                TERM_TARGET="${client_tty}|${tmux_target}"
+                FOCUS_URL="claude-focus://linux-tmux/$(url_encode "$client_tty")/$(url_encode "$tmux_target")"
+            else
+                TERM_TYPE="tmux"
+                TERM_TARGET="$tmux_target"
+                FOCUS_URL="claude-focus://tmux/$(url_encode "$tmux_target")"
+            fi
+        elif [[ -n "$GNOME_TERMINAL_SERVICE" ]]; then
+            TERM_TYPE="gnome-terminal"
+            TERM_TARGET="$$"
+            FOCUS_URL="claude-focus://gnome-terminal/$(url_encode "$$")"
+        elif [[ -n "$KONSOLE_DBUS_SESSION" ]]; then
+            TERM_TYPE="konsole"
+            TERM_TARGET="$KONSOLE_DBUS_SESSION"
+            FOCUS_URL="claude-focus://konsole/$(url_encode "$KONSOLE_DBUS_SESSION")"
+        elif [[ "$TERM_PROGRAM" == "vscode" ]]; then
+            TERM_TYPE="vscode"
+            TERM_TARGET="$$"
+            FOCUS_URL="claude-focus://vscode/$(url_encode "$$")"
         fi
     fi
 }

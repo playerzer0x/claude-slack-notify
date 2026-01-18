@@ -25,8 +25,13 @@ url_decode() {
 # Escapes backslashes and double quotes to prevent injection
 sanitize_applescript() {
     local input="$1"
+    # Allow empty strings (some URL types have optional args)
+    if [[ -z "$input" ]]; then
+        echo ""
+        return 0
+    fi
     # Reject any input containing characters that shouldn't be in TTY paths or session IDs
-    # Valid chars: alphanumeric, dash, underscore, dot, slash, colon (for tmux targets)
+    # Valid chars: alphanumeric, dash, underscore, dot, slash, colon, equals (for tmux targets)
     if [[ ! "$input" =~ ^[a-zA-Z0-9_./:=-]+$ ]]; then
         echo "INVALID_INPUT"
         return 1

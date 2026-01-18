@@ -1,0 +1,244 @@
+#!/bin/bash
+# Claude Slack Notifier - Multi-instance aware with clickable focus buttons
+
+CLAUDE_DIR="${HOME}/.claude"
+WEBHOOK_FILE="${CLAUDE_DIR}/slack-webhook-url"
+INSTANCES_DIR="${CLAUDE_DIR}/instances"
+MIN_DURATION="${CLAUDE_NOTIFY_MIN_SECONDS:-30}"
+
+# Get instance ID - use parent PID to be consistent across hook calls
+INSTANCE_ID="${CLAUDE_INSTANCE_ID:-$PPID}"
+INSTANCE_FILE="${INSTANCES_DIR}/${INSTANCE_ID}.json"
+TIMESTAMP_FILE="/tmp/claude-prompt-start-${INSTANCE_ID}"
+
+# -----------------------------------------------------------------------------
+# Detect terminal environment and build focus URL
+# Sets: TERM_TYPE, TERM_TARGET, FOCUS_URL
+# -----------------------------------------------------------------------------
+url_encode() {
+    echo "$1" | sed 's/\//%2F/g; s/:/%3A/g; s/\./%2E/g'
+}
+
+get_tmux_target() {
+    local session window pane
+    session=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+    window=$(tmux display-message -p '#{window_index}' 2>/dev/null)
+    pane=$(tmux display-message -p '#{pane_index}' 2>/dev/null)
+    echo "${session}:${window}.${pane}"
+}
+
+detect_terminal() {
+    TERM_TYPE="unknown"
+    TERM_TARGET=""
+    FOCUS_URL=""
+
+    if [[ -n "$TMUX" ]]; then
+        local tmux_target client_tty term_app
+        tmux_target=$(get_tmux_target)
+        client_tty=$(tmux display-message -p '#{client_tty}' 2>/dev/null)
+
+        # Detect which terminal app is running tmux
+        # iTerm2 always sets ITERM_SESSION_ID, so if it's not set, assume Terminal.app
+        if [[ -n "$ITERM_SESSION_ID" ]]; then
+            term_app="iterm"
+        else
+            term_app="terminal"
+        fi
+
+        if [[ -n "$client_tty" ]]; then
+            TERM_TYPE="${term_app}-tmux"
+            TERM_TARGET="${client_tty}|${tmux_target}"
+            FOCUS_URL="claude-focus://${term_app}-tmux/$(url_encode "$client_tty")/$(url_encode "$tmux_target")"
+        else
+            TERM_TYPE="tmux"
+            TERM_TARGET="$tmux_target"
+            FOCUS_URL="claude-focus://tmux/$(url_encode "$tmux_target")"
+        fi
+    elif [[ -n "$ITERM_SESSION_ID" ]]; then
+        TERM_TYPE="iterm2"
+        TERM_TARGET="${ITERM_SESSION_ID#*:}"
+        FOCUS_URL="claude-focus://iterm2/${TERM_TARGET}"
+    elif [[ "$__CFBundleIdentifier" == "com.apple.Terminal" || "$TERM_PROGRAM" == "Apple_Terminal" ]]; then
+        # Terminal.app - get TTY of current tab via AppleScript (works even in subshells)
+        local terminal_tty
+        terminal_tty=$(osascript -e 'tell application "Terminal" to return tty of selected tab of front window' 2>/dev/null)
+        if [[ -n "$terminal_tty" ]]; then
+            TERM_TYPE="terminal"
+            TERM_TARGET="$terminal_tty"
+            FOCUS_URL="claude-focus://terminal/$(url_encode "$terminal_tty")"
+        fi
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Register a new instance
+# -----------------------------------------------------------------------------
+if [[ "$1" == "register" ]]; then
+    mkdir -p "$INSTANCES_DIR"
+
+    INSTANCE_NAME="$2"
+    if [[ -z "$INSTANCE_NAME" ]]; then
+        ADJECTIVES=("red" "blue" "green" "purple" "orange" "silver" "golden" "cosmic" "swift" "bright" "dark" "wild" "calm" "bold" "quick")
+        NOUNS=("wolf" "hawk" "bear" "lion" "tiger" "eagle" "falcon" "dragon" "phoenix" "raven" "fox" "panther" "cobra" "shark" "storm")
+        COLORS=("amber" "coral" "jade" "ruby" "onyx" "ivory" "copper" "bronze" "teal" "indigo" "crimson" "azure" "scarlet" "violet" "emerald")
+        ITEMS=("coffee" "thunder" "shadow" "crystal" "ember" "breeze" "river" "mountain" "forest" "ocean" "sunrise" "comet" "glacier" "canyon" "meadow")
+        INSTANCE_NAME="${ADJECTIVES[$RANDOM % ${#ADJECTIVES[@]}]}-${NOUNS[$RANDOM % ${#NOUNS[@]}]}-${COLORS[$RANDOM % ${#COLORS[@]}]}-${ITEMS[$RANDOM % ${#ITEMS[@]}]}"
+    fi
+
+    detect_terminal
+    HOSTNAME=$(hostname -s 2>/dev/null || echo "unknown")
+
+    cat > "$INSTANCE_FILE" << EOF
+{
+  "id": "${INSTANCE_ID}",
+  "name": "${INSTANCE_NAME}",
+  "hostname": "${HOSTNAME}",
+  "term_type": "${TERM_TYPE}",
+  "term_target": "${TERM_TARGET}",
+  "focus_url": "${FOCUS_URL}",
+  "registered_at": "$(date -Iseconds)"
+}
+EOF
+
+    echo "$INSTANCE_NAME"
+    exit 0
+fi
+
+# -----------------------------------------------------------------------------
+# List registered instances
+# -----------------------------------------------------------------------------
+if [[ "$1" == "list" ]]; then
+    if [[ -d "$INSTANCES_DIR" ]]; then
+        for f in "$INSTANCES_DIR"/*.json; do
+            [[ -f "$f" ]] || continue
+            NAME=$(grep -o '"name": *"[^"]*"' "$f" | cut -d'"' -f4)
+            HOST=$(grep -o '"hostname": *"[^"]*"' "$f" | cut -d'"' -f4)
+            TERM=$(grep -o '"term_type": *"[^"]*"' "$f" | cut -d'"' -f4)
+            TARGET=$(grep -o '"term_target": *"[^"]*"' "$f" | cut -d'"' -f4)
+            echo "$NAME @ $HOST ($TERM $TARGET)"
+        done
+    fi
+    exit 0
+fi
+
+# -----------------------------------------------------------------------------
+# Start timing
+# -----------------------------------------------------------------------------
+if [[ "$1" == "start" ]]; then
+    date +%s > "$TIMESTAMP_FILE"
+    exit 0
+fi
+
+# -----------------------------------------------------------------------------
+# Check elapsed time and notify if needed
+# -----------------------------------------------------------------------------
+if [[ "$1" == "check" ]]; then
+    if [[ -f "$TIMESTAMP_FILE" ]]; then
+        START_TIME=$(cat "$TIMESTAMP_FILE")
+        NOW=$(date +%s)
+        ELAPSED=$((NOW - START_TIME))
+        rm -f "$TIMESTAMP_FILE"
+
+        if [[ $ELAPSED -lt $MIN_DURATION ]]; then
+            exit 0
+        fi
+
+        MESSAGE="Task completed after ${ELAPSED}s"
+    else
+        exit 0
+    fi
+else
+    MESSAGE="${1:-Ready for input}"
+fi
+
+STATUS="${2:-waiting}"
+
+# -----------------------------------------------------------------------------
+# Get webhook URL
+# -----------------------------------------------------------------------------
+if [[ -f "$WEBHOOK_FILE" ]]; then
+    WEBHOOK_URL=$(cat "$WEBHOOK_FILE")
+elif [[ -n "$SLACK_WEBHOOK_URL" ]]; then
+    WEBHOOK_URL="$SLACK_WEBHOOK_URL"
+else
+    exit 0
+fi
+
+# -----------------------------------------------------------------------------
+# Load instance info and detect terminal
+# -----------------------------------------------------------------------------
+INSTANCE_NAME="Claude"
+HOSTNAME=$(hostname -s 2>/dev/null || echo "unknown")
+
+if [[ -f "$INSTANCE_FILE" ]]; then
+    INSTANCE_NAME=$(grep -o '"name": *"[^"]*"' "$INSTANCE_FILE" | cut -d'"' -f4)
+    HOSTNAME=$(grep -o '"hostname": *"[^"]*"' "$INSTANCE_FILE" | cut -d'"' -f4)
+fi
+
+# Dynamically detect current terminal (tmux window/pane can change)
+detect_terminal
+
+# Fallback to stored values if detection failed (for Docker containers, etc.)
+if [[ "$TERM_TYPE" == "unknown" && -f "$INSTANCE_FILE" ]]; then
+    TERM_TYPE=$(grep -o '"term_type": *"[^"]*"' "$INSTANCE_FILE" | cut -d'"' -f4)
+    TERM_TARGET=$(grep -o '"term_target": *"[^"]*"' "$INSTANCE_FILE" | cut -d'"' -f4)
+    FOCUS_URL=$(grep -o '"focus_url": *"[^"]*"' "$INSTANCE_FILE" | cut -d'"' -f4)
+fi
+
+# -----------------------------------------------------------------------------
+# Build notification
+# -----------------------------------------------------------------------------
+case "$STATUS" in
+    started)  COLOR="#36a64f" ;;
+    waiting)  COLOR="#ff9800" ;;
+    error)    COLOR="#ff0000" ;;
+    *)        COLOR="#3AA3E3" ;;
+esac
+
+# Build location string
+LOCATION="$HOSTNAME"
+if [[ -n "$TERM_TYPE" && "$TERM_TYPE" != "unknown" ]]; then
+    LOCATION="$HOSTNAME ($TERM_TYPE ${TERM_TARGET})"
+fi
+
+PREVIEW_TEXT="${INSTANCE_NAME} on ${HOSTNAME}: ${MESSAGE}"
+
+# Build button block if we have a focus URL
+BUTTON_BLOCK=""
+if [[ -n "$FOCUS_URL" ]]; then
+    BUTTON_BLOCK=",{
+      \"type\": \"actions\",
+      \"elements\": [
+        {
+          \"type\": \"button\",
+          \"text\": {
+            \"type\": \"plain_text\",
+            \"text\": \"Focus Terminal\",
+            \"emoji\": true
+          },
+          \"url\": \"${FOCUS_URL}\",
+          \"style\": \"primary\"
+        }
+      ]
+    }"
+fi
+
+curl -s -X POST -H 'Content-type: application/json' \
+  --data "{
+    \"text\": \"${PREVIEW_TEXT}\",
+    \"attachments\": [
+      {
+        \"color\": \"${COLOR}\",
+        \"blocks\": [
+          {
+            \"type\": \"section\",
+            \"text\": {
+              \"type\": \"mrkdwn\",
+              \"text\": \"*${INSTANCE_NAME}* on \`${LOCATION}\`\n${MESSAGE}\"
+            }
+          }${BUTTON_BLOCK}
+        ]
+      }
+    ]
+  }" \
+  "$WEBHOOK_URL" > /dev/null 2>&1

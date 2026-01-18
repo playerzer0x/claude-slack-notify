@@ -1,0 +1,139 @@
+#!/bin/bash
+# Focus helper - switches to the correct iTerm2/Terminal.app tab and/or tmux window
+# Called by LaunchAgent when ClaudeFocus.app receives a claude-focus:// URL
+
+URL="$1"
+echo "$(date): Helper received: $URL" >> /tmp/focus-debug.log
+
+# Parse URL
+URL_PATH="${URL#claude-focus://}"
+IFS='/' read -r TYPE ARG1 ARG2 <<< "$URL_PATH"
+
+# URL decode arguments
+url_decode() {
+    echo "$1" | sed 's/%2F/\//g; s/%3A/:/g; s/%2E/./g'
+}
+ARG1=$(url_decode "$ARG1")
+ARG2=$(url_decode "$ARG2")
+
+echo "$(date): Type=$TYPE ARG1=$ARG1 ARG2=$ARG2" >> /tmp/focus-debug.log
+
+# Tmux utilities
+TMUX_BIN=$(which tmux 2>/dev/null || echo /opt/homebrew/bin/tmux)
+TMUX_SOCKET="/private/tmp/tmux-$(id -u)/default"
+
+# Switch iTerm2 to the tab matching a session property
+# Usage: switch_iterm_session <property> <value>
+# property: "tty" or "id"
+switch_iterm_session() {
+    local property="$1"
+    local target="$2"
+    echo "$(date): Looking for iTerm2 session with $property=$target" >> /tmp/focus-debug.log
+
+    local result
+    result=$(osascript << APPLESCRIPT 2>&1
+tell application "iTerm2"
+    activate
+    repeat with w in windows
+        set tabIndex to 0
+        repeat with t in tabs of w
+            set tabIndex to tabIndex + 1
+            repeat with s in sessions of t
+                if ($property of s) is "$target" then
+                    set index of w to 1
+                    tell w to select tab tabIndex
+                    return "Switched to tab " & tabIndex & " for $property " & ($property of s)
+                end if
+            end repeat
+        end repeat
+    end repeat
+    return "$property $target not found"
+end tell
+APPLESCRIPT
+)
+    echo "$(date): iTerm2 result: $result" >> /tmp/focus-debug.log
+}
+
+# Switch Terminal.app to the tab with the given TTY
+switch_terminal_tab() {
+    local target_tty="$1"
+    echo "$(date): Looking for Terminal.app tab with tty=$target_tty" >> /tmp/focus-debug.log
+
+    local result
+    result=$(osascript << APPLESCRIPT 2>&1
+tell application "Terminal"
+    activate
+    repeat with w in windows
+        set tabIndex to 0
+        repeat with t in tabs of w
+            set tabIndex to tabIndex + 1
+            if (tty of t) is "$target_tty" then
+                set frontmost of w to true
+                set selected tab of w to t
+                return "Switched to tab " & tabIndex & " for tty " & (tty of t)
+            end if
+        end repeat
+    end repeat
+    return "tty $target_tty not found"
+end tell
+APPLESCRIPT
+)
+    echo "$(date): Terminal.app result: $result" >> /tmp/focus-debug.log
+}
+
+# Switch tmux to the specified session:window and return the client TTY
+switch_tmux_window() {
+    local tmux_target="$1"
+    local session="${tmux_target%%:*}"
+    local window="${tmux_target#*:}"
+    window="${window%%.*}"
+
+    echo "$(date): Switching tmux to session=$session window=$window" >> /tmp/focus-debug.log
+
+    local client_tty
+    client_tty=$($TMUX_BIN -S "$TMUX_SOCKET" list-clients -t "$session" -F '#{client_tty}' 2>/dev/null | head -1)
+
+    if [[ -n "$client_tty" ]]; then
+        $TMUX_BIN -S "$TMUX_SOCKET" switch-client -c "$client_tty" -t "$session:$window" 2>/dev/null
+        echo "$(date): Switched tmux client $client_tty to $session:$window" >> /tmp/focus-debug.log
+    else
+        $TMUX_BIN -S "$TMUX_SOCKET" select-window -t "$session:$window" 2>/dev/null
+        echo "$(date): Selected tmux window $session:$window directly" >> /tmp/focus-debug.log
+    fi
+
+    echo "$client_tty"
+}
+
+# Main logic
+case "$TYPE" in
+    iterm-tmux)
+        # iTerm2 running tmux - switch iTerm tab then tmux window
+        switch_iterm_session "tty" "$ARG1"
+        switch_tmux_window "$ARG2"
+        ;;
+    iterm2)
+        # Pure iTerm2 - ARG1 is the session UUID
+        switch_iterm_session "id" "$ARG1"
+        ;;
+    terminal-tmux)
+        # Terminal.app running tmux - switch Terminal tab then tmux window
+        switch_terminal_tab "$ARG1"
+        switch_tmux_window "$ARG2"
+        ;;
+    terminal)
+        # Pure Terminal.app - switch to the tab by TTY
+        switch_terminal_tab "$ARG1"
+        ;;
+    tmux)
+        # Pure tmux - switch tmux window, then try to find the terminal tab
+        client_tty=$(switch_tmux_window "$ARG1")
+        if [[ -n "$client_tty" ]]; then
+            # Try iTerm first, then Terminal
+            switch_iterm_session "tty" "$client_tty" 2>/dev/null || \
+            switch_terminal_tab "$client_tty" 2>/dev/null
+        else
+            osascript -e 'tell application "iTerm2" to activate' 2>/dev/null || \
+            osascript -e 'tell application "Terminal" to activate' 2>/dev/null
+        fi
+        ;;
+esac

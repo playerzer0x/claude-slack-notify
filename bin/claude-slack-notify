@@ -18,6 +18,7 @@ fi
 
 INSTANCE_FILE="${INSTANCES_DIR}/${INSTANCE_ID}.json"
 TIMESTAMP_FILE="/tmp/claude-prompt-start-${INSTANCE_ID}"
+CONTEXT_FILE="/tmp/claude-prompt-context-${INSTANCE_ID}"
 
 # -----------------------------------------------------------------------------
 # Detect terminal environment and build focus URL
@@ -154,15 +155,24 @@ if [[ "$1" == "list" ]]; then
 fi
 
 # -----------------------------------------------------------------------------
-# Start timing
+# Start timing (optionally with context)
+# Usage: claude-slack-notify start [context]
 # -----------------------------------------------------------------------------
 if [[ "$1" == "start" ]]; then
     date +%s > "$TIMESTAMP_FILE"
+    # Store context if provided (e.g., tool name or description)
+    if [[ -n "$2" ]]; then
+        echo "$2" > "$CONTEXT_FILE"
+    else
+        rm -f "$CONTEXT_FILE"
+    fi
     exit 0
 fi
 
 # -----------------------------------------------------------------------------
 # Check elapsed time and notify if needed
+# Usage: claude-slack-notify check [context]
+# Context can be passed here or was stored during 'start'
 # -----------------------------------------------------------------------------
 if [[ "$1" == "check" ]]; then
     if [[ -f "$TIMESTAMP_FILE" ]]; then
@@ -172,10 +182,23 @@ if [[ "$1" == "check" ]]; then
         rm -f "$TIMESTAMP_FILE"
 
         if [[ $ELAPSED -lt $MIN_DURATION ]]; then
+            rm -f "$CONTEXT_FILE"
             exit 0
         fi
 
-        MESSAGE="Task completed after ${ELAPSED}s"
+        # Get context: prefer arg $2, fallback to stored context file
+        CONTEXT="${2:-}"
+        if [[ -z "$CONTEXT" && -f "$CONTEXT_FILE" ]]; then
+            CONTEXT=$(cat "$CONTEXT_FILE")
+        fi
+        rm -f "$CONTEXT_FILE"
+
+        # Build message with context if available
+        if [[ -n "$CONTEXT" ]]; then
+            MESSAGE="Finished: ${CONTEXT} (${ELAPSED}s)"
+        else
+            MESSAGE="Task completed after ${ELAPSED}s"
+        fi
     else
         exit 0
     fi

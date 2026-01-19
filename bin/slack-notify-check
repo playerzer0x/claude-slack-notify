@@ -1,4 +1,20 @@
 #!/bin/bash
 # Hook wrapper for Stop - checks elapsed time and notifies if needed
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLAUDE_INSTANCE_ID=$PPID "$SCRIPT_DIR/claude-slack-notify" check
+# Extracts session_id from stdin JSON (provided by Claude Code hooks) to use as instance ID
+
+STDIN_DATA=$(cat)
+
+# Try jq first, fall back to grep/sed if not available
+if command -v jq &>/dev/null; then
+    SESSION_ID=$(echo "$STDIN_DATA" | jq -r '.session_id // empty' 2>/dev/null)
+else
+    # Fallback: extract session_id using grep/sed (works for simple JSON)
+    SESSION_ID=$(echo "$STDIN_DATA" | grep -o '"session_id":"[^"]*"' | sed 's/"session_id":"//;s/"$//' 2>/dev/null)
+fi
+
+if [[ -n "$SESSION_ID" ]]; then
+    # Pass stdin data through for transcript access (used to extract context message)
+    echo "$STDIN_DATA" | CLAUDE_INSTANCE_ID="$SESSION_ID" exec "$HOME/.claude/bin/claude-slack-notify" check
+else
+    exec "$HOME/.claude/bin/claude-slack-notify" check
+fi

@@ -1,0 +1,28 @@
+#!/bin/bash
+# Get current Claude session ID from the most recently modified transcript
+# Works by finding the newest .jsonl file in the current project's transcripts directory
+
+CLAUDE_DIR="${HOME}/.claude"
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
+
+# Convert project dir to Claude's project path format (slashes become dashes)
+PROJECT_KEY=$(echo "$PROJECT_DIR" | sed 's|^/||; s|/|-|g')
+TRANSCRIPTS_DIR="${CLAUDE_DIR}/projects/-${PROJECT_KEY}"
+
+if [[ -d "$TRANSCRIPTS_DIR" ]]; then
+    # Find most recently modified .jsonl file and extract session ID from filename
+    NEWEST=$(ls -t "$TRANSCRIPTS_DIR"/*.jsonl 2>/dev/null | head -1)
+    if [[ -n "$NEWEST" ]]; then
+        basename "$NEWEST" .jsonl
+        exit 0
+    fi
+fi
+
+# Fallback: search all project directories for most recent transcript
+NEWEST=$(find "$CLAUDE_DIR/projects" -name "*.jsonl" -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2)
+if [[ -n "$NEWEST" ]]; then
+    basename "$NEWEST" .jsonl
+    exit 0
+fi
+
+echo "unknown-session"

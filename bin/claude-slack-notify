@@ -56,9 +56,9 @@ get_tmux_target() {
     # We need to find the TTY that corresponds to our tmux pane
     local my_tty=""
 
-    # Try to get TTY from PPID (the Claude process's shell)
-    # Use CLAUDE_INSTANCE_ID if set (it's the Claude process PID)
-    local check_pid="${CLAUDE_INSTANCE_ID:-$PPID}"
+    # Try to get TTY from PPID (the parent shell process)
+    # Note: CLAUDE_INSTANCE_ID is now a session UUID, not a PID, so we use PPID for TTY lookup
+    local check_pid="$PPID"
     my_tty=$(ps -p "$check_pid" -o tty= 2>/dev/null | tr -d ' ')
 
     # Normalize TTY format (add /dev/ prefix if missing)

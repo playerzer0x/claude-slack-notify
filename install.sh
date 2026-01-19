@@ -41,6 +41,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     rm -f "$BIN_DIR/claude-slack-notify"
     rm -f "$BIN_DIR/slack-notify-start"
     rm -f "$BIN_DIR/slack-notify-check"
+    rm -f "$BIN_DIR/get-session-id"
     rm -f "$BIN_DIR/focus-helper"
     rm -f "$COMMANDS_DIR/slack-notify.md"
 
@@ -60,16 +61,18 @@ if [[ "${1:-}" == "--link" ]]; then
     ln -sf "$SCRIPT_DIR/bin/claude-slack-notify" "$BIN_DIR/"
     ln -sf "$SCRIPT_DIR/bin/slack-notify-start" "$BIN_DIR/"
     ln -sf "$SCRIPT_DIR/bin/slack-notify-check" "$BIN_DIR/"
+    ln -sf "$SCRIPT_DIR/bin/get-session-id" "$BIN_DIR/"
     ln -sf "$SCRIPT_DIR/bin/focus-helper" "$BIN_DIR/"
     echo_info "Installed scripts to $BIN_DIR/ (symlinked to repo)"
 else
     # Remove existing files/symlinks first, then copy fresh
-    rm -f "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/focus-helper"
+    rm -f "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/get-session-id" "$BIN_DIR/focus-helper"
     cp "$SCRIPT_DIR/bin/claude-slack-notify" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/slack-notify-start" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/slack-notify-check" "$BIN_DIR/"
+    cp "$SCRIPT_DIR/bin/get-session-id" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/focus-helper" "$BIN_DIR/"
-    chmod +x "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/focus-helper"
+    chmod +x "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/get-session-id" "$BIN_DIR/focus-helper"
     echo_info "Installed scripts to $BIN_DIR/"
 fi
 

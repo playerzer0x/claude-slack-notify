@@ -224,7 +224,9 @@ Add to `~/.claude/settings.json` for automatic notifications:
 }
 ```
 
-The `slack-notify-start` and `slack-notify-check` wrapper scripts handle instance ID detection and context extraction automatically.
+The `slack-notify-start` and `slack-notify-check` wrapper scripts automatically extract the `session_id` from the JSON that Claude Code passes to hooks. This ensures consistent instance identification across hook invocations.
+
+**Note:** For richer context extraction from transcripts, install `jq`. The scripts work without it but provide better notification messages with it installed.
 
 ## Commands
 
@@ -260,9 +262,10 @@ claude-slack-notify "message" [status]
 - `~/.claude/bin/claude-slack-notify` - Main notification script
 - `~/.claude/bin/slack-notify-start` - Hook wrapper for UserPromptSubmit
 - `~/.claude/bin/slack-notify-check` - Hook wrapper for Stop
+- `~/.claude/bin/get-session-id` - Helper to get current session ID
 - `~/.claude/commands/slack-notify.md` - Claude command definition
 - `~/.claude/slack-webhook-url` - Slack webhook URL
-- `~/.claude/instances/` - Registered instance data
+- `~/.claude/instances/` - Registered instance data (keyed by session ID)
 - `~/.claude/logs/focus-debug.log` - Focus helper debug log
 
 ### macOS only

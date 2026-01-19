@@ -42,6 +42,9 @@ if ($Uninstall) {
         "$BinDir\claude-slack-notify",
         "$BinDir\focus-helper",
         "$BinDir\focus-helper-windows.ps1",
+        "$BinDir\get-session-id",
+        "$BinDir\slack-notify-start",
+        "$BinDir\slack-notify-check",
         "$BinDir\claude-focus-handler.cmd",
         "$CommandsDir\slack-notify.md"
     )
@@ -75,11 +78,17 @@ foreach ($dir in $dirsToCreate) {
 Remove-Item "$BinDir\claude-slack-notify" -Force -ErrorAction SilentlyContinue
 Remove-Item "$BinDir\focus-helper" -Force -ErrorAction SilentlyContinue
 Remove-Item "$BinDir\focus-helper-windows.ps1" -Force -ErrorAction SilentlyContinue
+Remove-Item "$BinDir\get-session-id" -Force -ErrorAction SilentlyContinue
+Remove-Item "$BinDir\slack-notify-start" -Force -ErrorAction SilentlyContinue
+Remove-Item "$BinDir\slack-notify-check" -Force -ErrorAction SilentlyContinue
 
 # Create symlinks
 New-Item -ItemType SymbolicLink -Path "$BinDir\claude-slack-notify" -Target "$ScriptDir\bin\claude-slack-notify" -Force | Out-Null
 New-Item -ItemType SymbolicLink -Path "$BinDir\focus-helper" -Target "$ScriptDir\bin\focus-helper" -Force | Out-Null
 New-Item -ItemType SymbolicLink -Path "$BinDir\focus-helper-windows.ps1" -Target "$ScriptDir\bin\focus-helper-windows.ps1" -Force | Out-Null
+New-Item -ItemType SymbolicLink -Path "$BinDir\get-session-id" -Target "$ScriptDir\bin\get-session-id" -Force | Out-Null
+New-Item -ItemType SymbolicLink -Path "$BinDir\slack-notify-start" -Target "$ScriptDir\bin\slack-notify-start" -Force | Out-Null
+New-Item -ItemType SymbolicLink -Path "$BinDir\slack-notify-check" -Target "$ScriptDir\bin\slack-notify-check" -Force | Out-Null
 Copy-Item "$ScriptDir\commands\slack-notify.md" "$CommandsDir\" -Force
 Write-Info "Installed scripts to $BinDir (symlinked to repo)"
 Write-Info "Installed Claude command to $CommandsDir"

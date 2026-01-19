@@ -6,7 +6,7 @@ When the user runs this command:
 
 2. **Register this instance**: Run the command to register this Claude session:
    ```bash
-   CLAUDE_INSTANCE_ID=$PPID ~/.claude/bin/claude-slack-notify register [optional-name]
+   SESSION_ID=$(~/.claude/bin/get-session-id) && CLAUDE_INSTANCE_ID="$SESSION_ID" ~/.claude/bin/claude-slack-notify register [optional-name]
    ```
    - If the user provides a name argument to /slack-notify (e.g., `/slack-notify MyProject`), use that name
    - Otherwise, a random 4-word name like "cosmic-phoenix-scarlet-breeze" will be generated
@@ -16,7 +16,7 @@ When the user runs this command:
 
 4. **Test the notification**: Send a test notification using:
    ```bash
-   CLAUDE_INSTANCE_ID=$PPID ~/.claude/bin/claude-slack-notify "Instance registered and ready" "started"
+   SESSION_ID=$(~/.claude/bin/get-session-id) && CLAUDE_INSTANCE_ID="$SESSION_ID" ~/.claude/bin/claude-slack-notify "Instance registered and ready" "started"
    ```
 
 5. **Confirm setup**: Tell the user their instance is registered and they'll receive notifications for tasks taking >30 seconds.

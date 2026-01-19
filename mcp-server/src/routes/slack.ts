@@ -1,9 +1,13 @@
-import { Router, Request, Response } from 'express';
+import type { Request, Response } from 'express';
+import { Router } from 'express';
+
+import { executeFocus, type FocusAction } from '../lib/focus-executor.js';
 import { getSession } from '../lib/session-store.js';
-import { executeFocus } from '../lib/focus-executor.js';
 import { verifySlackSignature } from '../lib/slack-verify.js';
 
 const router = Router();
+
+const VALID_ACTIONS = new Set<FocusAction>(['1', '2', 'continue', 'push', 'focus']);
 
 interface SlackBlockAction {
   action_id: string;
@@ -15,8 +19,15 @@ interface SlackPayload {
   actions: SlackBlockAction[];
 }
 
+function isValidAction(action: string): action is FocusAction {
+  return VALID_ACTIONS.has(action as FocusAction);
+}
+
 // POST /slack/actions - Handle Slack interactive button clicks
 router.post('/actions', verifySlackSignature, async (req: Request, res: Response) => {
+  // Always return 200 to acknowledge receipt and prevent Slack retries
+  const ack = () => res.status(200).send();
+
   try {
     // Slack sends payload as URL-encoded form data
     const payloadStr = req.body.payload;
@@ -28,42 +39,42 @@ router.post('/actions', verifySlackSignature, async (req: Request, res: Response
     const payload: SlackPayload = JSON.parse(payloadStr);
 
     // Handle block_actions (button clicks)
-    if (payload.type === 'block_actions' && payload.actions?.length > 0) {
-      const action = payload.actions[0];
-
-      // Parse action value: "session_id|action"
-      const [sessionId, actionType] = action.value.split('|');
-
-      if (!sessionId || !actionType) {
-        console.error('Invalid action value format:', action.value);
-        res.status(200).send(); // Return 200 to prevent Slack retry
-        return;
-      }
-
-      // Get session and execute focus
-      const session = await getSession({ id: sessionId });
-      if (!session) {
-        console.error('Session not found:', sessionId);
-        res.status(200).send();
-        return;
-      }
-
-      const validActions = ['1', '2', 'continue', 'push', 'focus'] as const;
-      if (!validActions.includes(actionType as typeof validActions[number])) {
-        console.error('Invalid action type:', actionType);
-        res.status(200).send();
-        return;
-      }
-
-      const result = await executeFocus(session, actionType as typeof validActions[number]);
-      console.log(`Focus result for ${sessionId}/${actionType}:`, result);
+    if (payload.type !== 'block_actions' || !payload.actions?.length) {
+      ack();
+      return;
     }
 
-    // Always return 200 within 3 seconds to acknowledge receipt
-    res.status(200).send();
+    const action = payload.actions[0];
+
+    // Parse action value: "session_id|action"
+    const [sessionId, actionType] = action.value.split('|');
+
+    if (!sessionId || !actionType) {
+      console.error('Invalid action value format:', action.value);
+      ack();
+      return;
+    }
+
+    const session = await getSession({ id: sessionId });
+    if (!session) {
+      console.error('Session not found:', sessionId);
+      ack();
+      return;
+    }
+
+    if (!isValidAction(actionType)) {
+      console.error('Invalid action type:', actionType);
+      ack();
+      return;
+    }
+
+    const result = await executeFocus(session, actionType);
+    console.log(`Focus result for ${sessionId}/${actionType}:`, result);
+
+    ack();
   } catch (error) {
     console.error('Error handling Slack action:', error);
-    res.status(200).send(); // Return 200 even on error to prevent retries
+    ack();
   }
 });
 

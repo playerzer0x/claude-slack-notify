@@ -142,19 +142,18 @@ export async function listSessions(
 export async function getSession(
   options: GetSessionOptions
 ): Promise<Session | null> {
-  if (!options.id && !options.name) {
+  const { id, name } = options;
+
+  if (!id && !name) {
     return null;
   }
 
   const sessions = await listSessions();
 
-  if (options.id) {
-    return sessions.find((session) => session.id === options.id) ?? null;
-  }
+  // Prefer id lookup over name lookup
+  const matchFn = id
+    ? (session: Session) => session.id === id
+    : (session: Session) => session.name === name;
 
-  if (options.name) {
-    return sessions.find((session) => session.name === options.name) ?? null;
-  }
-
-  return null;
+  return sessions.find(matchFn) ?? null;
 }

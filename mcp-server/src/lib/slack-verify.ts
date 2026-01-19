@@ -1,16 +1,23 @@
 import { createHmac } from 'node:crypto';
-import { readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { Request, Response, NextFunction } from 'express';
+import { join } from 'node:path';
+import type { NextFunction, Request, Response } from 'express';
 
 const SIGNING_SECRET_PATH = join(homedir(), '.claude', 'slack-signing-secret');
+const REPLAY_WINDOW_SECONDS = 300; // 5 minutes
 
 function getSigningSecret(): string | null {
   if (!existsSync(SIGNING_SECRET_PATH)) {
     return null;
   }
   return readFileSync(SIGNING_SECRET_PATH, 'utf-8').trim();
+}
+
+function computeSignature(secret: string, timestamp: string, body: string): string {
+  const baseString = `v0:${timestamp}:${body}`;
+  const hash = createHmac('sha256', secret).update(baseString).digest('hex');
+  return `v0=${hash}`;
 }
 
 export function verifySlackSignature(
@@ -35,21 +42,18 @@ export function verifySlackSignature(
     return;
   }
 
-  // Check timestamp to prevent replay attacks (5 minute window)
+  // Check timestamp to prevent replay attacks
   const currentTime = Math.floor(Date.now() / 1000);
-  if (Math.abs(currentTime - parseInt(timestamp, 10)) > 300) {
+  if (Math.abs(currentTime - parseInt(timestamp, 10)) > REPLAY_WINDOW_SECONDS) {
     res.status(401).send('Request timestamp too old');
     return;
   }
 
-  // Compute expected signature
+  // Compute and compare signatures
   const rawBody = (req as Request & { rawBody?: string }).rawBody || '';
-  const sigBasestring = `v0:${timestamp}:${rawBody}`;
-  const mySignature =
-    'v0=' + createHmac('sha256', signingSecret).update(sigBasestring).digest('hex');
+  const expectedSignature = computeSignature(signingSecret, timestamp, rawBody);
 
-  // Compare signatures
-  if (mySignature !== signature) {
+  if (expectedSignature !== signature) {
     console.error('Slack signature mismatch');
     res.status(401).send('Invalid signature');
     return;

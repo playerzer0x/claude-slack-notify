@@ -64,51 +64,52 @@ export async function executeFocus(
   session: Session,
   action: FocusAction = "focus"
 ): Promise<FocusResult> {
+  let focusUrl: string;
   try {
-    const focusUrl = buildFocusUrl(session, action);
-    const focusHelperPath = getFocusHelperPath();
-
-    return new Promise((resolve) => {
-      const proc = spawn(focusHelperPath, [focusUrl], {
-        stdio: "pipe",
-      });
-
-      let stdout = "";
-      let stderr = "";
-
-      proc.stdout?.on("data", (data: Buffer) => {
-        stdout += data.toString();
-      });
-
-      proc.stderr?.on("data", (data: Buffer) => {
-        stderr += data.toString();
-      });
-
-      proc.on("close", (code) => {
-        if (code === 0) {
-          resolve({
-            success: true,
-            message: `Focused session ${session.name || session.id}${action !== "focus" ? ` with action '${action}'` : ""}`,
-          });
-        } else {
-          resolve({
-            success: false,
-            message: stderr.trim() || stdout.trim() || `Exit code: ${code}`,
-          });
-        }
-      });
-
-      proc.on("error", (err) => {
-        resolve({
-          success: false,
-          message: `Failed to execute focus-helper: ${err.message}`,
-        });
-      });
-    });
+    focusUrl = buildFocusUrl(session, action);
   } catch (error) {
     return {
       success: false,
       message: error instanceof Error ? error.message : String(error),
     };
   }
+
+  const focusHelperPath = getFocusHelperPath();
+
+  return new Promise((resolve) => {
+    const proc = spawn(focusHelperPath, [focusUrl], { stdio: "pipe" });
+
+    let stdout = "";
+    let stderr = "";
+
+    proc.stdout?.on("data", (data: Buffer) => {
+      stdout += data.toString();
+    });
+
+    proc.stderr?.on("data", (data: Buffer) => {
+      stderr += data.toString();
+    });
+
+    proc.on("close", (code) => {
+      if (code === 0) {
+        const actionSuffix = action !== "focus" ? ` with action '${action}'` : "";
+        resolve({
+          success: true,
+          message: `Focused session ${session.name || session.id}${actionSuffix}`,
+        });
+      } else {
+        resolve({
+          success: false,
+          message: stderr.trim() || stdout.trim() || `Exit code: ${code}`,
+        });
+      }
+    });
+
+    proc.on("error", (err) => {
+      resolve({
+        success: false,
+        message: `Failed to execute focus-helper: ${err.message}`,
+      });
+    });
+  });
 }

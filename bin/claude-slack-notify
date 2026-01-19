@@ -55,9 +55,28 @@ json_escape() {
 # -----------------------------------------------------------------------------
 # Link command - creates a link for SSH sessions
 # Run this on LOCAL machine before SSH to create a reference to the local terminal
-# Usage: claude-slack-notify link
+# Usage: claude-slack-notify link [--host <hostname>] [ssh-options...]
 # -----------------------------------------------------------------------------
 if [[ "$1" == "link" ]]; then
+    shift  # Remove "link" from args
+
+    # Parse options
+    SSH_HOST=""
+    SSH_ARGS=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --host|-h)
+                SSH_HOST="$2"
+                shift 2
+                ;;
+            *)
+                # Collect remaining args as SSH options
+                SSH_ARGS+=("$1")
+                shift
+                ;;
+        esac
+    done
+
     mkdir -p "$LINKS_DIR"
 
     # Generate unique link ID (8 chars, alphanumeric)
@@ -129,13 +148,20 @@ if [[ "$1" == "link" ]]; then
 }
 EOF
 
+    # If --host provided, SSH directly
+    if [[ -n "$SSH_HOST" ]]; then
+        echo "Link ID: $LINK_ID (connecting to $SSH_HOST...)"
+        exec ssh -t "${SSH_ARGS[@]}" "$SSH_HOST" "CLAUDE_LINK_ID=$LINK_ID exec bash -l"
+    fi
+
+    # Otherwise print instructions
     echo "Link ID: $LINK_ID"
     echo ""
     echo "SSH with:"
     echo "  export CLAUDE_LINK_ID=$LINK_ID"
     echo ""
-    echo "Or pass directly:"
-    echo "  ssh -t host \"CLAUDE_LINK_ID=$LINK_ID bash -l\""
+    echo "Or use --host to connect directly:"
+    echo "  claude-slack-notify link --host <hostname>"
     exit 0
 fi
 

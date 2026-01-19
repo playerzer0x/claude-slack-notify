@@ -138,29 +138,23 @@ When running Claude on a remote Linux server via SSH, you can configure the Focu
 
 ### Setup
 
-**Step 1: Create a link on your LOCAL machine (before SSH)**
+**Option 1: One-liner with --host (recommended)**
 
 ```bash
-# On local macOS, in the terminal you'll SSH from:
+claude-slack-notify link --host time-machine
+```
+
+This creates a link and SSHs in one command.
+
+**Option 2: Manual two-step**
+
+```bash
+# Step 1: Create link
 claude-slack-notify link
-```
+# Output: Link ID: abc12345
 
-Output:
-```
-Link ID: abc12345
-SSH with:
-  export CLAUDE_LINK_ID=abc12345
-```
-
-**Step 2: SSH to remote with the link ID**
-
-```bash
-# Option A: Set env var after connecting
-ssh remote-server
-export CLAUDE_LINK_ID=abc12345
-
-# Option B: Pass env var directly
-ssh -t remote-server "CLAUDE_LINK_ID=abc12345 bash -l"
+# Step 2: SSH with the link ID
+ssh -t remote-server "CLAUDE_LINK_ID=abc12345 exec bash -l"
 ```
 
 **Step 3: Register on the remote**
@@ -351,8 +345,11 @@ claude-slack-notify check
 # Send a custom notification
 claude-slack-notify "message" [status]
 
-# Create a link for SSH sessions (run on LOCAL machine before SSH)
+# Create a link for SSH sessions (run on LOCAL machine)
 claude-slack-notify link
+
+# Create link and SSH in one command
+claude-slack-notify link --host <hostname>
 
 # List active links
 claude-slack-notify links

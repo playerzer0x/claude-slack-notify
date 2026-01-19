@@ -442,17 +442,34 @@ SAFE_FOCUS_URL=$(json_escape "$FOCUS_URL")
 # Build button block if we have a focus URL
 BUTTON_BLOCK=""
 if [[ -n "$FOCUS_URL" ]]; then
+    # Create URLs for each action (append query param to focus URL)
+    URL_1=$(json_escape "${FOCUS_URL}?action=1")
+    URL_2=$(json_escape "${FOCUS_URL}?action=2")
+    URL_CONTINUE=$(json_escape "${FOCUS_URL}?action=continue")
+    URL_PUSH=$(json_escape "${FOCUS_URL}?action=push")
+
     BUTTON_BLOCK=",{
       \"type\": \"actions\",
       \"elements\": [
         {
           \"type\": \"button\",
-          \"text\": {
-            \"type\": \"plain_text\",
-            \"text\": \"Focus Terminal\",
-            \"emoji\": true
-          },
-          \"url\": \"${SAFE_FOCUS_URL}\",
+          \"text\": { \"type\": \"plain_text\", \"text\": \"1\" },
+          \"url\": \"${URL_1}\"
+        },
+        {
+          \"type\": \"button\",
+          \"text\": { \"type\": \"plain_text\", \"text\": \"2\" },
+          \"url\": \"${URL_2}\"
+        },
+        {
+          \"type\": \"button\",
+          \"text\": { \"type\": \"plain_text\", \"text\": \"Continue\" },
+          \"url\": \"${URL_CONTINUE}\"
+        },
+        {
+          \"type\": \"button\",
+          \"text\": { \"type\": \"plain_text\", \"text\": \"Push\", \"emoji\": true },
+          \"url\": \"${URL_PUSH}\",
           \"style\": \"primary\"
         }
       ]

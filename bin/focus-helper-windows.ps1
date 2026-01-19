@@ -23,14 +23,32 @@ function Write-Log {
 
 Write-Log "Helper received: $Url"
 
-# Parse URL: claude-focus://TYPE/ARG1/ARG2
+# Parse URL: claude-focus://TYPE/ARG1/ARG2?action=X
 $UrlPath = $Url -replace "^claude-focus://", ""
+
+# Extract query string if present
+$QueryString = ""
+$Action = ""
+if ($UrlPath -match "\?(.+)$") {
+    $QueryString = $Matches[1]
+    $UrlPath = $UrlPath -replace "\?.+$", ""
+
+    # Parse action from query string
+    foreach ($param in $QueryString -split "&") {
+        $kv = $param -split "=", 2
+        if ($kv[0] -eq "action" -and $kv.Length -gt 1) {
+            $Action = [System.Uri]::UnescapeDataString($kv[1])
+            break
+        }
+    }
+}
+
 $Parts = $UrlPath -split "/", 3
 $Type = $Parts[0]
 $Arg1 = if ($Parts.Length -gt 1) { [System.Uri]::UnescapeDataString($Parts[1]) } else { "" }
 $Arg2 = if ($Parts.Length -gt 2) { [System.Uri]::UnescapeDataString($Parts[2]) } else { "" }
 
-Write-Log "Type=$Type Arg1=$Arg1 Arg2=$Arg2"
+Write-Log "Type=$Type Arg1=$Arg1 Arg2=$Arg2 Action=$Action"
 
 # Validate inputs - only allow safe characters
 function Test-SafeInput {
@@ -44,6 +62,53 @@ function Test-SafeInput {
 
 if ($Arg1 -and -not (Test-SafeInput $Arg1)) { exit 1 }
 if ($Arg2 -and -not (Test-SafeInput $Arg2)) { exit 1 }
+
+# Map action parameter to input text (allowlist for security)
+function Get-ActionInput {
+    param([string]$ActionName)
+
+    switch ($ActionName) {
+        "1"        { return "1" }
+        "2"        { return "2" }
+        "continue" { return "Continue" }
+        "push"     { return "/push" }
+        default    { return "" }  # Unknown actions produce no input
+    }
+}
+
+# Send input to tmux pane (via WSL or native)
+function Send-TmuxInput {
+    param(
+        [string]$TmuxTarget,
+        [string]$Input
+    )
+
+    if (-not $Input -or -not $TmuxTarget) { return }
+
+    Write-Log "Sending input to tmux target $TmuxTarget`: $Input"
+
+    $session = ($TmuxTarget -split ":")[0]
+    $windowPart = ($TmuxTarget -split ":")[1]
+
+    # Try WSL tmux first
+    $result = wsl tmux send-keys -t "$TmuxTarget" "$Input" Enter 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Log "Sent input via WSL tmux"
+        return
+    }
+
+    # Try direct tmux (Git Bash/MSYS2)
+    $result = tmux send-keys -t "$TmuxTarget" "$Input" Enter 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Log "Sent input via direct tmux"
+        return
+    }
+
+    Write-Log "Failed to send tmux input: $result"
+}
+
+# Get action input text
+$ActionInput = Get-ActionInput $Action
 
 # Windows API for window manipulation
 Add-Type @"
@@ -259,28 +324,48 @@ function Switch-TmuxWindow {
 switch ($Type) {
     "windows-terminal" {
         Focus-WindowsTerminal $Arg1
+        # Windows Terminal without tmux: focus only (no reliable input method)
+        if ($ActionInput) {
+            Write-Log "Action requested but Windows Terminal without tmux - focus only"
+        }
     }
 
     "wt-tmux" {
         Focus-WindowsTerminal $Arg1
         Switch-TmuxWindow $Arg2
+        # Send input via tmux (reliable)
+        Send-TmuxInput $Arg2 $ActionInput
     }
 
     "conemu" {
         Focus-ConEmu $Arg1
+        # ConEmu without tmux: focus only
+        if ($ActionInput) {
+            Write-Log "Action requested but ConEmu without tmux - focus only"
+        }
     }
 
     "mintty" {
         Focus-Mintty $Arg1
+        # Mintty without tmux: focus only
+        if ($ActionInput) {
+            Write-Log "Action requested but mintty without tmux - focus only"
+        }
     }
 
     "wsl" {
         Focus-WSL $Arg1
+        # WSL without tmux: focus only
+        if ($ActionInput) {
+            Write-Log "Action requested but WSL without tmux - focus only"
+        }
     }
 
     "wsl-tmux" {
         Focus-WSL $Arg1
         Switch-TmuxWindow $Arg2
+        # Send input via tmux (reliable)
+        Send-TmuxInput $Arg2 $ActionInput
     }
 
     default {

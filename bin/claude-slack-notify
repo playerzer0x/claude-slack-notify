@@ -156,10 +156,10 @@ EOF
         echo "Once connected, run: claude"
         echo "Then in Claude, run: /slack-notify"
         echo ""
-        # Create new tmux session with env vars set
-        # Use link ID in session name to ensure fresh env vars each time
+        # Create new tmux session that exports env vars into the shell
+        # The vars must be exported INSIDE the shell tmux spawns, not just for tmux itself
         exec ssh -t "${SSH_ARGS[@]}" "$SSH_HOST" \
-            "CLAUDE_LINK_ID=$LINK_ID CLAUDE_SSH_HOST=$SSH_HOST tmux new-session -s claude-$LINK_ID || CLAUDE_LINK_ID=$LINK_ID CLAUDE_SSH_HOST=$SSH_HOST tmux attach -t claude-$LINK_ID"
+            "tmux new-session -s claude-$LINK_ID 'export CLAUDE_LINK_ID=$LINK_ID CLAUDE_SSH_HOST=$SSH_HOST; exec \$SHELL -l'"
     fi
 
     # Otherwise print instructions

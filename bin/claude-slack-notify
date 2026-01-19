@@ -681,24 +681,14 @@ if [[ "$1" == "check" ]]; then
             if [[ -n "$STDIN_DATA" ]] && command -v jq &>/dev/null; then
                 HOOK_EVENT=$(echo "$STDIN_DATA" | jq -r '.hook_event_name // empty' 2>/dev/null)
 
-                # For permission prompts, show the tool/command being requested
+                # For Notification events, use the message field
                 if [[ "$HOOK_EVENT" == "Notification" ]]; then
-                    TOOL_NAME=$(echo "$STDIN_DATA" | jq -r '.tool_name // empty' 2>/dev/null)
-                    if [[ -n "$TOOL_NAME" ]]; then
-                        # Get command or description for Bash, otherwise tool input summary
-                        if [[ "$TOOL_NAME" == "Bash" ]]; then
-                            CMD=$(echo "$STDIN_DATA" | jq -r '.tool_input.command // empty' 2>/dev/null)
-                            DESC=$(echo "$STDIN_DATA" | jq -r '.tool_input.description // empty' 2>/dev/null)
-                            if [[ -n "$DESC" ]]; then
-                                CONTEXT="Permission: $TOOL_NAME - $DESC"
-                            elif [[ -n "$CMD" ]]; then
-                                CONTEXT="Permission: $TOOL_NAME - $CMD"
-                            else
-                                CONTEXT="Permission: $TOOL_NAME"
-                            fi
-                        else
-                            CONTEXT="Permission: $TOOL_NAME"
-                        fi
+                    NOTIF_MSG=$(echo "$STDIN_DATA" | jq -r '.message // empty' 2>/dev/null)
+                    NOTIF_TYPE=$(echo "$STDIN_DATA" | jq -r '.notification_type // empty' 2>/dev/null)
+                    if [[ -n "$NOTIF_MSG" ]]; then
+                        CONTEXT="$NOTIF_MSG"
+                    elif [[ -n "$NOTIF_TYPE" ]]; then
+                        CONTEXT="Waiting: $NOTIF_TYPE"
                     fi
                 fi
 

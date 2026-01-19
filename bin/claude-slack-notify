@@ -53,21 +53,26 @@ json_escape() {
 }
 
 # -----------------------------------------------------------------------------
-# Link command - creates a link for SSH sessions
+# Link command - creates a link for SSH or JupyterLab sessions
 # Run this on LOCAL machine before SSH to create a reference to the local terminal
-# Usage: claude-slack-notify link [--host <hostname>] [ssh-options...]
+# Usage: claude-slack-notify link [--host <hostname>] [--jupyter] [ssh-options...]
 # -----------------------------------------------------------------------------
 if [[ "$1" == "link" ]]; then
     shift  # Remove "link" from args
 
     # Parse options
     SSH_HOST=""
+    JUPYTER_MODE=""
     SSH_ARGS=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --host|-h)
                 SSH_HOST="$2"
                 shift 2
+                ;;
+            --jupyter|-j)
+                JUPYTER_MODE="1"
+                shift
                 ;;
             *)
                 # Collect remaining args as SSH options
@@ -82,6 +87,81 @@ if [[ "$1" == "link" ]]; then
     # Generate unique link ID (8 chars, alphanumeric)
     LINK_ID=$(head -c 12 /dev/urandom | base64 | tr -dc 'a-z0-9' | head -c 8)
 
+    # -------------------------------------------------------------------------
+    # JupyterLab mode: link Chrome tab running JupyterLab + SSH for input
+    # -------------------------------------------------------------------------
+    if [[ -n "$JUPYTER_MODE" ]]; then
+        if [[ -z "$SSH_HOST" ]]; then
+            echo "Error: --jupyter requires --host <server>" >&2
+            echo "Usage: claude-slack-notify link --jupyter --host user@server" >&2
+            exit 1
+        fi
+
+        # Get Chrome tab URL (JupyterLab must be open in Chrome)
+        JUPYTER_URL=$(osascript -e 'tell application "Google Chrome" to return URL of active tab of front window' 2>/dev/null)
+
+        if [[ -z "$JUPYTER_URL" ]]; then
+            echo "Error: Could not get Chrome tab URL." >&2
+            echo "Make sure JupyterLab is open in the active Chrome tab." >&2
+            exit 1
+        fi
+
+        if [[ "$JUPYTER_URL" != *"lab"* && "$JUPYTER_URL" != *"jupyter"* && "$JUPYTER_URL" != *"notebook"* ]]; then
+            echo "Warning: URL doesn't look like JupyterLab: $JUPYTER_URL"
+            echo "Continuing anyway..."
+        fi
+
+        # Parse SSH_HOST for user@host format
+        if [[ "$SSH_HOST" == *"@"* ]]; then
+            JUPYTER_SSH_USER="${SSH_HOST%%@*}"
+            JUPYTER_SSH_HOST="${SSH_HOST#*@}"
+        else
+            JUPYTER_SSH_USER=$(whoami)
+            JUPYTER_SSH_HOST="$SSH_HOST"
+        fi
+        JUPYTER_SSH_PORT="${CLAUDE_SSH_PORT:-22}"
+
+        # Save link file with jupyter info
+        cat > "$LINKS_DIR/${LINK_ID}.json" << EOF
+{
+  "link_id": "${LINK_ID}",
+  "term_type": "jupyter-tmux",
+  "jupyter_url": "${JUPYTER_URL}",
+  "ssh_host": "${JUPYTER_SSH_HOST}",
+  "ssh_user": "${JUPYTER_SSH_USER}",
+  "ssh_port": "${JUPYTER_SSH_PORT}",
+  "created_at": "$(date -Iseconds)"
+}
+EOF
+
+        # SSH to remote and create env file for the JupyterLab terminal to source
+        echo "Creating environment file on remote..."
+        ssh "${SSH_ARGS[@]}" "$SSH_HOST" "mkdir -p ~/.claude && cat > ~/.claude/jupyter-env << 'ENVEOF'
+export CLAUDE_LINK_ID=$LINK_ID
+export CLAUDE_SSH_HOST=$JUPYTER_SSH_HOST
+ENVEOF"
+
+        if [[ $? -ne 0 ]]; then
+            echo "Error: Could not SSH to $SSH_HOST to create env file" >&2
+            exit 1
+        fi
+
+        echo ""
+        echo "Link ID: $LINK_ID"
+        echo "JupyterLab URL: $JUPYTER_URL"
+        echo "SSH Host: $SSH_HOST"
+        echo ""
+        echo "In your JupyterLab terminal, run:"
+        echo "  source ~/.claude/jupyter-env"
+        echo "  tmux new -s claude"
+        echo "  claude"
+        echo "  /slack-notify"
+        exit 0
+    fi
+
+    # -------------------------------------------------------------------------
+    # Normal mode: link local terminal (iTerm/Terminal.app)
+    # -------------------------------------------------------------------------
     # Detect local terminal
     # We need a minimal detect_terminal inline since the function hasn't been defined yet
     LINK_TERM_TYPE="unknown"
@@ -237,6 +317,30 @@ detect_terminal() {
     TERM_TYPE="unknown"
     TERM_TARGET=""
     FOCUS_URL=""
+
+    # Check for linked session without SSH (e.g., JupyterLab terminal)
+    # CLAUDE_LINK_ID is set but SSH_CONNECTION is not
+    if [[ -n "$CLAUDE_LINK_ID" && -z "$SSH_CONNECTION" ]]; then
+        SSH_USER=$(whoami)
+        SSH_HOST="${CLAUDE_SSH_HOST:-$(hostname -f 2>/dev/null || hostname)}"
+        SSH_PORT="${CLAUDE_SSH_PORT:-22}"
+
+        # Get tmux target if available
+        local remote_tmux_target=""
+        if [[ -n "$TMUX" ]]; then
+            local r_session r_window r_pane
+            r_session=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+            r_window=$(tmux display-message -p '#{window_index}' 2>/dev/null)
+            r_pane=$(tmux display-message -p '#{pane_index}' 2>/dev/null)
+            remote_tmux_target="${r_session}:${r_window}.${r_pane}"
+        fi
+
+        # JupyterLab or similar linked terminal (no direct SSH)
+        TERM_TYPE="jupyter-tmux"
+        TERM_TARGET="${CLAUDE_LINK_ID}|${SSH_HOST}|${SSH_USER}|${SSH_PORT}|${remote_tmux_target}"
+        FOCUS_URL="claude-focus://jupyter-tmux/$(url_encode "$CLAUDE_LINK_ID")/$(url_encode "$SSH_HOST")/$(url_encode "$SSH_USER")/${SSH_PORT}/$(url_encode "$remote_tmux_target")"
+        return
+    fi
 
     # Check for SSH session with linked local terminal
     if [[ -n "$SSH_CONNECTION" ]]; then

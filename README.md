@@ -49,6 +49,12 @@ Slack notifications for Claude Code with clickable "Focus Terminal" buttons that
 | Direct SSH + tmux | `ssh-tmux` | None | SSH → remote tmux |
 | Direct SSH | `ssh` | None | None |
 
+### JupyterLab
+
+| Configuration | Type | Focus | Input |
+|--------------|------|-------|-------|
+| JupyterLab + tmux | `jupyter-tmux` | Chrome tab | SSH → remote tmux |
+
 ## Installation
 
 ### macOS / Linux
@@ -220,6 +226,64 @@ Set a custom SSH port (default: 22):
 export CLAUDE_SSH_PORT=2222
 ```
 
+## JupyterLab Terminal Support
+
+You can also link a JupyterLab terminal running in Chrome. This lets the Focus button switch to your Chrome tab and send input to the remote tmux session.
+
+### Setup
+
+**Step 1: Open JupyterLab in Chrome** (make it the active tab)
+
+**Step 2: Create the link from your Mac terminal:**
+```bash
+claude-slack-notify link --jupyter --host user@jupyter-server
+```
+
+This will:
+- Capture the Chrome tab URL
+- SSH to the server and create `~/.claude/jupyter-env`
+
+**Step 3: In JupyterLab terminal, run:**
+```bash
+source ~/.claude/jupyter-env
+tmux new -s claude
+claude
+/slack-notify
+```
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ LOCAL MACHINE (macOS)                                           │
+│ ┌─────────────────┐                                             │
+│ │ Chrome Tab      │ ◀── Focus button switches here              │
+│ │ (JupyterLab)    │                                             │
+│ └────────┬────────┘                                             │
+│          │ WebSocket (display only)                             │
+└──────────┼──────────────────────────────────────────────────────┘
+           │
+           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ REMOTE LINUX (Jupyter Server)                                   │
+│ ┌─────────────────┐                                             │
+│ │ tmux pane       │ ◀── Input sent via SSH (bypasses WebSocket) │
+│ │ (Claude running)│                                             │
+│ └─────────────────┘                                             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+When you click Focus:
+1. Switches to Chrome and focuses the JupyterLab tab
+2. Switches the remote tmux to the correct window/pane (via SSH)
+3. Sends input to the tmux pane (via SSH)
+
+### Requirements
+
+- Chrome with JupyterLab open
+- tmux on the remote server
+- SSH key-based authentication to the server
+
 ## How It Works
 
 ### Architecture (macOS)
@@ -358,6 +422,9 @@ claude-slack-notify link
 claude-slack-notify link --host <hostname>
 claude-slack-notify link --host user@hostname
 claude-slack-notify link --host user@192.168.1.100
+
+# Create link for JupyterLab (Chrome tab must be active)
+claude-slack-notify link --jupyter --host user@jupyter-server
 
 # List active links
 claude-slack-notify links

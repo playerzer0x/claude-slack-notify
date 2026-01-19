@@ -474,4 +474,66 @@ case "$TYPE" in
             send_ssh_tmux_input "$ssh_host" "$ssh_user" "$ssh_port" "$remote_tmux_target" "$ACTION_INPUT"
         fi
         ;;
+    jupyter-tmux)
+        # JupyterLab terminal in Chrome + remote tmux
+        # ARG1=link_id, ARG2=host, ARG3=user, ARG4=port, ARG5=tmux_target
+        link_id="$ARG1"
+        ssh_host="$ARG2"
+        ssh_user="$ARG3"
+        ssh_port="$ARG4"
+        remote_tmux_target="$ARG5"
+
+        echo "$(date): Jupyter-tmux: link=$link_id host=$ssh_host user=$ssh_user port=$ssh_port tmux=$remote_tmux_target" >> "$LOG_FILE"
+
+        # Step 1: Focus Chrome tab with JupyterLab URL from link file
+        link_file="$LINKS_DIR/${link_id}.json"
+        if [[ -f "$link_file" ]]; then
+            jupyter_url=$(grep -o '"jupyter_url": *"[^"]*"' "$link_file" | cut -d'"' -f4)
+
+            if [[ -n "$jupyter_url" ]]; then
+                echo "$(date): Focusing Chrome tab with URL containing: $jupyter_url" >> "$LOG_FILE"
+
+                # Focus Chrome and find tab matching the JupyterLab URL
+                osascript << APPLESCRIPT 2>/dev/null
+tell application "Google Chrome"
+    set found to false
+    repeat with w in windows
+        set tabIndex to 0
+        repeat with t in tabs of w
+            set tabIndex to tabIndex + 1
+            if URL of t contains "$jupyter_url" or "$jupyter_url" contains URL of t then
+                set index of w to 1
+                set active tab index of w to tabIndex
+                activate
+                tell application "System Events"
+                    set frontmost of process "Google Chrome" to true
+                end tell
+                set found to true
+                exit repeat
+            end if
+        end repeat
+        if found then exit repeat
+    end repeat
+    if not found then
+        activate
+    end if
+end tell
+APPLESCRIPT
+            fi
+        else
+            echo "$(date): Link file not found: $link_file" >> "$LOG_FILE"
+            # Just activate Chrome as fallback
+            osascript -e 'tell application "Google Chrome" to activate' 2>/dev/null
+        fi
+
+        # Step 2: Switch remote tmux to correct window/pane
+        if [[ -n "$remote_tmux_target" ]]; then
+            switch_remote_tmux "$ssh_host" "$ssh_user" "$ssh_port" "$remote_tmux_target"
+        fi
+
+        # Step 3: Send input to remote via SSH
+        if [[ -n "$ACTION_INPUT" && -n "$remote_tmux_target" ]]; then
+            send_ssh_tmux_input "$ssh_host" "$ssh_user" "$ssh_port" "$remote_tmux_target" "$ACTION_INPUT"
+        fi
+        ;;
 esac

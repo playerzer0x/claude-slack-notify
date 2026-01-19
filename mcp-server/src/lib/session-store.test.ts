@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll, afterAll, mock } from "bun:test";
-import { listSessions, getSession, type Session } from "./session-store";
+import { listSessions, getSession, type Session } from "./session-store.js";
 import { mkdtemp, writeFile, rm, mkdir } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
@@ -43,7 +43,7 @@ describe("session-store", () => {
         const filteredSessions = await listSessions({ hostname });
 
         // All filtered sessions should have the specified hostname
-        filteredSessions.forEach((session) => {
+        filteredSessions.forEach((session: Session) => {
           expect(session.hostname).toBe(hostname);
         });
       }

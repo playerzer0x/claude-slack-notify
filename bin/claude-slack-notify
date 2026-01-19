@@ -603,11 +603,17 @@ fi
 # Dynamically detect current terminal (tmux window/pane can change)
 detect_terminal
 
-# Fallback to stored values if detection failed (for Docker containers, etc.)
-if [[ "$TERM_TYPE" == "unknown" && -f "$INSTANCE_FILE" ]]; then
-    TERM_TYPE=$(grep -o '"term_type": *"[^"]*"' "$INSTANCE_FILE" | cut -d'"' -f4)
-    TERM_TARGET=$(grep -o '"term_target": *"[^"]*"' "$INSTANCE_FILE" | cut -d'"' -f4)
-    FOCUS_URL=$(grep -o '"focus_url": *"[^"]*"' "$INSTANCE_FILE" | cut -d'"' -f4)
+# Fallback to stored values if detection failed or FOCUS_URL is empty
+# This handles: Docker containers, SSH sessions where CLAUDE_LINK_ID isn't in hook env
+if [[ -f "$INSTANCE_FILE" ]]; then
+    if [[ "$TERM_TYPE" == "unknown" || "$TERM_TYPE" == "ssh" || -z "$FOCUS_URL" ]]; then
+        STORED_FOCUS_URL=$(grep -o '"focus_url": *"[^"]*"' "$INSTANCE_FILE" | cut -d'"' -f4)
+        if [[ -n "$STORED_FOCUS_URL" ]]; then
+            TERM_TYPE=$(grep -o '"term_type": *"[^"]*"' "$INSTANCE_FILE" | cut -d'"' -f4)
+            TERM_TARGET=$(grep -o '"term_target": *"[^"]*"' "$INSTANCE_FILE" | cut -d'"' -f4)
+            FOCUS_URL="$STORED_FOCUS_URL"
+        fi
+    fi
 fi
 
 # -----------------------------------------------------------------------------

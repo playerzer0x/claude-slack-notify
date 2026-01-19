@@ -72,10 +72,13 @@ On first Focus button click, grant automation permission when prompted. If denie
    {
      "hooks": {
        "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "$HOME/.claude/bin/slack-notify-start", "timeout": 5 }] }],
-       "Stop": [{ "hooks": [{ "type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10 }] }]
+       "Stop": [{ "hooks": [{ "type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10 }] }],
+       "Notification": [{ "matcher": "idle_prompt", "hooks": [{ "type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10 }] }]
      }
    }
    ```
+
+   **Note**: The `Notification` hook handles plan mode, where Claude waits for approval before the `Stop` hook fires.
 
 4. **Register session**: In Claude, run `/slack-notify` or `/slack-notify MyProject`
 

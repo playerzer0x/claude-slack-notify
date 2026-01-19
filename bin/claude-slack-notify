@@ -797,11 +797,37 @@ SAFE_FOCUS_URL=$(json_escape "$FOCUS_URL")
 # Build button block if we have a focus URL
 BUTTON_BLOCK=""
 if [[ -n "$FOCUS_URL" ]]; then
-    # Create URLs for each action (append query param to focus URL)
-    URL_1=$(json_escape "${FOCUS_URL}?action=1")
-    URL_2=$(json_escape "${FOCUS_URL}?action=2")
-    URL_CONTINUE=$(json_escape "${FOCUS_URL}?action=continue")
-    URL_PUSH=$(json_escape "${FOCUS_URL}?action=push")
+    # Read button config or use defaults
+    BUTTON_CONFIG="$CLAUDE_DIR/button-config"
+    if [[ ! -f "$BUTTON_CONFIG" ]]; then
+        # Default buttons if no config exists
+        BUTTON_CONFIG_CONTENT="1|1
+2|2
+Continue|continue
+Push|push"
+    else
+        BUTTON_CONFIG_CONTENT=$(cat "$BUTTON_CONFIG")
+    fi
+
+    # Build action buttons from config
+    ACTION_BUTTONS=""
+    BUTTON_COUNT=0
+    while IFS='|' read -r label action || [[ -n "$label" ]]; do
+        # Skip empty lines and comments
+        [[ -z "$label" || "$label" == \#* ]] && continue
+
+        # URL encode the action
+        safe_action=$(json_escape "${FOCUS_URL}?action=$(url_encode "$action")")
+        safe_label=$(json_escape "$label")
+
+        ACTION_BUTTONS="${ACTION_BUTTONS},
+        {
+          \"type\": \"button\",
+          \"text\": { \"type\": \"plain_text\", \"text\": \"${safe_label}\" },
+          \"url\": \"${safe_action}\"
+        }"
+        ((BUTTON_COUNT++))
+    done <<< "$BUTTON_CONFIG_CONTENT"
 
     BUTTON_BLOCK=",{
       \"type\": \"actions\",
@@ -811,27 +837,7 @@ if [[ -n "$FOCUS_URL" ]]; then
           \"text\": { \"type\": \"plain_text\", \"text\": \"Focus\" },
           \"url\": \"${SAFE_FOCUS_URL}\",
           \"style\": \"primary\"
-        },
-        {
-          \"type\": \"button\",
-          \"text\": { \"type\": \"plain_text\", \"text\": \"1\" },
-          \"url\": \"${URL_1}\"
-        },
-        {
-          \"type\": \"button\",
-          \"text\": { \"type\": \"plain_text\", \"text\": \"2\" },
-          \"url\": \"${URL_2}\"
-        },
-        {
-          \"type\": \"button\",
-          \"text\": { \"type\": \"plain_text\", \"text\": \"Continue\" },
-          \"url\": \"${URL_CONTINUE}\"
-        },
-        {
-          \"type\": \"button\",
-          \"text\": { \"type\": \"plain_text\", \"text\": \"Push\" },
-          \"url\": \"${URL_PUSH}\"
-        }
+        }${ACTION_BUTTONS}
       ]
     }"
 fi

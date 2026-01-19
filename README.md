@@ -2,6 +2,14 @@
 
 Slack notifications for Claude Code with clickable "Focus Terminal" buttons that switch to the correct terminal tab.
 
+Developed for orchestrators managing multiple AI agents across different environments. Stay in your familiar Slack workspace while agents work autonomously—get notified only when attention is needed, click to jump directly to the right terminal, and send commands without context switching.
+
+**Goals:**
+- Improve focus by centralizing notifications
+- Reduce manual intervention with one-click actions
+- Minimize context switching between terminals
+- Eliminate unnecessary distractions with time-based alerts
+
 ## Features
 
 - **Multi-instance support**: Run multiple Claude sessions with unique names
@@ -353,6 +361,29 @@ The `claude-focus://` URL scheme encodes the terminal type and target:
 
 ## Configuration
 
+### Slack Buttons
+
+The action buttons in Slack notifications are configurable. During installation, you can customize which buttons appear.
+
+**Default buttons:** Focus (always included), 1, 2, Continue, Push
+
+**To reconfigure buttons:**
+```bash
+./install.sh --configure
+```
+
+**Button config file:** `~/.claude/button-config`
+
+Format: `LABEL|ACTION` (one per line)
+```
+1|1
+2|2
+Continue|continue
+Push|push
+```
+
+The label is what appears on the button, and the action is what gets sent to the terminal when clicked.
+
 ### Environment Variables
 
 - `CLAUDE_NOTIFY_MIN_SECONDS`: Minimum task duration before notifying (default: 30)
@@ -449,6 +480,7 @@ claude-slack-notify links clean
 - `~/.claude/bin/get-session-id` - Helper to get current session ID
 - `~/.claude/commands/slack-notify.md` - Claude command definition
 - `~/.claude/slack-webhook-url` - Slack webhook URL
+- `~/.claude/button-config` - Custom Slack button configuration
 - `~/.claude/instances/` - Registered instance data (keyed by session ID)
 - `~/.claude/links/` - SSH link data (for remote sessions)
 - `~/.claude/logs/focus-debug.log` - Focus helper debug log

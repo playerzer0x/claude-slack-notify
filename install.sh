@@ -19,11 +19,78 @@ LAUNCHAGENT_PATH="$HOME/Library/LaunchAgents/com.claude.focus-watcher.plist"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
 NC='\033[0m'
+
+# Box drawing characters
+BOX_TL="╭"
+BOX_TR="╮"
+BOX_BL="╰"
+BOX_BR="╯"
+BOX_H="─"
+BOX_V="│"
+BOX_T="┬"
+BOX_B="┴"
+BOX_ML="├"
+BOX_MR="┤"
 
 echo_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 echo_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 echo_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+# Print a horizontal line
+print_line() {
+    local width="${1:-60}"
+    local char="${2:--}"
+    for ((i=0; i<width; i++)); do printf "%s" "$char"; done
+}
+
+# Print text centered in a box
+print_box_line() {
+    local text="$1"
+    local width="${2:-60}"
+    local text_len=${#text}
+    local padding=$(( (width - text_len - 2) / 2 ))
+    printf "${BOX_V}%*s%s%*s${BOX_V}\n" "$padding" "" "$text" "$((width - text_len - padding - 2))" ""
+}
+
+# Print a header box
+print_header() {
+    local title="$1"
+    local width="${2:-50}"
+    local inner_width=$((width - 2))
+    local title_len=${#title}
+    local left_pad=$(( (inner_width - title_len) / 2 ))
+    local right_pad=$(( inner_width - title_len - left_pad ))
+
+    echo ""
+    # Top border
+    printf "${CYAN}${BOX_TL}"
+    for ((i=0; i<inner_width; i++)); do printf "${BOX_H}"; done
+    printf "${BOX_TR}${NC}\n"
+    # Title line
+    printf "${CYAN}${BOX_V}${NC}${BOLD}"
+    printf "%*s%s%*s" "$left_pad" "" "$title" "$right_pad" ""
+    printf "${NC}${CYAN}${BOX_V}${NC}\n"
+    # Bottom border
+    printf "${CYAN}${BOX_BL}"
+    for ((i=0; i<inner_width; i++)); do printf "${BOX_H}"; done
+    printf "${BOX_BR}${NC}\n"
+    echo ""
+}
+
+# Print a section header
+print_section() {
+    local title="$1"
+    echo ""
+    echo -e "${BOLD}${BLUE}▸ $title${NC}"
+    echo -ne "${DIM}"
+    print_line 40 "─"
+    echo -e "${NC}"
+}
 
 # Check for --uninstall flag
 if [[ "${1:-}" == "--uninstall" ]]; then
@@ -169,32 +236,154 @@ if [[ "$PATH_ADDED" == "true" ]]; then
     echo_warn "Restart your shell or run: source ~/.${SHELL##*/}rc"
 fi
 
+# =============================================================================
+# Configure Slack Buttons
+# =============================================================================
+BUTTON_CONFIG="$CLAUDE_DIR/button-config"
+DEFAULT_BUTTONS="1|1
+2|2
+Continue|continue
+Push|push"
+
+configure_buttons() {
+    print_section "Slack Button Configuration"
+    echo ""
+    echo -e "  ${DIM}Configure the action buttons that appear in Slack notifications.${NC}"
+    echo -e "  ${DIM}The Focus button is always included as the primary button.${NC}"
+    echo ""
+
+    # Show current/default config
+    if [[ -f "$BUTTON_CONFIG" ]]; then
+        echo -e "  ${BOLD}Current buttons:${NC}"
+        local i=1
+        while IFS='|' read -r label action || [[ -n "$label" ]]; do
+            [[ -z "$label" || "$label" == \#* ]] && continue
+            echo -e "    ${CYAN}$i.${NC} ${BOLD}$label${NC} ${DIM}(sends: $action)${NC}"
+            ((i++))
+        done < "$BUTTON_CONFIG"
+    else
+        echo -e "  ${BOLD}Default buttons:${NC}"
+        echo -e "    ${CYAN}1.${NC} ${BOLD}1${NC} ${DIM}(sends: 1)${NC}"
+        echo -e "    ${CYAN}2.${NC} ${BOLD}2${NC} ${DIM}(sends: 2)${NC}"
+        echo -e "    ${CYAN}3.${NC} ${BOLD}Continue${NC} ${DIM}(sends: continue)${NC}"
+        echo -e "    ${CYAN}4.${NC} ${BOLD}Push${NC} ${DIM}(sends: push)${NC}"
+    fi
+    echo ""
+
+    # Interactive mode only if not using --link or --uninstall and terminal is interactive
+    if [[ -t 0 && "${1:-}" != "--link" ]]; then
+        echo -e "  ${YELLOW}?${NC} Configure buttons? [y/N] "
+        read -r -n 1 response
+        echo ""
+
+        if [[ "$response" =~ ^[Yy]$ ]]; then
+            configure_buttons_interactive
+            return
+        fi
+    fi
+
+    # Use defaults if no config exists
+    if [[ ! -f "$BUTTON_CONFIG" ]]; then
+        echo "$DEFAULT_BUTTONS" > "$BUTTON_CONFIG"
+        echo_info "Using default button configuration"
+    fi
+}
+
+configure_buttons_interactive() {
+    echo ""
+    print_section "Button Editor"
+    echo ""
+    echo -e "  ${DIM}Format: LABEL|ACTION${NC}"
+    echo -e "  ${DIM}Example: Continue|continue (button says 'Continue', sends 'continue')${NC}"
+    echo -e "  ${DIM}Slack allows up to 4 action buttons (plus Focus = 5 total).${NC}"
+    echo ""
+
+    local buttons=()
+    local count=0
+    local max_buttons=4
+
+    while [[ $count -lt $max_buttons ]]; do
+        echo -e "  ${CYAN}Button $((count + 1))${NC} (or press Enter to finish):"
+        echo -ne "    Label: "
+        read -r label
+
+        [[ -z "$label" ]] && break
+
+        echo -ne "    Action to send: "
+        read -r action
+
+        if [[ -z "$action" ]]; then
+            action="$label"
+        fi
+
+        buttons+=("$label|$action")
+        ((count++))
+        echo -e "    ${GREEN}✓${NC} Added: ${BOLD}$label${NC} ${DIM}→ $action${NC}"
+        echo ""
+    done
+
+    if [[ ${#buttons[@]} -eq 0 ]]; then
+        echo -e "  ${DIM}No buttons configured, using defaults${NC}"
+        echo "$DEFAULT_BUTTONS" > "$BUTTON_CONFIG"
+    else
+        printf '%s\n' "${buttons[@]}" > "$BUTTON_CONFIG"
+        echo ""
+        echo_info "Saved ${#buttons[@]} button(s) to $BUTTON_CONFIG"
+    fi
+}
+
+# Only configure buttons interactively on fresh install or when --configure flag is passed
+if [[ "${1:-}" == "--configure" || ( ! -f "$BUTTON_CONFIG" && "${1:-}" != "--uninstall" ) ]]; then
+    configure_buttons "$1"
+elif [[ ! -f "$BUTTON_CONFIG" ]]; then
+    echo "$DEFAULT_BUTTONS" > "$BUTTON_CONFIG"
+fi
+
+# =============================================================================
 # Setup hooks if settings.json exists
+# =============================================================================
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 if [[ -f "$SETTINGS_FILE" ]]; then
     if ! grep -q "claude-slack-notify" "$SETTINGS_FILE" 2>/dev/null; then
-        echo_warn "Add these hooks to $SETTINGS_FILE for automatic notifications:"
+        print_section "Claude Hooks"
+        echo -e "  ${DIM}Add these hooks to $SETTINGS_FILE for automatic notifications:${NC}"
         echo ""
-        echo '  "hooks": {'
-        echo '    "UserPromptSubmit": ['
-        echo '      {"hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-start", "timeout": 5}]}'
-        echo '    ],'
-        echo '    "Stop": ['
-        echo '      {"hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10}]}'
-        echo '    ]'
-        echo '  }'
+        echo -e "  ${CYAN}\"hooks\": {"
+        echo -e "    \"UserPromptSubmit\": ["
+        echo -e "      {\"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-start\", \"timeout\": 5}]}"
+        echo -e "    ],"
+        echo -e "    \"Stop\": ["
+        echo -e "      {\"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-check\", \"timeout\": 10}]}"
+        echo -e "    ]"
+        echo -e "  }${NC}"
+        echo ""
     fi
 fi
 
+# =============================================================================
+# Final Summary
+# =============================================================================
+print_header "Installation Complete" 50
+
+echo -e "  ${GREEN}✓${NC} Scripts installed to ${BOLD}~/.claude/bin/${NC}"
+if [[ "$(uname)" == "Darwin" ]]; then
+    echo -e "  ${GREEN}✓${NC} ClaudeFocus.app installed"
+    echo -e "  ${GREEN}✓${NC} LaunchAgent loaded"
+fi
+echo -e "  ${GREEN}✓${NC} Button config at ${BOLD}~/.claude/button-config${NC}"
 echo ""
-echo "=========================================="
-echo_info "Installation complete!"
-echo "=========================================="
+
+print_section "Next Steps"
 echo ""
-echo "Next steps:"
-echo "1. Get a Slack webhook URL from https://api.slack.com/apps"
-echo "2. Save it: echo 'YOUR_WEBHOOK_URL' > ~/.claude/slack-webhook-url"
-echo "3. In Claude, run: /slack-notify"
+echo -e "  ${CYAN}1.${NC} Get a Slack webhook URL:"
+echo -e "     ${DIM}https://api.slack.com/apps${NC}"
 echo ""
-echo "The Focus Terminal button will switch to the correct terminal tab."
+echo -e "  ${CYAN}2.${NC} Save the webhook URL:"
+echo -e "     ${DIM}echo 'YOUR_URL' > ~/.claude/slack-webhook-url${NC}"
+echo ""
+echo -e "  ${CYAN}3.${NC} In Claude, run:"
+echo -e "     ${BOLD}/slack-notify${NC}"
+echo ""
+echo -e "  ${DIM}The Focus button will switch to the correct terminal tab.${NC}"
+echo -e "  ${DIM}Run ${BOLD}./install.sh --configure${NC}${DIM} to change button layout.${NC}"
 echo ""

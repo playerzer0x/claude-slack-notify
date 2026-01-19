@@ -18,6 +18,27 @@ Developed for orchestrators managing multiple AI agents across different environ
 - **Time-based notifications**: Only notifies for tasks taking >30 seconds
 - **Remote SSH support**: Focus local terminal and send input to remote Linux via SSH
 
+## Requirements
+
+### Core
+- **Bash** shell (macOS/Linux) or PowerShell (Windows)
+- **curl** for sending Slack notifications
+- **Claude Code** CLI installed
+
+### Optional
+- **jq** - Provides richer notification messages with context extraction
+- **tmux** - Required for action buttons (1/2/Continue/Push) to send input
+
+### Platform-Specific
+
+| Platform | Focus Button | Action Buttons | Notes |
+|----------|--------------|----------------|-------|
+| macOS | ✓ iTerm2, Terminal.app | ✓ with tmux | Full support |
+| Windows | ✓ Windows Terminal, ConEmu | ✓ with tmux (WSL) | Requires registry setup |
+| Linux | ✓ GNOME Terminal, Konsole, VS Code | ✓ with tmux | X11/Wayland desktop required |
+| Docker/Containers | ✗ | ✗ | Notifications only, no focus |
+| Remote SSH | ✓ via linked local terminal | ✓ with tmux | Requires SSH key auth |
+
 ## Supported Configurations
 
 ### macOS

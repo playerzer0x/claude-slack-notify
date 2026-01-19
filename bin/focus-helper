@@ -370,18 +370,17 @@ case "$TYPE" in
     ssh-linked)
         # SSH with linked local terminal
         # ARG1=link_id, ARG2=host, ARG3=user, ARG4=port, ARG5=tmux_target
-        local link_id="$ARG1"
-        local ssh_host="$ARG2"
-        local ssh_user="$ARG3"
-        local ssh_port="$ARG4"
-        local remote_tmux_target="$ARG5"
+        link_id="$ARG1"
+        ssh_host="$ARG2"
+        ssh_user="$ARG3"
+        ssh_port="$ARG4"
+        remote_tmux_target="$ARG5"
 
         echo "$(date): SSH-linked: link=$link_id host=$ssh_host user=$ssh_user port=$ssh_port tmux=$remote_tmux_target" >> "$LOG_FILE"
 
         # Step 1: Focus LOCAL terminal using link info
-        local link_file="$LINKS_DIR/${link_id}.json"
+        link_file="$LINKS_DIR/${link_id}.json"
         if [[ -f "$link_file" ]]; then
-            local local_type local_target
             local_type=$(grep -o '"term_type": *"[^"]*"' "$link_file" | cut -d'"' -f4)
             local_target=$(grep -o '"term_target": *"[^"]*"' "$link_file" | cut -d'"' -f4)
 
@@ -392,14 +391,14 @@ case "$TYPE" in
                     switch_iterm_session "id" "$local_target"
                     ;;
                 iterm-tmux)
-                    local local_tty="${local_target%%|*}"
-                    local local_tmux="${local_target#*|}"
+                    local_tty="${local_target%%|*}"
+                    local_tmux="${local_target#*|}"
                     switch_iterm_session "tty" "$local_tty"
                     switch_tmux_window "$local_tmux"
                     ;;
                 terminal-tmux)
-                    local local_tty="${local_target%%|*}"
-                    local local_tmux="${local_target#*|}"
+                    local_tty="${local_target%%|*}"
+                    local_tmux="${local_target#*|}"
                     switch_terminal_tab "$local_tty"
                     switch_tmux_window "$local_tmux"
                     ;;
@@ -429,10 +428,10 @@ case "$TYPE" in
     ssh-tmux)
         # Direct SSH + tmux (no local terminal link)
         # ARG1=host, ARG2=user, ARG3=port, ARG4=tmux_target
-        local ssh_host="$ARG1"
-        local ssh_user="$ARG2"
-        local ssh_port="$ARG3"
-        local remote_tmux_target="$ARG4"
+        ssh_host="$ARG1"
+        ssh_user="$ARG2"
+        ssh_port="$ARG3"
+        remote_tmux_target="$ARG4"
 
         echo "$(date): SSH-tmux (direct): host=$ssh_host user=$ssh_user port=$ssh_port tmux=$remote_tmux_target" >> "$LOG_FILE"
 

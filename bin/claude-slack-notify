@@ -453,6 +453,11 @@ if [[ -n "$FOCUS_URL" ]]; then
       \"elements\": [
         {
           \"type\": \"button\",
+          \"text\": { \"type\": \"plain_text\", \"text\": \"Focus\" },
+          \"url\": \"${SAFE_FOCUS_URL}\"
+        },
+        {
+          \"type\": \"button\",
           \"text\": { \"type\": \"plain_text\", \"text\": \"1\" },
           \"url\": \"${URL_1}\"
         },

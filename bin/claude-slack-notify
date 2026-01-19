@@ -681,43 +681,44 @@ if [[ "$1" == "check" ]]; then
             if [[ -n "$STDIN_DATA" ]] && command -v jq &>/dev/null; then
                 HOOK_EVENT=$(echo "$STDIN_DATA" | jq -r '.hook_event_name // empty' 2>/dev/null)
 
-                # For Notification events, use the message field
+                # Get notification message if this is a Notification event
+                NOTIF_MSG=""
                 if [[ "$HOOK_EVENT" == "Notification" ]]; then
                     NOTIF_MSG=$(echo "$STDIN_DATA" | jq -r '.message // empty' 2>/dev/null)
-                    NOTIF_TYPE=$(echo "$STDIN_DATA" | jq -r '.notification_type // empty' 2>/dev/null)
-                    if [[ -n "$NOTIF_MSG" ]]; then
-                        CONTEXT="$NOTIF_MSG"
-                    elif [[ -n "$NOTIF_TYPE" ]]; then
-                        CONTEXT="Waiting: $NOTIF_TYPE"
-                    fi
                 fi
 
-                # Fall back to transcript for Stop events or if no tool info
-                if [[ -z "$CONTEXT" ]]; then
-                    TRANSCRIPT_PATH=$(echo "$STDIN_DATA" | jq -r '.transcript_path // empty' 2>/dev/null)
-                    if [[ -n "$TRANSCRIPT_PATH" && -f "$TRANSCRIPT_PATH" ]]; then
-                        # Get last assistant message from transcript (JSONL format)
-                        LAST_MSG=$(tac "$TRANSCRIPT_PATH" 2>/dev/null | while read -r line; do
-                            MSG_TYPE=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
-                            if [[ "$MSG_TYPE" == "assistant" ]]; then
-                                # Extract text content from message
-                                TEXT=$(echo "$line" | jq -r '
-                                    if .message.content then
-                                        [.message.content[] | select(.type == "text") | .text] | join(" ")
-                                    else
-                                        empty
-                                    end
-                                ' 2>/dev/null)
-                                if [[ -n "$TEXT" ]]; then
-                                    echo "$TEXT"
-                                    break
-                                fi
+                # Get last assistant message from transcript
+                TRANSCRIPT_MSG=""
+                TRANSCRIPT_PATH=$(echo "$STDIN_DATA" | jq -r '.transcript_path // empty' 2>/dev/null)
+                if [[ -n "$TRANSCRIPT_PATH" && -f "$TRANSCRIPT_PATH" ]]; then
+                    TRANSCRIPT_MSG=$(tac "$TRANSCRIPT_PATH" 2>/dev/null | while read -r line; do
+                        MSG_TYPE=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
+                        if [[ "$MSG_TYPE" == "assistant" ]]; then
+                            TEXT=$(echo "$line" | jq -r '
+                                if .message.content then
+                                    [.message.content[] | select(.type == "text") | .text] | join(" ")
+                                else
+                                    empty
+                                end
+                            ' 2>/dev/null)
+                            if [[ -n "$TEXT" ]]; then
+                                echo "$TEXT"
+                                break
                             fi
-                        done)
-                        if [[ -n "$LAST_MSG" ]]; then
-                            CONTEXT="$LAST_MSG"
                         fi
-                    fi
+                    done)
+                fi
+
+                # Build context: show both transcript and notification message
+                if [[ -n "$TRANSCRIPT_MSG" && -n "$NOTIF_MSG" ]]; then
+                    CONTEXT="${TRANSCRIPT_MSG}
+
+---
+*${NOTIF_MSG}*"
+                elif [[ -n "$NOTIF_MSG" ]]; then
+                    CONTEXT="$NOTIF_MSG"
+                elif [[ -n "$TRANSCRIPT_MSG" ]]; then
+                    CONTEXT="$TRANSCRIPT_MSG"
                 fi
             fi
         fi

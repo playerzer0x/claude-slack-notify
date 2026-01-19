@@ -1,47 +1,40 @@
 # Claude Slack Notify
 
-Slack notifications for Claude Code with clickable "Focus Terminal" buttons that switch to the correct terminal tab.
+Slack notifications for Claude Code with clickable buttons to focus terminals and send commands.
 
-Developed for orchestrators managing multiple AI agents across different environments. Stay in your familiar Slack workspace while agents work autonomously—get notified only when attention is needed, click to jump directly to the right terminal, and send commands without context switching.
-
-**Goals:**
-- Improve focus by centralizing notifications
-- Reduce manual intervention with one-click actions
-- Minimize context switching between terminals
-- Eliminate unnecessary distractions with time-based alerts
+Designed for orchestrating multiple AI agents: get notified when attention is needed, click to jump to the right terminal, and send commands without context switching.
 
 ## Features
 
 - **Multi-instance support**: Run multiple Claude sessions with unique names
-- **Clickable focus buttons**: One click in Slack switches to the exact terminal tab
-- **Auto-detection**: Works with macOS, Windows, and Linux terminals
+- **Clickable focus buttons**: One click switches to the exact terminal tab
 - **Time-based notifications**: Only notifies for tasks taking >30 seconds
-- **Remote SSH support**: Focus local terminal and send input to remote Linux via SSH
+- **Cross-platform**: macOS, Windows, Linux, and remote SSH
 
 ## Requirements
 
-### Core
-- **Bash** shell (macOS/Linux) or PowerShell (Windows)
-- **curl** for sending Slack notifications
-- **Claude Code** CLI installed
+| Requirement | Purpose |
+|-------------|---------|
+| Bash (macOS/Linux) or PowerShell (Windows) | Core shell |
+| curl | Sending notifications |
+| Claude Code CLI | Integration |
+| jq (optional) | Richer notification context |
+| tmux (optional) | Action buttons (1/2/Continue/Push) |
 
-### Optional
-- **jq** - Provides richer notification messages with context extraction
-- **tmux** - Required for action buttons (1/2/Continue/Push) to send input
+### Platform Support
 
-### Platform-Specific
+| Platform | Focus | Actions | Notes |
+|----------|-------|---------|-------|
+| macOS (iTerm2, Terminal.app) | Yes | Yes (with tmux) | Full support |
+| Windows (Terminal, ConEmu) | Yes | Yes (WSL + tmux) | Requires registry |
+| Linux (GNOME, Konsole, VS Code) | Yes | Yes (with tmux) | X11/Wayland required |
+| Docker/Containers | No | No | Notifications only |
+| Remote SSH | Yes | Yes (with tmux) | SSH key auth required |
 
-| Platform | Focus Button | Action Buttons | Notes |
-|----------|--------------|----------------|-------|
-| macOS | ✓ iTerm2, Terminal.app | ✓ with tmux | Full support |
-| Windows | ✓ Windows Terminal, ConEmu | ✓ with tmux (WSL) | Requires registry setup |
-| Linux | ✓ GNOME Terminal, Konsole, VS Code | ✓ with tmux | X11/Wayland desktop required |
-| Docker/Containers | ✗ | ✗ | Notifications only, no focus |
-| Remote SSH | ✓ via linked local terminal | ✓ with tmux | Requires SSH key auth |
+## Terminal Types
 
-## Supported Configurations
-
-### macOS
+<details>
+<summary>macOS</summary>
 
 | Terminal | tmux | Type |
 |----------|------|------|
@@ -50,7 +43,10 @@ Developed for orchestrators managing multiple AI agents across different environ
 | Terminal.app | No | `terminal` |
 | Terminal.app | Yes | `terminal-tmux` |
 
-### Windows
+</details>
+
+<details>
+<summary>Windows</summary>
 
 | Terminal | tmux | Type |
 |----------|------|------|
@@ -61,7 +57,10 @@ Developed for orchestrators managing multiple AI agents across different environ
 | WSL | No | `wsl` |
 | WSL | Yes | `wsl-tmux` |
 
-### Linux
+</details>
+
+<details>
+<summary>Linux</summary>
 
 | Terminal | tmux | Type |
 |----------|------|------|
@@ -70,362 +69,154 @@ Developed for orchestrators managing multiple AI agents across different environ
 | VS Code | No | `vscode` |
 | Any | Yes | `linux-tmux` |
 
-### Remote via SSH
+</details>
+
+<details>
+<summary>Remote SSH / JupyterLab</summary>
 
 | Configuration | Type | Focus | Input |
 |--------------|------|-------|-------|
-| Linked SSH + tmux | `ssh-linked` | Local terminal | SSH → remote tmux |
-| Direct SSH + tmux | `ssh-tmux` | None | SSH → remote tmux |
-| Direct SSH | `ssh` | None | None |
+| Linked SSH + tmux | `ssh-linked` | Local terminal | SSH to remote |
+| Direct SSH + tmux | `ssh-tmux` | None | SSH to remote |
+| JupyterLab + tmux | `jupyter-tmux` | Chrome tab | SSH to remote |
 
-### JupyterLab
-
-| Configuration | Type | Focus | Input |
-|--------------|------|-------|-------|
-| JupyterLab + tmux | `jupyter-tmux` | Chrome tab | SSH → remote tmux |
+</details>
 
 ## Installation
 
 ### macOS / Linux
 
 ```bash
-./install.sh
-```
-
-To uninstall:
-```bash
-./install.sh --uninstall
-```
-
-For development (symlinks to repo):
-```bash
-./install.sh --link
+./install.sh              # Install
+./install.sh --uninstall  # Uninstall
+./install.sh --link       # Development (symlinks)
 ```
 
 ### Windows
 
-Run in PowerShell (as Administrator if needed for registry):
-
 ```powershell
-.\install.ps1
+.\install.ps1             # Install (run as Administrator)
+.\install.ps1 -Uninstall  # Uninstall
 ```
 
-To uninstall:
-```powershell
-.\install.ps1 -Uninstall
-```
+Works from Git Bash, MSYS2, Cygwin, or WSL. Uses Windows Registry for `claude-focus://` URLs.
 
-**Note**: On Windows, the script works from Git Bash, MSYS2, Cygwin, or WSL. The Focus Terminal button uses the Windows Registry to handle `claude-focus://` URLs.
-
-### Docker / Containers
-
-The install script copies files (instead of symlinking) for portability. To install in a Docker container:
+### Docker
 
 ```dockerfile
-# In your Dockerfile
-RUN git clone https://github.com/yourusername/claude-slack-notify.git /tmp/claude-slack-notify && \
-    /tmp/claude-slack-notify/install.sh && \
-    rm -rf /tmp/claude-slack-notify
+RUN git clone https://github.com/yourusername/claude-slack-notify.git /tmp/csn && \
+    /tmp/csn/install.sh && rm -rf /tmp/csn
 ```
 
-Or install directly from the scripts:
-
-```bash
-# Copy the bin scripts to ~/.claude/bin/
-mkdir -p ~/.claude/bin
-curl -o ~/.claude/bin/claude-slack-notify https://raw.githubusercontent.com/.../bin/claude-slack-notify
-curl -o ~/.claude/bin/slack-notify-start https://raw.githubusercontent.com/.../bin/slack-notify-start
-curl -o ~/.claude/bin/slack-notify-check https://raw.githubusercontent.com/.../bin/slack-notify-check
-chmod +x ~/.claude/bin/*
-```
-
-**Note**: In containers, the Focus Terminal button won't work (no desktop environment), but Slack notifications will still be sent.
+Focus buttons do not work in containers (no desktop), but notifications are sent.
 
 ### macOS Permissions
 
-The first time you click a Focus button, macOS will prompt you to grant permissions. Here's what to expect:
+On first Focus button click, grant automation permission when prompted. If denied, enable in **System Settings > Privacy & Security > Automation**:
+- ClaudeFocus.app > iTerm (or Terminal)
+- ClaudeFocus.app > System Events
+- ClaudeFocus.app > Google Chrome (for JupyterLab)
 
-**1. Automation Permission**
-
-When the focus-helper tries to control your terminal app, you'll see:
-> "ClaudeFocus.app" wants access to control "iTerm" (or "Terminal")
-
-Click **OK** to allow. This lets the Focus button switch to the correct terminal tab.
-
-**2. If you accidentally clicked "Don't Allow"**
-
-Go to **System Settings → Privacy & Security → Automation** and enable:
-- ClaudeFocus.app → iTerm (or Terminal)
-- ClaudeFocus.app → System Events
-
-**3. Chrome (for JupyterLab)**
-
-If using `--jupyter` linking, you'll also need to allow:
-- ClaudeFocus.app → Google Chrome
-
-**Troubleshooting**
-
-If the Focus button doesn't work:
-1. Check **System Settings → Privacy & Security → Automation**
-2. Ensure ClaudeFocus.app has permission for your terminal
-3. Check the debug log: `tail -f ~/.claude/logs/focus-debug.log`
-4. Try reinstalling: `./install.sh` (re-registers the URL handler)
+**Troubleshooting**: Check `~/.claude/logs/focus-debug.log` or reinstall with `./install.sh`.
 
 ## Setup
 
-1. **Get a Slack webhook URL**:
-   - Go to https://api.slack.com/apps
-   - Create New App → From scratch → Name it "Claude Notifier"
-   - Enable Incoming Webhooks
-   - Add New Webhook to Workspace
-   - Choose a channel and copy the URL
+1. **Create Slack webhook**: [api.slack.com/apps](https://api.slack.com/apps) > Create New App > Incoming Webhooks > Add to Workspace
 
-2. **Save the webhook URL**:
-
-   macOS/Linux/WSL:
+2. **Save webhook URL**:
    ```bash
    echo 'https://hooks.slack.com/services/...' > ~/.claude/slack-webhook-url
    ```
 
-   Windows (PowerShell):
-   ```powershell
-   "https://hooks.slack.com/services/..." | Out-File -FilePath "$env:USERPROFILE\.claude\slack-webhook-url" -Encoding ASCII
-   ```
-
-3. **Register a Claude session**:
-   In Claude, run `/slack-notify` or `/slack-notify MyProject`
+3. **Register session**: In Claude, run `/slack-notify` or `/slack-notify MyProject`
 
 ## Remote SSH Sessions
 
-When running Claude on a remote Linux server via SSH, you can configure the Focus button to:
-1. Switch to your **local** terminal (the one you SSH'd from)
-2. Send input to the **remote** Claude session via SSH
+Configure Focus buttons to switch to your local terminal while sending input to a remote Claude session.
 
-### Setup
-
-**One-liner with --host (recommended)**
+### Quick Start
 
 ```bash
-# Using SSH config alias
-claude-slack-notify link --host myserver
-
-# Using user@hostname
-claude-slack-notify link --host user@myserver
-
-# Using user@ip
-claude-slack-notify link --host ubuntu@192.168.1.100
-
-# With extra SSH options (passed through)
-claude-slack-notify link --host deploy@prod-server -p 2222
+claude-slack-notify link --host user@server  # Creates link, SSHs, starts tmux
+claude                                        # Start Claude
+/slack-notify                                 # Register in Slack
 ```
 
-This creates a link, SSHs, and **automatically starts a tmux session** named "claude".
-
-**After connecting:**
-1. Run `claude` to start Claude
-2. In Claude, run `/slack-notify` to register
-
-**Important: tmux is required on the remote** for the input buttons (1/2/Continue/Push) to work. The `--host` option automatically starts tmux for you. Without tmux, only the Focus button works (switches to local terminal).
+The `--host` flag accepts SSH config aliases, user@hostname, or user@ip. Extra SSH options like `-p 2222` are passed through.
 
 ### How It Works
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│ LOCAL MACHINE (macOS)                                           │
-│ ┌─────────────────┐                                             │
-│ │ iTerm2 Tab      │ ◀── Focus button switches here              │
-│ │ (SSH session)   │                                             │
-│ └────────┬────────┘                                             │
-│          │ SSH                                                  │
-└──────────┼──────────────────────────────────────────────────────┘
-           │
-           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ REMOTE LINUX                                                    │
-│ ┌─────────────────┐                                             │
-│ │ tmux pane       │ ◀── Input sent here via SSH                 │
-│ │ (Claude running)│                                             │
-│ └─────────────────┘                                             │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-When you click the Focus button in Slack:
-1. The focus-helper reads the link file to find your local terminal
-2. Switches to that iTerm2/Terminal.app tab
-3. Switches the remote tmux to the correct window/pane (via SSH)
-4. Sends input to the tmux pane (if action button clicked)
-
-### Managing Links
-
-```bash
-# List active links
-claude-slack-notify links
-
-# Clean up links older than 24 hours
-claude-slack-notify links clean
+LOCAL (macOS)                    REMOTE (Linux)
+┌─────────────────┐              ┌─────────────────┐
+│ iTerm2 Tab      │──── SSH ────▶│ tmux pane       │
+│ (Focus here)    │              │ (Input here)    │
+└─────────────────┘              └─────────────────┘
 ```
 
 ### Requirements
 
 - **Local**: macOS with iTerm2 or Terminal.app
-- **Remote**: tmux installed on the Linux server (required for input buttons)
-- **SSH**: Key-based authentication (for sending input without password prompts)
+- **Remote**: tmux (for action buttons)
+- **SSH**: Key-based authentication
 
-**Note**: The `--host` option automatically starts a tmux session. If you connect manually, make sure to run Claude inside tmux:
+### Managing Links
+
 ```bash
-tmux new -s claude  # Then run claude inside tmux
+claude-slack-notify links        # List active links
+claude-slack-notify links clean  # Remove links >24 hours old
 ```
 
-Without tmux, the Focus button will still switch to your local terminal, but the input buttons (1/2/Continue/Push) won't work.
+## JupyterLab Support
 
-### Configuration
-
-Set a custom SSH port (default: 22):
-```bash
-export CLAUDE_SSH_PORT=2222
-```
-
-## JupyterLab Terminal Support
-
-You can also link a JupyterLab terminal running in Chrome. This lets the Focus button switch to your Chrome tab and send input to the remote tmux session.
+Link a JupyterLab terminal in Chrome to focus the tab and send input via SSH.
 
 ### Setup
 
-**Step 1: Open JupyterLab in Chrome** (make it the active tab)
+1. Open JupyterLab in Chrome (make it the active tab)
+2. From your Mac terminal:
+   ```bash
+   claude-slack-notify link --jupyter --host user@jupyter-server
+   ```
+3. In JupyterLab terminal:
+   ```bash
+   source ~/.claude/jupyter-env && tmux new -s claude
+   claude
+   /slack-notify
+   ```
 
-**Step 2: Create the link from your Mac terminal:**
-```bash
-claude-slack-notify link --jupyter --host user@jupyter-server
-```
+Requires Chrome, tmux on remote, and SSH key authentication.
 
-This will:
-- Capture the Chrome tab URL
-- SSH to the server and create `~/.claude/jupyter-env`
-
-**Step 3: In JupyterLab terminal, run:**
-```bash
-source ~/.claude/jupyter-env
-tmux new -s claude
-claude
-/slack-notify
-```
-
-### How It Works
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│ LOCAL MACHINE (macOS)                                           │
-│ ┌─────────────────┐                                             │
-│ │ Chrome Tab      │ ◀── Focus button switches here              │
-│ │ (JupyterLab)    │                                             │
-│ └────────┬────────┘                                             │
-│          │ WebSocket (display only)                             │
-└──────────┼──────────────────────────────────────────────────────┘
-           │
-           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ REMOTE LINUX (Jupyter Server)                                   │
-│ ┌─────────────────┐                                             │
-│ │ tmux pane       │ ◀── Input sent via SSH (bypasses WebSocket) │
-│ │ (Claude running)│                                             │
-│ └─────────────────┘                                             │
-└─────────────────────────────────────────────────────────────────┘
+Claude hooks ──▶ claude-slack-notify ──▶ Slack webhook
+                                               │
+                                               ▼
+                               User clicks Focus button
+                                               │
+                                               ▼
+                  URL handler (ClaudeFocus.app / Registry) ──▶ focus-helper ──▶ Terminal
 ```
 
-When you click Focus:
-1. Switches to Chrome and focuses the JupyterLab tab
-2. Switches the remote tmux to the correct window/pane (via SSH)
-3. Sends input to the tmux pane (via SSH)
+<details>
+<summary>URL Scheme Reference</summary>
 
-### Requirements
+The `claude-focus://` scheme encodes terminal type and target:
 
-- Chrome with JupyterLab open
-- tmux on the remote server
-- SSH key-based authentication to the server
+**macOS**: `iterm2`, `iterm-tmux`, `terminal`, `terminal-tmux`
+**Windows**: `windows-terminal`, `wt-tmux`, `conemu`, `mintty`, `wsl`, `wsl-tmux`
+**Remote**: `ssh-linked`, `ssh-tmux`
 
-## How It Works
+Example: `claude-focus://iterm-tmux/<tty>/<session:window.pane>`
 
-### Architecture (macOS)
-
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  Claude hooks   │────▶│ claude-slack-   │────▶│     Slack       │
-│  (start/check)  │     │    notify       │     │   webhook       │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-                                                        │
-                                                        ▼
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  focus-helper   │◀────│  LaunchAgent    │◀────│ ClaudeFocus.app │
-│  (AppleScript)  │     │  (file watcher) │     │ (URL handler)   │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-        │
-        ▼
-┌─────────────────┐
-│  Terminal tab   │
-│  switches       │
-└─────────────────┘
-```
-
-### Architecture (Windows)
-
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  Claude hooks   │────▶│ claude-slack-   │────▶│     Slack       │
-│  (start/check)  │     │    notify       │     │   webhook       │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-                                                        │
-                                                        ▼
-┌─────────────────────┐     ┌─────────────────────────────────────┐
-│ focus-helper-       │◀────│ Windows Registry URL Handler        │
-│ windows.ps1         │     │ (claude-focus-handler.cmd)          │
-│ (Win32 API)         │     └─────────────────────────────────────┘
-└─────────────────────┘
-        │
-        ▼
-┌─────────────────┐
-│  Terminal window│
-│  switches       │
-└─────────────────┘
-```
-
-### URL Scheme
-
-The `claude-focus://` URL scheme encodes the terminal type and target:
-
-**macOS:**
-- `claude-focus://iterm2/<session-uuid>` - Pure iTerm2
-- `claude-focus://iterm-tmux/<tty>/<session:window.pane>` - iTerm2 + tmux
-- `claude-focus://terminal/<tty>` - Pure Terminal.app
-- `claude-focus://terminal-tmux/<tty>/<session:window.pane>` - Terminal.app + tmux
-
-**Windows:**
-- `claude-focus://windows-terminal/<wt-session>` - Windows Terminal
-- `claude-focus://wt-tmux/<wt-session>/<session:window.pane>` - Windows Terminal + tmux
-- `claude-focus://conemu/<pid>` - ConEmu/Cmder
-- `claude-focus://mintty/<pid>` - Git Bash/MSYS2/Cygwin
-- `claude-focus://wsl/<distro-id>` - WSL
-- `claude-focus://wsl-tmux/<distro-id>/<session:window.pane>` - WSL + tmux
-
-**Remote SSH:**
-- `claude-focus://ssh-linked/<link_id>/<host>/<user>/<port>/<tmux_target>` - Linked SSH + tmux
-- `claude-focus://ssh-tmux/<host>/<user>/<port>/<tmux_target>` - Direct SSH + tmux
+</details>
 
 ## Configuration
 
 ### Slack Buttons
 
-The action buttons in Slack notifications are configurable. During installation, you can customize which buttons appear.
-
-**Default buttons:** Focus (always included), 1, 2, Continue, Push
-
-**To reconfigure buttons:**
-```bash
-./install.sh --configure
-```
-
-**Button config file:** `~/.claude/button-config`
-
-Format: `LABEL|ACTION` (one per line)
+Configure in `~/.claude/button-config` (format: `LABEL|ACTION` per line):
 ```
 1|1
 2|2
@@ -433,131 +224,69 @@ Continue|continue
 Push|push
 ```
 
-The label is what appears on the button, and the action is what gets sent to the terminal when clicked.
+Reconfigure with `./install.sh --configure`. Focus button is always included.
 
 ### Environment Variables
 
-- `CLAUDE_NOTIFY_MIN_SECONDS`: Minimum task duration before notifying (default: 30)
-- `SLACK_WEBHOOK_URL`: Alternative to ~/.claude/slack-webhook-url file
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CLAUDE_NOTIFY_MIN_SECONDS` | 30 | Minimum task duration before notifying |
+| `SLACK_WEBHOOK_URL` | - | Alternative to ~/.claude/slack-webhook-url |
+| `CLAUDE_SSH_PORT` | 22 | SSH port for remote sessions |
 
 ### Claude Hooks
 
-Add to `~/.claude/settings.json` for automatic notifications:
+Add to `~/.claude/settings.json`:
 
 ```json
 {
   "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$HOME/.claude/bin/slack-notify-start",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$HOME/.claude/bin/slack-notify-check",
-            "timeout": 10
-          }
-        ]
-      }
-    ]
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "$HOME/.claude/bin/slack-notify-start", "timeout": 5 }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10 }] }]
   }
 }
 ```
 
-The `slack-notify-start` and `slack-notify-check` wrapper scripts automatically extract the `session_id` from the JSON that Claude Code passes to hooks. This ensures consistent instance identification across hook invocations.
-
-**Note:** For richer context extraction from transcripts, install `jq`. The scripts work without it but provide better notification messages with it installed.
+Install `jq` for richer notification context.
 
 ## Commands
 
-### claude-slack-notify
-
 ```bash
-# Register a new instance
-claude-slack-notify register [name]
+claude-slack-notify register [name]     # Register instance
+claude-slack-notify list                # List instances
+claude-slack-notify start               # Start timing
+claude-slack-notify check               # Notify if >30s elapsed
+claude-slack-notify "message" [status]  # Custom notification
 
-# List all registered instances
-claude-slack-notify list
-
-# Start timing a task
-claude-slack-notify start
-
-# Check elapsed time and notify if >30s
-claude-slack-notify check
-
-# Send a custom notification
-claude-slack-notify "message" [status]
-
-# Create a link for SSH sessions (run on LOCAL machine)
-claude-slack-notify link
-
-# Create link and SSH in one command
-claude-slack-notify link --host <hostname>
-claude-slack-notify link --host user@hostname
-claude-slack-notify link --host user@192.168.1.100
-
-# Create link for JupyterLab (Chrome tab must be active)
-claude-slack-notify link --jupyter --host user@jupyter-server
-
-# List active links
-claude-slack-notify links
-
-# Clean up old links (>24 hours)
-claude-slack-notify links clean
+# SSH linking
+claude-slack-notify link --host user@server
+claude-slack-notify link --jupyter --host user@server
+claude-slack-notify links [clean]       # List or clean links
 ```
 
-### Status Colors
-
-- `started` - Green
-- `waiting` - Orange
-- `error` - Red
-- (default) - Blue
+**Status colors**: `started` (green), `waiting` (orange), `error` (red), default (blue)
 
 ## Files
 
-### Common (all platforms)
-- `~/.claude/bin/claude-slack-notify` - Main notification script
-- `~/.claude/bin/slack-notify-start` - Hook wrapper for UserPromptSubmit
-- `~/.claude/bin/slack-notify-check` - Hook wrapper for Stop
-- `~/.claude/bin/get-session-id` - Helper to get current session ID
-- `~/.claude/commands/slack-notify.md` - Claude command definition
-- `~/.claude/slack-webhook-url` - Slack webhook URL
-- `~/.claude/button-config` - Custom Slack button configuration
-- `~/.claude/instances/` - Registered instance data (keyed by session ID)
-- `~/.claude/links/` - SSH link data (for remote sessions)
-- `~/.claude/logs/focus-debug.log` - Focus helper debug log
+| Path | Purpose |
+|------|---------|
+| `~/.claude/bin/claude-slack-notify` | Main script |
+| `~/.claude/bin/slack-notify-{start,check}` | Hook wrappers |
+| `~/.claude/bin/focus-helper` | Terminal switcher (macOS: AppleScript, Windows: PowerShell) |
+| `~/.claude/commands/slack-notify.md` | Claude command |
+| `~/.claude/slack-webhook-url` | Webhook URL |
+| `~/.claude/button-config` | Button configuration |
+| `~/.claude/instances/` | Registered instances |
+| `~/.claude/links/` | SSH link data |
+| `~/.claude/logs/focus-debug.log` | Debug log |
 
-### macOS only
-- `~/.claude/bin/focus-helper` - Terminal tab switching helper (AppleScript)
-- `~/Applications/ClaudeFocus.app` - URL scheme handler
-- `~/Library/LaunchAgents/com.claude.focus-watcher.plist` - File watcher service
-
-### Windows only
-- `%USERPROFILE%\.claude\bin\focus-helper-windows.ps1` - Terminal switching helper (PowerShell)
-- `%USERPROFILE%\.claude\bin\claude-focus-handler.cmd` - URL scheme handler
-- Registry: `HKCU\Software\Classes\claude-focus` - URL scheme registration
+**macOS**: `~/Applications/ClaudeFocus.app` (URL handler)
+**Windows**: Registry `HKCU\Software\Classes\claude-focus`
 
 ## Debugging
 
-Check the focus helper log:
-
-macOS/Linux:
 ```bash
 tail -f ~/.claude/logs/focus-debug.log
-```
-
-Windows (PowerShell):
-```powershell
-Get-Content "$env:USERPROFILE\.claude\logs\focus-debug.log" -Wait -Tail 20
 ```
 
 ## License

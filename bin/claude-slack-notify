@@ -18,7 +18,6 @@ fi
 
 INSTANCE_FILE="${INSTANCES_DIR}/${INSTANCE_ID}.json"
 TIMESTAMP_FILE="/tmp/claude-prompt-start-${INSTANCE_ID}"
-CONTEXT_FILE="/tmp/claude-prompt-context-${INSTANCE_ID}"
 
 # -----------------------------------------------------------------------------
 # Detect terminal environment and build focus URL
@@ -284,63 +283,19 @@ if [[ "$1" == "list" ]]; then
 fi
 
 # -----------------------------------------------------------------------------
-# Start timing (optionally with context)
-# Usage: claude-slack-notify start [context]
-# Hooks receive tool input via stdin as JSON
+# Start timing
+# Usage: claude-slack-notify start
 # -----------------------------------------------------------------------------
 if [[ "$1" == "start" ]]; then
-    date +%s > "$TIMESTAMP_FILE"
-
-    # Try to extract context from stdin (Claude Code hook JSON input)
-    CONTEXT=""
-    if [[ ! -t 0 ]]; then
-        # Read stdin (non-blocking, with timeout)
-        STDIN_DATA=$(timeout 1 cat 2>/dev/null || true)
-        if [[ -n "$STDIN_DATA" ]]; then
-            # Try to extract useful context from JSON
-            # For Bash: get description or command
-            # For other tools: get tool_name
-            if command -v jq &>/dev/null; then
-                TOOL_NAME=$(echo "$STDIN_DATA" | jq -r '.tool_name // empty' 2>/dev/null)
-                DESCRIPTION=$(echo "$STDIN_DATA" | jq -r '.tool_input.description // empty' 2>/dev/null)
-                COMMAND=$(echo "$STDIN_DATA" | jq -r '.tool_input.command // empty' 2>/dev/null)
-                FILE_PATH=$(echo "$STDIN_DATA" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
-
-                # Build context string
-                if [[ -n "$DESCRIPTION" ]]; then
-                    CONTEXT="$DESCRIPTION"
-                elif [[ -n "$COMMAND" ]]; then
-                    # Truncate long commands
-                    if [[ ${#COMMAND} -gt 80 ]]; then
-                        CONTEXT="${COMMAND:0:77}..."
-                    else
-                        CONTEXT="$COMMAND"
-                    fi
-                elif [[ -n "$FILE_PATH" ]]; then
-                    CONTEXT="$TOOL_NAME: ${FILE_PATH##*/}"
-                elif [[ -n "$TOOL_NAME" ]]; then
-                    CONTEXT="$TOOL_NAME"
-                fi
-            else
-                # Fallback: try grep for common fields
-                DESCRIPTION=$(echo "$STDIN_DATA" | grep -o '"description"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
-                if [[ -n "$DESCRIPTION" ]]; then
-                    CONTEXT="$DESCRIPTION"
-                fi
-            fi
-        fi
+    # Only work for registered instances (prevents sub-agents from creating timers)
+    if [[ ! -f "$INSTANCE_FILE" ]]; then
+        exit 0
     fi
 
-    # Fallback to argument if no stdin context
-    if [[ -z "$CONTEXT" && -n "$2" ]]; then
-        CONTEXT="$2"
-    fi
-
-    # Store context
-    if [[ -n "$CONTEXT" ]]; then
-        echo "$CONTEXT" > "$CONTEXT_FILE"
-    else
-        rm -f "$CONTEXT_FILE"
+    # Only start a new timer if one isn't already running
+    # This preserves the original start time across multiple rapid tool calls
+    if [[ ! -f "$TIMESTAMP_FILE" ]]; then
+        date +%s > "$TIMESTAMP_FILE"
     fi
     exit 0
 fi
@@ -348,32 +303,66 @@ fi
 # -----------------------------------------------------------------------------
 # Check elapsed time and notify if needed
 # Usage: claude-slack-notify check [context]
-# Context can be passed here or was stored during 'start'
+# Stop hook passes transcript_path in stdin JSON
 # -----------------------------------------------------------------------------
 if [[ "$1" == "check" ]]; then
+    # Only work for registered instances (prevents sub-agents from notifying)
+    if [[ ! -f "$INSTANCE_FILE" ]]; then
+        exit 0
+    fi
+
     if [[ -f "$TIMESTAMP_FILE" ]]; then
         START_TIME=$(cat "$TIMESTAMP_FILE")
         NOW=$(date +%s)
         ELAPSED=$((NOW - START_TIME))
-        rm -f "$TIMESTAMP_FILE"
 
+        # Only notify and clear timestamp if elapsed >= threshold
+        # This preserves timing across multiple rapid tool calls
         if [[ $ELAPSED -lt $MIN_DURATION ]]; then
-            rm -f "$CONTEXT_FILE"
             exit 0
         fi
 
-        # Get context: prefer arg $2, fallback to stored context file
-        CONTEXT="${2:-}"
-        if [[ -z "$CONTEXT" && -f "$CONTEXT_FILE" ]]; then
-            CONTEXT=$(cat "$CONTEXT_FILE")
-        fi
-        rm -f "$CONTEXT_FILE"
+        # Threshold exceeded - clear timestamp and notify
+        rm -f "$TIMESTAMP_FILE"
 
-        # Build message with context if available
+        # Try to get Claude's last message from transcript
+        CONTEXT=""
+        if [[ ! -t 0 ]]; then
+            STDIN_DATA=$(timeout 1 cat 2>/dev/null || true)
+            if [[ -n "$STDIN_DATA" ]] && command -v jq &>/dev/null; then
+                TRANSCRIPT_PATH=$(echo "$STDIN_DATA" | jq -r '.transcript_path // empty' 2>/dev/null)
+                if [[ -n "$TRANSCRIPT_PATH" && -f "$TRANSCRIPT_PATH" ]]; then
+                    # Get last assistant message from transcript (JSONL format)
+                    # Look for the last line with type=assistant and extract first 100 chars of message
+                    LAST_MSG=$(tac "$TRANSCRIPT_PATH" 2>/dev/null | while read -r line; do
+                        MSG_TYPE=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
+                        if [[ "$MSG_TYPE" == "assistant" ]]; then
+                            # Extract text content from message
+                            TEXT=$(echo "$line" | jq -r '
+                                if .message.content then
+                                    [.message.content[] | select(.type == "text") | .text] | join(" ")
+                                else
+                                    empty
+                                end
+                            ' 2>/dev/null)
+                            if [[ -n "$TEXT" ]]; then
+                                echo "$TEXT"
+                                break
+                            fi
+                        fi
+                    done)
+                    if [[ -n "$LAST_MSG" ]]; then
+                        CONTEXT="$LAST_MSG"
+                    fi
+                fi
+            fi
+        fi
+
+        # Build message
         if [[ -n "$CONTEXT" ]]; then
-            MESSAGE="Finished: ${CONTEXT} (${ELAPSED}s)"
+            MESSAGE="${CONTEXT} (${ELAPSED}s)"
         else
-            MESSAGE="Task completed after ${ELAPSED}s"
+            MESSAGE="Task completed (${ELAPSED}s)"
         fi
     else
         exit 0
@@ -439,8 +428,6 @@ SAFE_LOCATION=$(json_escape "$LOCATION")
 SAFE_MESSAGE=$(json_escape "$MESSAGE")
 SAFE_FOCUS_URL=$(json_escape "$FOCUS_URL")
 
-PREVIEW_TEXT="${SAFE_INSTANCE_NAME} on ${SAFE_HOSTNAME}: ${SAFE_MESSAGE}"
-
 # Build button block if we have a focus URL
 BUTTON_BLOCK=""
 if [[ -n "$FOCUS_URL" ]]; then
@@ -463,9 +450,9 @@ fi
 
 curl -s -X POST -H 'Content-type: application/json' \
   --data "{
-    \"text\": \"${PREVIEW_TEXT}\",
     \"attachments\": [
       {
+        \"fallback\": \"${SAFE_INSTANCE_NAME}: ${SAFE_MESSAGE}\",
         \"color\": \"${COLOR}\",
         \"blocks\": [
           {

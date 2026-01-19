@@ -354,8 +354,14 @@ if [[ -f "$SETTINGS_FILE" ]]; then
         echo -e "    ],"
         echo -e "    \"Stop\": ["
         echo -e "      {\"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-check\", \"timeout\": 10}]}"
+        echo -e "    ],"
+        echo -e "    \"Notification\": ["
+        echo -e "      {\"matcher\": \"idle_prompt\", \"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-check\", \"timeout\": 10}]},"
+        echo -e "      {\"matcher\": \"elicitation_dialog\", \"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-check\", \"timeout\": 10}]},"
+        echo -e "      {\"matcher\": \"permission_prompt\", \"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-check\", \"timeout\": 10}]}"
         echo -e "    ]"
         echo -e "  }${NC}"
+        echo -e "  ${DIM}(Notification hooks handle plan mode, questions, and permission dialogs)${NC}"
         echo ""
     fi
 fi

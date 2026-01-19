@@ -157,7 +157,8 @@ EOF
         echo "Then in Claude, run: /slack-notify"
         echo ""
         # Use tmux new-session -A to attach if exists, create if not
-        exec ssh -t "${SSH_ARGS[@]}" "$SSH_HOST" "CLAUDE_LINK_ID=$LINK_ID tmux new-session -A -s claude"
+        # Pass CLAUDE_SSH_HOST so the remote knows how to be reached from local
+        exec ssh -t "${SSH_ARGS[@]}" "$SSH_HOST" "CLAUDE_LINK_ID=$LINK_ID CLAUDE_SSH_HOST=$SSH_HOST tmux new-session -A -s claude"
     fi
 
     # Otherwise print instructions
@@ -239,7 +240,9 @@ detect_terminal() {
     # Check for SSH session with linked local terminal
     if [[ -n "$SSH_CONNECTION" ]]; then
         SSH_USER=$(whoami)
-        SSH_HOST=$(hostname -f 2>/dev/null || hostname)
+        # Use CLAUDE_SSH_HOST if set (passed from link --host), otherwise fall back to hostname
+        # CLAUDE_SSH_HOST ensures we use the same host/alias the user connected with
+        SSH_HOST="${CLAUDE_SSH_HOST:-$(hostname -f 2>/dev/null || hostname)}"
         SSH_PORT="${CLAUDE_SSH_PORT:-22}"
 
         if [[ -n "$CLAUDE_LINK_ID" ]]; then

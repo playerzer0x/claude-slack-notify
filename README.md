@@ -120,6 +120,36 @@ chmod +x ~/.claude/bin/*
 
 **Note**: In containers, the Focus Terminal button won't work (no desktop environment), but Slack notifications will still be sent.
 
+### macOS Permissions
+
+The first time you click a Focus button, macOS will prompt you to grant permissions. Here's what to expect:
+
+**1. Automation Permission**
+
+When the focus-helper tries to control your terminal app, you'll see:
+> "ClaudeFocus.app" wants access to control "iTerm" (or "Terminal")
+
+Click **OK** to allow. This lets the Focus button switch to the correct terminal tab.
+
+**2. If you accidentally clicked "Don't Allow"**
+
+Go to **System Settings → Privacy & Security → Automation** and enable:
+- ClaudeFocus.app → iTerm (or Terminal)
+- ClaudeFocus.app → System Events
+
+**3. Chrome (for JupyterLab)**
+
+If using `--jupyter` linking, you'll also need to allow:
+- ClaudeFocus.app → Google Chrome
+
+**Troubleshooting**
+
+If the Focus button doesn't work:
+1. Check **System Settings → Privacy & Security → Automation**
+2. Ensure ClaudeFocus.app has permission for your terminal
+3. Check the debug log: `tail -f ~/.claude/logs/focus-debug.log`
+4. Try reinstalling: `./install.sh` (re-registers the URL handler)
+
 ## Setup
 
 1. **Get a Slack webhook URL**:

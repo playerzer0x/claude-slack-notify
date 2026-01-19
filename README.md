@@ -42,7 +42,7 @@ Slack notifications for Claude Code with clickable "Focus Terminal" buttons that
 
 ## Installation
 
-### macOS
+### macOS / Linux
 
 ```bash
 ./install.sh
@@ -51,6 +51,11 @@ Slack notifications for Claude Code with clickable "Focus Terminal" buttons that
 To uninstall:
 ```bash
 ./install.sh --uninstall
+```
+
+For development (symlinks to repo):
+```bash
+./install.sh --link
 ```
 
 ### Windows
@@ -67,6 +72,30 @@ To uninstall:
 ```
 
 **Note**: On Windows, the script works from Git Bash, MSYS2, Cygwin, or WSL. The Focus Terminal button uses the Windows Registry to handle `claude-focus://` URLs.
+
+### Docker / Containers
+
+The install script copies files (instead of symlinking) for portability. To install in a Docker container:
+
+```dockerfile
+# In your Dockerfile
+RUN git clone https://github.com/yourusername/claude-slack-notify.git /tmp/claude-slack-notify && \
+    /tmp/claude-slack-notify/install.sh && \
+    rm -rf /tmp/claude-slack-notify
+```
+
+Or install directly from the scripts:
+
+```bash
+# Copy the bin scripts to ~/.claude/bin/
+mkdir -p ~/.claude/bin
+curl -o ~/.claude/bin/claude-slack-notify https://raw.githubusercontent.com/.../bin/claude-slack-notify
+curl -o ~/.claude/bin/slack-notify-start https://raw.githubusercontent.com/.../bin/slack-notify-start
+curl -o ~/.claude/bin/slack-notify-check https://raw.githubusercontent.com/.../bin/slack-notify-check
+chmod +x ~/.claude/bin/*
+```
+
+**Note**: In containers, the Focus Terminal button won't work (no desktop environment), but Slack notifications will still be sent.
 
 ## Setup
 
@@ -229,6 +258,8 @@ claude-slack-notify "message" [status]
 
 ### Common (all platforms)
 - `~/.claude/bin/claude-slack-notify` - Main notification script
+- `~/.claude/bin/slack-notify-start` - Hook wrapper for UserPromptSubmit
+- `~/.claude/bin/slack-notify-check` - Hook wrapper for Stop
 - `~/.claude/commands/slack-notify.md` - Claude command definition
 - `~/.claude/slack-webhook-url` - Slack webhook URL
 - `~/.claude/instances/` - Registered instance data

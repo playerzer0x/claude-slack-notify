@@ -39,6 +39,8 @@ if [[ "${1:-}" == "--uninstall" ]]; then
 
     # Remove scripts
     rm -f "$BIN_DIR/claude-slack-notify"
+    rm -f "$BIN_DIR/slack-notify-start"
+    rm -f "$BIN_DIR/slack-notify-check"
     rm -f "$BIN_DIR/focus-helper"
     rm -f "$COMMANDS_DIR/slack-notify.md"
 
@@ -52,10 +54,24 @@ echo_info "Installing Claude Slack Notify..."
 # Create directories
 mkdir -p "$BIN_DIR" "$COMMANDS_DIR" "$APP_DIR" "$HOME/Library/LaunchAgents"
 
-# Install scripts as symlinks (so updates to repo are automatically available)
-ln -sf "$SCRIPT_DIR/bin/claude-slack-notify" "$BIN_DIR/"
-ln -sf "$SCRIPT_DIR/bin/focus-helper" "$BIN_DIR/"
-echo_info "Installed scripts to $BIN_DIR/ (symlinked to repo)"
+# Install scripts (copy for portability, especially in Docker containers)
+# Use --link flag for development to create symlinks instead
+if [[ "${1:-}" == "--link" ]]; then
+    ln -sf "$SCRIPT_DIR/bin/claude-slack-notify" "$BIN_DIR/"
+    ln -sf "$SCRIPT_DIR/bin/slack-notify-start" "$BIN_DIR/"
+    ln -sf "$SCRIPT_DIR/bin/slack-notify-check" "$BIN_DIR/"
+    ln -sf "$SCRIPT_DIR/bin/focus-helper" "$BIN_DIR/"
+    echo_info "Installed scripts to $BIN_DIR/ (symlinked to repo)"
+else
+    # Remove existing files/symlinks first, then copy fresh
+    rm -f "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/focus-helper"
+    cp "$SCRIPT_DIR/bin/claude-slack-notify" "$BIN_DIR/"
+    cp "$SCRIPT_DIR/bin/slack-notify-start" "$BIN_DIR/"
+    cp "$SCRIPT_DIR/bin/slack-notify-check" "$BIN_DIR/"
+    cp "$SCRIPT_DIR/bin/focus-helper" "$BIN_DIR/"
+    chmod +x "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/focus-helper"
+    echo_info "Installed scripts to $BIN_DIR/"
+fi
 
 # Install Claude command
 cp "$SCRIPT_DIR/commands/slack-notify.md" "$COMMANDS_DIR/"

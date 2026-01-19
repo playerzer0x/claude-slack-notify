@@ -1,0 +1,4 @@
+#!/bin/bash
+# Hook wrapper for UserPromptSubmit - starts timing a task
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLAUDE_INSTANCE_ID=$PPID "$SCRIPT_DIR/claude-slack-notify" start

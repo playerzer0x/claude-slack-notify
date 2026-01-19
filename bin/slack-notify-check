@@ -1,0 +1,4 @@
+#!/bin/bash
+# Hook wrapper for Stop - checks elapsed time and notifies if needed
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLAUDE_INSTANCE_ID=$PPID "$SCRIPT_DIR/claude-slack-notify" check

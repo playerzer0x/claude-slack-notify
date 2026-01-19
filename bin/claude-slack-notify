@@ -415,10 +415,21 @@ case "$STATUS" in
     *)        COLOR="#3AA3E3" ;;
 esac
 
-# Build location string
+# Build location string (keep it short for Slack display)
 LOCATION="$HOSTNAME"
 if [[ -n "$TERM_TYPE" && "$TERM_TYPE" != "unknown" ]]; then
-    LOCATION="$HOSTNAME ($TERM_TYPE ${TERM_TARGET})"
+    # Extract just the tmux session:window.pane if present (skip the /dev/tty part)
+    DISPLAY_TARGET="$TERM_TARGET"
+    if [[ "$TERM_TARGET" == *"|"* ]]; then
+        DISPLAY_TARGET="${TERM_TARGET#*|}"
+    fi
+    # Simplify term type for display
+    case "$TERM_TYPE" in
+        iterm-tmux|terminal-tmux|wt-tmux|wsl-tmux|linux-tmux)
+            LOCATION="$HOSTNAME (tmux $DISPLAY_TARGET)" ;;
+        *)
+            LOCATION="$HOSTNAME ($TERM_TYPE)" ;;
+    esac
 fi
 
 # Escape all user-controllable values for safe JSON embedding

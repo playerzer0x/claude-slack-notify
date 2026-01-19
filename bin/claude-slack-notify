@@ -151,14 +151,15 @@ EOF
     # If --host provided, SSH directly and start tmux
     if [[ -n "$SSH_HOST" ]]; then
         echo "Link ID: $LINK_ID"
-        echo "Connecting to $SSH_HOST and starting tmux session 'claude'..."
+        echo "Connecting to $SSH_HOST..."
         echo ""
         echo "Once connected, run: claude"
         echo "Then in Claude, run: /slack-notify"
         echo ""
-        # Use tmux new-session -A to attach if exists, create if not
-        # Pass CLAUDE_SSH_HOST so the remote knows how to be reached from local
-        exec ssh -t "${SSH_ARGS[@]}" "$SSH_HOST" "CLAUDE_LINK_ID=$LINK_ID CLAUDE_SSH_HOST=$SSH_HOST tmux new-session -A -s claude"
+        # Create new tmux session with env vars set
+        # Use link ID in session name to ensure fresh env vars each time
+        exec ssh -t "${SSH_ARGS[@]}" "$SSH_HOST" \
+            "CLAUDE_LINK_ID=$LINK_ID CLAUDE_SSH_HOST=$SSH_HOST tmux new-session -s claude-$LINK_ID || CLAUDE_LINK_ID=$LINK_ID CLAUDE_SSH_HOST=$SSH_HOST tmux attach -t claude-$LINK_ID"
     fi
 
     # Otherwise print instructions

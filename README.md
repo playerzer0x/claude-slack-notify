@@ -8,6 +8,7 @@ Slack notifications for Claude Code with clickable "Focus Terminal" buttons that
 - **Clickable focus buttons**: One click in Slack switches to the exact terminal tab
 - **Auto-detection**: Works with macOS, Windows, and Linux terminals
 - **Time-based notifications**: Only notifies for tasks taking >30 seconds
+- **Remote SSH support**: Focus local terminal and send input to remote Linux via SSH
 
 ## Supported Configurations
 
@@ -39,6 +40,14 @@ Slack notifications for Claude Code with clickable "Focus Terminal" buttons that
 | Konsole | No | `konsole` |
 | VS Code | No | `vscode` |
 | Any | Yes | `linux-tmux` |
+
+### Remote via SSH
+
+| Configuration | Type | Focus | Input |
+|--------------|------|-------|-------|
+| Linked SSH + tmux | `ssh-linked` | Local terminal | SSH → remote tmux |
+| Direct SSH + tmux | `ssh-tmux` | None | SSH → remote tmux |
+| Direct SSH | `ssh` | None | None |
 
 ## Installation
 
@@ -121,6 +130,96 @@ chmod +x ~/.claude/bin/*
 3. **Register a Claude session**:
    In Claude, run `/slack-notify` or `/slack-notify MyProject`
 
+## Remote SSH Sessions
+
+When running Claude on a remote Linux server via SSH, you can configure the Focus button to:
+1. Switch to your **local** terminal (the one you SSH'd from)
+2. Send input to the **remote** Claude session via SSH
+
+### Setup
+
+**Step 1: Create a link on your LOCAL machine (before SSH)**
+
+```bash
+# On local macOS, in the terminal you'll SSH from:
+claude-slack-notify link
+```
+
+Output:
+```
+Link ID: abc12345
+SSH with:
+  export CLAUDE_LINK_ID=abc12345
+```
+
+**Step 2: SSH to remote with the link ID**
+
+```bash
+# Option A: Set env var after connecting
+ssh remote-server
+export CLAUDE_LINK_ID=abc12345
+
+# Option B: Pass env var directly
+ssh -t remote-server "CLAUDE_LINK_ID=abc12345 bash -l"
+```
+
+**Step 3: Register on the remote**
+
+```bash
+# On the remote Linux server, inside Claude:
+/slack-notify
+```
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ LOCAL MACHINE (macOS)                                           │
+│ ┌─────────────────┐                                             │
+│ │ iTerm2 Tab      │ ◀── Focus button switches here              │
+│ │ (SSH session)   │                                             │
+│ └────────┬────────┘                                             │
+│          │ SSH                                                  │
+└──────────┼──────────────────────────────────────────────────────┘
+           │
+           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ REMOTE LINUX                                                    │
+│ ┌─────────────────┐                                             │
+│ │ tmux pane       │ ◀── Input sent here via SSH                 │
+│ │ (Claude running)│                                             │
+│ └─────────────────┘                                             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+When you click the Focus button in Slack:
+1. The focus-helper reads the link file to find your local terminal
+2. Switches to that iTerm2/Terminal.app tab
+3. SSHs to the remote server and sends input to the tmux pane
+
+### Managing Links
+
+```bash
+# List active links
+claude-slack-notify links
+
+# Clean up links older than 24 hours
+claude-slack-notify links clean
+```
+
+### Requirements
+
+- **Local**: macOS with iTerm2 or Terminal.app
+- **Remote**: tmux running on the Linux server
+- **SSH**: Key-based authentication (for sending input without password prompts)
+
+### Configuration
+
+Set a custom SSH port (default: 22):
+```bash
+export CLAUDE_SSH_PORT=2222
+```
+
 ## How It Works
 
 ### Architecture (macOS)
@@ -183,6 +282,10 @@ The `claude-focus://` URL scheme encodes the terminal type and target:
 - `claude-focus://mintty/<pid>` - Git Bash/MSYS2/Cygwin
 - `claude-focus://wsl/<distro-id>` - WSL
 - `claude-focus://wsl-tmux/<distro-id>/<session:window.pane>` - WSL + tmux
+
+**Remote SSH:**
+- `claude-focus://ssh-linked/<link_id>/<host>/<user>/<port>/<tmux_target>` - Linked SSH + tmux
+- `claude-focus://ssh-tmux/<host>/<user>/<port>/<tmux_target>` - Direct SSH + tmux
 
 ## Configuration
 
@@ -247,6 +350,15 @@ claude-slack-notify check
 
 # Send a custom notification
 claude-slack-notify "message" [status]
+
+# Create a link for SSH sessions (run on LOCAL machine before SSH)
+claude-slack-notify link
+
+# List active links
+claude-slack-notify links
+
+# Clean up old links (>24 hours)
+claude-slack-notify links clean
 ```
 
 ### Status Colors
@@ -266,6 +378,7 @@ claude-slack-notify "message" [status]
 - `~/.claude/commands/slack-notify.md` - Claude command definition
 - `~/.claude/slack-webhook-url` - Slack webhook URL
 - `~/.claude/instances/` - Registered instance data (keyed by session ID)
+- `~/.claude/links/` - SSH link data (for remote sessions)
 - `~/.claude/logs/focus-debug.log` - Focus helper debug log
 
 ### macOS only

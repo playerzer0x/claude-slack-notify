@@ -4,6 +4,7 @@
 CLAUDE_DIR="${HOME}/.claude"
 WEBHOOK_FILE="${CLAUDE_DIR}/slack-webhook-url"
 INSTANCES_DIR="${CLAUDE_DIR}/instances"
+LINKS_DIR="${CLAUDE_DIR}/links"
 MIN_DURATION="${CLAUDE_NOTIFY_MIN_SECONDS:-30}"
 
 # Get instance ID - use parent PID to be consistent across hook calls
@@ -51,6 +52,120 @@ json_escape() {
     echo "$str"
 }
 
+# -----------------------------------------------------------------------------
+# Link command - creates a link for SSH sessions
+# Run this on LOCAL machine before SSH to create a reference to the local terminal
+# Usage: claude-slack-notify link
+# -----------------------------------------------------------------------------
+if [[ "$1" == "link" ]]; then
+    mkdir -p "$LINKS_DIR"
+
+    # Generate unique link ID (8 chars, alphanumeric)
+    LINK_ID=$(head -c 12 /dev/urandom | base64 | tr -dc 'a-z0-9' | head -c 8)
+
+    # Detect local terminal
+    # We need a minimal detect_terminal inline since the function hasn't been defined yet
+    LINK_TERM_TYPE="unknown"
+    LINK_TERM_TARGET=""
+    LINK_FOCUS_URL=""
+
+    case "$(uname -s)" in
+        Darwin)
+            if [[ -n "$TMUX" ]]; then
+                local_session=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+                local_window=$(tmux display-message -p '#{window_index}' 2>/dev/null)
+                local_pane=$(tmux display-message -p '#{pane_index}' 2>/dev/null)
+                local_tmux_target="${local_session}:${local_window}.${local_pane}"
+                local_client_tty=$(tmux display-message -p '#{client_tty}' 2>/dev/null)
+                local_client_termtype=$(tmux display-message -p '#{client_termtype}' 2>/dev/null)
+
+                if [[ "$local_client_termtype" == *"iTerm"* ]] || [[ -n "$ITERM_SESSION_ID" ]]; then
+                    term_app="iterm"
+                else
+                    term_app="terminal"
+                fi
+
+                if [[ -n "$local_client_tty" ]]; then
+                    LINK_TERM_TYPE="${term_app}-tmux"
+                    LINK_TERM_TARGET="${local_client_tty}|${local_tmux_target}"
+                    LINK_FOCUS_URL="claude-focus://${term_app}-tmux/$(url_encode "$local_client_tty")/$(url_encode "$local_tmux_target")"
+                else
+                    LINK_TERM_TYPE="tmux"
+                    LINK_TERM_TARGET="$local_tmux_target"
+                    LINK_FOCUS_URL="claude-focus://tmux/$(url_encode "$local_tmux_target")"
+                fi
+            elif [[ -n "$ITERM_SESSION_ID" ]]; then
+                LINK_TERM_TYPE="iterm2"
+                LINK_TERM_TARGET="${ITERM_SESSION_ID#*:}"
+                LINK_FOCUS_URL="claude-focus://iterm2/${LINK_TERM_TARGET}"
+            elif [[ "$__CFBundleIdentifier" == "com.apple.Terminal" || "$TERM_PROGRAM" == "Apple_Terminal" ]]; then
+                local_terminal_tty=$(osascript -e 'tell application "Terminal" to return tty of selected tab of front window' 2>/dev/null)
+                if [[ -n "$local_terminal_tty" ]]; then
+                    LINK_TERM_TYPE="terminal"
+                    LINK_TERM_TARGET="$local_terminal_tty"
+                    LINK_FOCUS_URL="claude-focus://terminal/$(url_encode "$local_terminal_tty")"
+                fi
+            fi
+            ;;
+        *)
+            echo "Error: link command only works on macOS (the local machine)" >&2
+            exit 1
+            ;;
+    esac
+
+    if [[ "$LINK_TERM_TYPE" == "unknown" ]]; then
+        echo "Error: Could not detect terminal. Run this from iTerm2, Terminal.app, or tmux." >&2
+        exit 1
+    fi
+
+    # Save link info
+    cat > "$LINKS_DIR/${LINK_ID}.json" << EOF
+{
+  "link_id": "${LINK_ID}",
+  "term_type": "${LINK_TERM_TYPE}",
+  "term_target": "${LINK_TERM_TARGET}",
+  "focus_url": "${LINK_FOCUS_URL}",
+  "created_at": "$(date -Iseconds)"
+}
+EOF
+
+    echo "Link ID: $LINK_ID"
+    echo ""
+    echo "SSH with:"
+    echo "  export CLAUDE_LINK_ID=$LINK_ID"
+    echo ""
+    echo "Or pass directly:"
+    echo "  ssh -t host \"CLAUDE_LINK_ID=$LINK_ID bash -l\""
+    exit 0
+fi
+
+# -----------------------------------------------------------------------------
+# Links command - list or manage links
+# Usage: claude-slack-notify links [clean]
+# -----------------------------------------------------------------------------
+if [[ "$1" == "links" ]]; then
+    if [[ "$2" == "clean" ]]; then
+        # Remove links older than 24 hours
+        if [[ -d "$LINKS_DIR" ]]; then
+            find "$LINKS_DIR" -name "*.json" -mtime +1 -delete 2>/dev/null
+            echo "Cleaned old links"
+        fi
+        exit 0
+    fi
+
+    # List active links
+    if [[ -d "$LINKS_DIR" ]]; then
+        for f in "$LINKS_DIR"/*.json; do
+            [[ -f "$f" ]] || continue
+            LINK_ID=$(basename "$f" .json)
+            TERM_TYPE=$(grep -o '"term_type": *"[^"]*"' "$f" | cut -d'"' -f4)
+            CREATED=$(grep -o '"created_at": *"[^"]*"' "$f" | cut -d'"' -f4)
+            echo "$LINK_ID  ($TERM_TYPE)  created: $CREATED"
+        done
+    fi
+    exit 0
+fi
+
 get_tmux_target() {
     # Get the controlling TTY for this process tree
     # We need to find the TTY that corresponds to our tmux pane
@@ -88,6 +203,53 @@ detect_terminal() {
     TERM_TYPE="unknown"
     TERM_TARGET=""
     FOCUS_URL=""
+
+    # Check for SSH session with linked local terminal
+    if [[ -n "$SSH_CONNECTION" ]]; then
+        SSH_USER=$(whoami)
+        SSH_HOST=$(hostname -f 2>/dev/null || hostname)
+        SSH_PORT="${CLAUDE_SSH_PORT:-22}"
+
+        if [[ -n "$CLAUDE_LINK_ID" ]]; then
+            # Linked SSH mode - local terminal for focus, remote for input
+            TERM_TYPE="ssh-linked"
+
+            # Get tmux target if available on remote
+            local remote_tmux_target=""
+            if [[ -n "$TMUX" ]]; then
+                local r_session r_window r_pane
+                r_session=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+                r_window=$(tmux display-message -p '#{window_index}' 2>/dev/null)
+                r_pane=$(tmux display-message -p '#{pane_index}' 2>/dev/null)
+                remote_tmux_target="${r_session}:${r_window}.${r_pane}"
+            fi
+
+            TERM_TARGET="${CLAUDE_LINK_ID}|${SSH_HOST}|${SSH_USER}|${SSH_PORT}|${remote_tmux_target}"
+            FOCUS_URL="claude-focus://ssh-linked/$(url_encode "$CLAUDE_LINK_ID")/$(url_encode "$SSH_HOST")/$(url_encode "$SSH_USER")/${SSH_PORT}/$(url_encode "$remote_tmux_target")"
+            return
+        fi
+
+        # Unlinked SSH mode - direct SSH (no local terminal focus)
+        if [[ -n "$TMUX" ]]; then
+            # SSH + tmux but no link
+            local r_session r_window r_pane
+            r_session=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+            r_window=$(tmux display-message -p '#{window_index}' 2>/dev/null)
+            r_pane=$(tmux display-message -p '#{pane_index}' 2>/dev/null)
+            local remote_tmux_target="${r_session}:${r_window}.${r_pane}"
+
+            TERM_TYPE="ssh-tmux"
+            TERM_TARGET="${SSH_HOST}|${SSH_USER}|${SSH_PORT}|${remote_tmux_target}"
+            FOCUS_URL="claude-focus://ssh-tmux/$(url_encode "$SSH_HOST")/$(url_encode "$SSH_USER")/${SSH_PORT}/$(url_encode "$remote_tmux_target")"
+            return
+        fi
+
+        # SSH without tmux or link - limited support
+        TERM_TYPE="ssh"
+        TERM_TARGET="${SSH_HOST}|${SSH_USER}|${SSH_PORT}"
+        FOCUS_URL=""  # No focus URL - can't reliably send input without tmux
+        return
+    fi
 
     # Detect OS
     local os_type
@@ -249,17 +411,34 @@ if [[ "$1" == "register" ]]; then
     detect_terminal
     HOSTNAME=$(hostname -s 2>/dev/null || echo "unknown")
 
-    cat > "$INSTANCE_FILE" << EOF
-{
-  "id": "${INSTANCE_ID}",
-  "name": "${INSTANCE_NAME}",
-  "hostname": "${HOSTNAME}",
-  "term_type": "${TERM_TYPE}",
-  "term_target": "${TERM_TARGET}",
-  "focus_url": "${FOCUS_URL}",
-  "registered_at": "$(date -Iseconds)"
-}
-EOF
+    # Build instance JSON with optional SSH fields
+    INSTANCE_JSON="{
+  \"id\": \"${INSTANCE_ID}\",
+  \"name\": \"${INSTANCE_NAME}\",
+  \"hostname\": \"${HOSTNAME}\",
+  \"term_type\": \"${TERM_TYPE}\",
+  \"term_target\": \"${TERM_TARGET}\",
+  \"focus_url\": \"${FOCUS_URL}\""
+
+    # Add SSH-specific fields if in SSH mode
+    if [[ "$TERM_TYPE" == "ssh-linked" && -n "$CLAUDE_LINK_ID" ]]; then
+        INSTANCE_JSON+=",
+  \"link_id\": \"${CLAUDE_LINK_ID}\",
+  \"ssh_host\": \"${SSH_HOST}\",
+  \"ssh_user\": \"${SSH_USER}\",
+  \"ssh_port\": \"${SSH_PORT}\""
+    elif [[ "$TERM_TYPE" == "ssh-tmux" || "$TERM_TYPE" == "ssh" ]]; then
+        INSTANCE_JSON+=",
+  \"ssh_host\": \"${SSH_HOST}\",
+  \"ssh_user\": \"${SSH_USER}\",
+  \"ssh_port\": \"${SSH_PORT}\""
+    fi
+
+    INSTANCE_JSON+=",
+  \"registered_at\": \"$(date -Iseconds)\"
+}"
+
+    echo "$INSTANCE_JSON" > "$INSTANCE_FILE"
 
     echo "$INSTANCE_NAME"
     exit 0

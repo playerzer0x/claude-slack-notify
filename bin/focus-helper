@@ -17,7 +17,8 @@ if [[ "$URL_PATH" == *"?"* ]]; then
     QUERY_STRING="${URL_PATH#*\?}"
     URL_PATH="${URL_PATH%%\?*}"
 fi
-IFS='/' read -r TYPE ARG1 ARG2 <<< "$URL_PATH"
+# Support up to 5 URL segments for ssh-linked: type/link_id/host/user/port/tmux_target
+IFS='/' read -r TYPE ARG1 ARG2 ARG3 ARG4 ARG5 <<< "$URL_PATH"
 
 # Parse action from query string
 ACTION=""
@@ -61,18 +62,26 @@ sanitize_applescript() {
 
 ARG1=$(url_decode "$ARG1")
 ARG2=$(url_decode "$ARG2")
+ARG3=$(url_decode "$ARG3")
+ARG4=$(url_decode "$ARG4")
+ARG5=$(url_decode "$ARG5")
 
 # Validate and sanitize inputs
 ARG1=$(sanitize_applescript "$ARG1")
 ARG2=$(sanitize_applescript "$ARG2")
+ARG3=$(sanitize_applescript "$ARG3")
+ARG4=$(sanitize_applescript "$ARG4")
+ARG5=$(sanitize_applescript "$ARG5")
 
 # Exit if inputs are invalid
-if [[ "$ARG1" == "INVALID_INPUT" ]] || [[ "$ARG2" == "INVALID_INPUT" ]]; then
+if [[ "$ARG1" == "INVALID_INPUT" ]] || [[ "$ARG2" == "INVALID_INPUT" ]] || \
+   [[ "$ARG3" == "INVALID_INPUT" ]] || [[ "$ARG4" == "INVALID_INPUT" ]] || \
+   [[ "$ARG5" == "INVALID_INPUT" ]]; then
     echo "$(date): Rejected invalid input - potential injection attempt" >> $LOG_FILE
     exit 1
 fi
 
-echo "$(date): Type=$TYPE ARG1=$ARG1 ARG2=$ARG2 ACTION=$ACTION" >> $LOG_FILE
+echo "$(date): Type=$TYPE ARG1=$ARG1 ARG2=$ARG2 ARG3=$ARG3 ARG4=$ARG4 ARG5=$ARG5 ACTION=$ACTION" >> $LOG_FILE
 
 # Map action parameter to input text (allowlist for security)
 get_action_input() {
@@ -182,6 +191,53 @@ APPLESCRIPT
 # Tmux utilities
 TMUX_BIN=$(which tmux 2>/dev/null || echo /opt/homebrew/bin/tmux)
 TMUX_SOCKET="/private/tmp/tmux-$(id -u)/default"
+
+# Links directory (for ssh-linked mode)
+LINKS_DIR="$HOME/.claude/links"
+
+# Send input to remote tmux session via SSH
+# Uses the same robust pattern as local tmux
+send_ssh_tmux_input() {
+    local ssh_host="$1"
+    local ssh_user="$2"
+    local ssh_port="$3"
+    local tmux_target="$4"
+    local input="$5"
+
+    if [[ -n "$input" && -n "$tmux_target" ]]; then
+        echo "$(date): Sending input via SSH to $ssh_user@$ssh_host:$ssh_port tmux $tmux_target: $input" >> $LOG_FILE
+
+        # SSH command to send input to remote tmux
+        # Uses BatchMode to fail fast if no key auth available
+        # Uses -t to allocate PTY for tmux commands
+        local ssh_cmd="ssh -o BatchMode=yes -o ConnectTimeout=5 -p $ssh_port $ssh_user@$ssh_host"
+
+        # Escape input for shell quoting (single quotes with escaped single quotes)
+        local escaped_input="${input//\'/\'\\\'\'}"
+
+        # Step 1: Send text in literal mode
+        local result
+        result=$($ssh_cmd "tmux send-keys -t '$tmux_target' -l '$escaped_input'" 2>&1)
+        local exit_code=$?
+        echo "$(date): SSH send-keys -l result: $exit_code - $result" >> $LOG_FILE
+
+        if [[ $exit_code -ne 0 ]]; then
+            echo "$(date): SSH command failed - check SSH key authentication" >> $LOG_FILE
+            return 1
+        fi
+
+        # Step 2: Wait for paste to complete
+        sleep 0.2
+
+        # Step 3: Send Escape to exit vim INSERT mode if enabled
+        $ssh_cmd "tmux send-keys -t '$tmux_target' Escape" 2>/dev/null
+        sleep 0.1
+
+        # Step 4: Send Enter
+        result=$($ssh_cmd "tmux send-keys -t '$tmux_target' Enter" 2>&1)
+        echo "$(date): SSH send-keys Enter result: $? - $result" >> $LOG_FILE
+    fi
+}
 
 # Switch iTerm2 to the tab matching a session property
 # Usage: switch_iterm_session <property> <value>
@@ -309,6 +365,80 @@ case "$TYPE" in
         else
             osascript -e 'tell application "iTerm2" to activate' 2>/dev/null || \
             osascript -e 'tell application "Terminal" to activate' 2>/dev/null
+        fi
+        ;;
+    ssh-linked)
+        # SSH with linked local terminal
+        # ARG1=link_id, ARG2=host, ARG3=user, ARG4=port, ARG5=tmux_target
+        local link_id="$ARG1"
+        local ssh_host="$ARG2"
+        local ssh_user="$ARG3"
+        local ssh_port="$ARG4"
+        local remote_tmux_target="$ARG5"
+
+        echo "$(date): SSH-linked: link=$link_id host=$ssh_host user=$ssh_user port=$ssh_port tmux=$remote_tmux_target" >> "$LOG_FILE"
+
+        # Step 1: Focus LOCAL terminal using link info
+        local link_file="$LINKS_DIR/${link_id}.json"
+        if [[ -f "$link_file" ]]; then
+            local local_type local_target
+            local_type=$(grep -o '"term_type": *"[^"]*"' "$link_file" | cut -d'"' -f4)
+            local_target=$(grep -o '"term_target": *"[^"]*"' "$link_file" | cut -d'"' -f4)
+
+            echo "$(date): Link found: local_type=$local_type local_target=$local_target" >> "$LOG_FILE"
+
+            case "$local_type" in
+                iterm2)
+                    switch_iterm_session "id" "$local_target"
+                    ;;
+                iterm-tmux)
+                    local local_tty="${local_target%%|*}"
+                    local local_tmux="${local_target#*|}"
+                    switch_iterm_session "tty" "$local_tty"
+                    switch_tmux_window "$local_tmux"
+                    ;;
+                terminal-tmux)
+                    local local_tty="${local_target%%|*}"
+                    local local_tmux="${local_target#*|}"
+                    switch_terminal_tab "$local_tty"
+                    switch_tmux_window "$local_tmux"
+                    ;;
+                terminal)
+                    switch_terminal_tab "$local_target"
+                    ;;
+                tmux)
+                    client_tty=$(switch_tmux_window "$local_target")
+                    if [[ -n "$client_tty" ]]; then
+                        switch_iterm_session "tty" "$client_tty" 2>/dev/null || \
+                        switch_terminal_tab "$client_tty" 2>/dev/null
+                    fi
+                    ;;
+                *)
+                    echo "$(date): Unknown local term type: $local_type" >> "$LOG_FILE"
+                    ;;
+            esac
+        else
+            echo "$(date): Link file not found: $link_file" >> "$LOG_FILE"
+        fi
+
+        # Step 2: Send input to REMOTE via SSH (if we have a tmux target)
+        if [[ -n "$ACTION_INPUT" && -n "$remote_tmux_target" ]]; then
+            send_ssh_tmux_input "$ssh_host" "$ssh_user" "$ssh_port" "$remote_tmux_target" "$ACTION_INPUT"
+        fi
+        ;;
+    ssh-tmux)
+        # Direct SSH + tmux (no local terminal link)
+        # ARG1=host, ARG2=user, ARG3=port, ARG4=tmux_target
+        local ssh_host="$ARG1"
+        local ssh_user="$ARG2"
+        local ssh_port="$ARG3"
+        local remote_tmux_target="$ARG4"
+
+        echo "$(date): SSH-tmux (direct): host=$ssh_host user=$ssh_user port=$ssh_port tmux=$remote_tmux_target" >> "$LOG_FILE"
+
+        # No local terminal to focus, just send input to remote
+        if [[ -n "$ACTION_INPUT" && -n "$remote_tmux_target" ]]; then
+            send_ssh_tmux_input "$ssh_host" "$ssh_user" "$ssh_port" "$remote_tmux_target" "$ACTION_INPUT"
         fi
         ;;
 esac

@@ -70,7 +70,6 @@ switch_iterm_session() {
     local result
     result=$(osascript << APPLESCRIPT 2>&1
 tell application "iTerm2"
-    activate
     repeat with w in windows
         set tabIndex to 0
         repeat with t in tabs of w
@@ -79,6 +78,10 @@ tell application "iTerm2"
                 if ($property of s) is "$target" then
                     set index of w to 1
                     tell w to select tab tabIndex
+                    activate
+                    tell application "System Events"
+                        set frontmost of process "iTerm2" to true
+                    end tell
                     return "Switched to tab " & tabIndex & " for $property " & ($property of s)
                 end if
             end repeat
@@ -99,7 +102,6 @@ switch_terminal_tab() {
     local result
     result=$(osascript << APPLESCRIPT 2>&1
 tell application "Terminal"
-    activate
     repeat with w in windows
         set tabIndex to 0
         repeat with t in tabs of w
@@ -107,6 +109,10 @@ tell application "Terminal"
             if (tty of t) is "$target_tty" then
                 set frontmost of w to true
                 set selected tab of w to t
+                activate
+                tell application "System Events"
+                    set frontmost of process "Terminal" to true
+                end tell
                 return "Switched to tab " & tabIndex & " for tty " & (tty of t)
             end if
         end repeat

@@ -95,7 +95,7 @@ if [[ "$(uname)" == "Darwin" ]]; then
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>FOCUS_FILE="$HOME/.claude/focus-request"; while true; do if [ -f "$FOCUS_FILE" ]; then URL=$(cat "$FOCUS_FILE"); rm -f "$FOCUS_FILE"; ~/.claude/bin/focus-helper "$URL"; fi; sleep 0.2; done</string>
+        <string>FOCUS_FILE="$HOME/.claude/focus-request"; while true; do if [ -f "$FOCUS_FILE" ]; then URL=$(cat "$FOCUS_FILE"); rm -f "$FOCUS_FILE"; ~/.claude/bin/focus-helper "$URL"; fi; sleep 0.05; done</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -113,6 +113,7 @@ EOF
     # Create minimal AppleScript app that writes URL to file
     # Uses ~/.claude/focus-request (user-owned, not world-writable /tmp)
     # File is created with 0600 permissions for security
+    # Note: Direct invocation doesn't work due to Apple event permissions
     SCRIPT_SOURCE='on open location theURL
     do shell script "umask 077 && echo " & quoted form of theURL & " > ~/.claude/focus-request"
 end open location'

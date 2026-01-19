@@ -169,24 +169,24 @@ Add to `~/.claude/settings.json` for automatic notifications:
 ```json
 {
   "hooks": {
-    "PreToolUse": [
+    "UserPromptSubmit": [
       {
-        "matcher": "Bash|Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "CLAUDE_INSTANCE_ID=$PPID ~/.claude/bin/claude-slack-notify start"
+            "command": "$HOME/.claude/bin/slack-notify-start",
+            "timeout": 5
           }
         ]
       }
     ],
-    "PostToolUse": [
+    "Stop": [
       {
-        "matcher": "Bash|Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "CLAUDE_INSTANCE_ID=$PPID ~/.claude/bin/claude-slack-notify check"
+            "command": "$HOME/.claude/bin/slack-notify-check",
+            "timeout": 10
           }
         ]
       }
@@ -194,6 +194,8 @@ Add to `~/.claude/settings.json` for automatic notifications:
   }
 }
 ```
+
+The `slack-notify-start` and `slack-notify-check` wrapper scripts handle instance ID detection and context extraction automatically.
 
 ## Commands
 

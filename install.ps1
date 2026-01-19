@@ -172,16 +172,10 @@ if (Test-Path $settingsFile) {
         Write-Host ""
         Write-Host '  "hooks": {'
         Write-Host '    "UserPromptSubmit": ['
-        Write-Host '      {"hooks": [{"type": "command", "command": "$HOME/.claude/bin/claude-slack-notify start \"Processing request\"", "timeout": 5}]}'
-        Write-Host '    ],'
-        Write-Host '    "PreToolUse": ['
-        Write-Host '      {"matcher": "Bash", "hooks": [{"type": "command", "command": "$HOME/.claude/bin/claude-slack-notify start \"Running command\"", "timeout": 3}]},'
-        Write-Host '      {"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "$HOME/.claude/bin/claude-slack-notify start \"Editing files\"", "timeout": 3}]},'
-        Write-Host '      {"matcher": "Task", "hooks": [{"type": "command", "command": "$HOME/.claude/bin/claude-slack-notify start \"Running agent\"", "timeout": 3}]},'
-        Write-Host '      {"matcher": "Read", "hooks": [{"type": "command", "command": "$HOME/.claude/bin/claude-slack-notify start \"Reading files\"", "timeout": 3}]}'
+        Write-Host '      {"hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-start", "timeout": 5}]}'
         Write-Host '    ],'
         Write-Host '    "Stop": ['
-        Write-Host '      {"hooks": [{"type": "command", "command": "$HOME/.claude/bin/claude-slack-notify check", "timeout": 10}]}'
+        Write-Host '      {"hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10}]}'
         Write-Host '    ]'
         Write-Host '  }'
     }

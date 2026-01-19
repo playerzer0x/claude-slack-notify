@@ -132,10 +132,10 @@ if [[ -f "$SETTINGS_FILE" ]]; then
         echo ""
         echo '  "hooks": {'
         echo '    "UserPromptSubmit": ['
-        echo '      {"hooks": [{"type": "command", "command": "$HOME/.claude/bin/claude-slack-notify start", "timeout": 5}]}'
+        echo '      {"hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-start", "timeout": 5}]}'
         echo '    ],'
         echo '    "Stop": ['
-        echo '      {"hooks": [{"type": "command", "command": "$HOME/.claude/bin/claude-slack-notify check", "timeout": 10}]}'
+        echo '      {"hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10}]}'
         echo '    ]'
         echo '  }'
     fi

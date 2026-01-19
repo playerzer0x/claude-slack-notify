@@ -141,7 +141,17 @@ When running Claude on a remote Linux server via SSH, you can configure the Focu
 **Option 1: One-liner with --host (recommended)**
 
 ```bash
+# Using SSH config alias
 claude-slack-notify link --host time-machine
+
+# Using user@hostname
+claude-slack-notify link --host playerzer0x@time-machine
+
+# Using user@ip
+claude-slack-notify link --host ubuntu@192.168.1.100
+
+# With extra SSH options (passed through)
+claude-slack-notify link --host deploy@prod-server -p 2222
 ```
 
 This creates a link and SSHs in one command.
@@ -350,6 +360,8 @@ claude-slack-notify link
 
 # Create link and SSH in one command
 claude-slack-notify link --host <hostname>
+claude-slack-notify link --host user@hostname
+claude-slack-notify link --host user@192.168.1.100
 
 # List active links
 claude-slack-notify links

@@ -454,7 +454,8 @@ if [[ -n "$FOCUS_URL" ]]; then
         {
           \"type\": \"button\",
           \"text\": { \"type\": \"plain_text\", \"text\": \"Focus\" },
-          \"url\": \"${SAFE_FOCUS_URL}\"
+          \"url\": \"${SAFE_FOCUS_URL}\",
+          \"style\": \"primary\"
         },
         {
           \"type\": \"button\",
@@ -473,9 +474,8 @@ if [[ -n "$FOCUS_URL" ]]; then
         },
         {
           \"type\": \"button\",
-          \"text\": { \"type\": \"plain_text\", \"text\": \"Push\", \"emoji\": true },
-          \"url\": \"${URL_PUSH}\",
-          \"style\": \"primary\"
+          \"text\": { \"type\": \"plain_text\", \"text\": \"Push\" },
+          \"url\": \"${URL_PUSH}\"
         }
       ]
     }"

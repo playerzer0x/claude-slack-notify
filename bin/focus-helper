@@ -86,19 +86,38 @@ get_action_input() {
     esac
 }
 
-# Send input to tmux pane
+# Send input to tmux pane using gastown's robust pattern:
+# 1. Send text with -l (literal) flag
+# 2. Wait for paste to complete
+# 3. Send Escape (exits vim mode if active, harmless otherwise)
+# 4. Send Enter as separate command
 send_tmux_input() {
     local tmux_target="$1"
     local input="$2"
     if [[ -n "$input" && -n "$tmux_target" ]]; then
         echo "$(date): Sending input to tmux target $tmux_target: $input" >> $LOG_FILE
+
+        # Step 1: Send text in literal mode (handles special characters)
         local result
-        result=$($TMUX_BIN -S "$TMUX_SOCKET" send-keys -t "$tmux_target" "$input" Enter 2>&1)
-        echo "$(date): send-keys result: $? - $result" >> $LOG_FILE
+        result=$($TMUX_BIN -S "$TMUX_SOCKET" send-keys -t "$tmux_target" -l "$input" 2>&1)
+        echo "$(date): send-keys -l result: $? - $result" >> $LOG_FILE
+
+        # Step 2: Wait for paste to complete (tested requirement from gastown)
+        sleep 0.2
+
+        # Step 3: Send Escape to exit vim INSERT mode if enabled (harmless in normal mode)
+        $TMUX_BIN -S "$TMUX_SOCKET" send-keys -t "$tmux_target" Escape 2>/dev/null
+        sleep 0.1
+
+        # Step 4: Send Enter as separate command (more reliable than appending)
+        result=$($TMUX_BIN -S "$TMUX_SOCKET" send-keys -t "$tmux_target" Enter 2>&1)
+        echo "$(date): send-keys Enter result: $? - $result" >> $LOG_FILE
     fi
 }
 
 # Send input to iTerm2 session (by TTY or ID)
+# Uses "write text ... newline NO" then System Events Return key
+# to avoid the newline-vs-carriage-return issue
 send_iterm_input() {
     local property="$1"  # "tty" or "id"
     local target="$2"
@@ -111,7 +130,14 @@ tell application "iTerm2"
         repeat with t in tabs of w
             repeat with s in sessions of t
                 if ($property of s) is "$target" then
-                    tell s to write text "$input"
+                    -- Send text without newline
+                    tell s to write text "$input" newline NO
+                    -- Brief delay for text to be processed
+                    delay 0.1
+                    -- Send Return key via System Events
+                    tell application "System Events"
+                        key code 36 -- Return key
+                    end tell
                     return
                 end if
             end repeat
@@ -123,6 +149,7 @@ APPLESCRIPT
 }
 
 # Send input to Terminal.app (by TTY)
+# Uses System Events keystroke with delay before return
 send_terminal_input() {
     local target_tty="$1"
     local input="$2"
@@ -133,11 +160,14 @@ tell application "Terminal"
     repeat with w in windows
         repeat with t in tabs of w
             if (tty of t) is "$target_tty" then
-                -- Use keystroke to send text to the terminal
                 tell application "System Events"
                     tell process "Terminal"
+                        -- Send text
                         keystroke "$input"
-                        keystroke return
+                        -- Brief delay for text to be processed
+                        delay 0.1
+                        -- Send Return key
+                        key code 36
                     end tell
                 end tell
                 return

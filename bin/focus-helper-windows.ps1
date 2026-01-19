@@ -77,6 +77,11 @@ function Get-ActionInput {
 }
 
 # Send input to tmux pane (via WSL or native)
+# Uses gastown's robust pattern:
+# 1. Send text with -l (literal) flag
+# 2. Wait for paste to complete
+# 3. Send Escape (exits vim mode if active)
+# 4. Send Enter as separate command
 function Send-TmuxInput {
     param(
         [string]$TmuxTarget,
@@ -87,20 +92,27 @@ function Send-TmuxInput {
 
     Write-Log "Sending input to tmux target $TmuxTarget`: $Input"
 
-    $session = ($TmuxTarget -split ":")[0]
-    $windowPart = ($TmuxTarget -split ":")[1]
-
     # Try WSL tmux first
-    $result = wsl tmux send-keys -t "$TmuxTarget" "$Input" Enter 2>&1
+    $result = wsl tmux send-keys -t "$TmuxTarget" -l "$Input" 2>&1
     if ($LASTEXITCODE -eq 0) {
-        Write-Log "Sent input via WSL tmux"
+        Write-Log "Sent text via WSL tmux"
+        Start-Sleep -Milliseconds 200
+        wsl tmux send-keys -t "$TmuxTarget" Escape 2>&1 | Out-Null
+        Start-Sleep -Milliseconds 100
+        wsl tmux send-keys -t "$TmuxTarget" Enter 2>&1 | Out-Null
+        Write-Log "Sent Enter via WSL tmux"
         return
     }
 
     # Try direct tmux (Git Bash/MSYS2)
-    $result = tmux send-keys -t "$TmuxTarget" "$Input" Enter 2>&1
+    $result = tmux send-keys -t "$TmuxTarget" -l "$Input" 2>&1
     if ($LASTEXITCODE -eq 0) {
-        Write-Log "Sent input via direct tmux"
+        Write-Log "Sent text via direct tmux"
+        Start-Sleep -Milliseconds 200
+        tmux send-keys -t "$TmuxTarget" Escape 2>&1 | Out-Null
+        Start-Sleep -Milliseconds 100
+        tmux send-keys -t "$TmuxTarget" Enter 2>&1 | Out-Null
+        Write-Log "Sent Enter via direct tmux"
         return
     }
 

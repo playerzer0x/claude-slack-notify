@@ -1,0 +1,16 @@
+#!/bin/bash
+# MCP Server launcher for claude-slack-notify
+# Provides HTTP endpoints for Slack button actions and MCP tools
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MCP_SERVER_DIR="$SCRIPT_DIR/../mcp-server"
+
+# Check if built
+if [ ! -d "$MCP_SERVER_DIR/dist" ]; then
+    echo "MCP server not built. Run: cd $MCP_SERVER_DIR && bun run build"
+    exit 1
+fi
+
+# Start the server
+cd "$MCP_SERVER_DIR"
+exec node dist/index.js "$@"

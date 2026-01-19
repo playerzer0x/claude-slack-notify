@@ -110,6 +110,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     rm -f "$BIN_DIR/slack-notify-check"
     rm -f "$BIN_DIR/get-session-id"
     rm -f "$BIN_DIR/focus-helper"
+    rm -f "$BIN_DIR/mcp-server"
     rm -f "$COMMANDS_DIR/slack-notify.md"
 
     echo_info "Uninstalled successfully"
@@ -130,22 +131,43 @@ if [[ "${1:-}" == "--link" ]]; then
     ln -sf "$SCRIPT_DIR/bin/slack-notify-check" "$BIN_DIR/"
     ln -sf "$SCRIPT_DIR/bin/get-session-id" "$BIN_DIR/"
     ln -sf "$SCRIPT_DIR/bin/focus-helper" "$BIN_DIR/"
+    ln -sf "$SCRIPT_DIR/bin/mcp-server" "$BIN_DIR/"
     echo_info "Installed scripts to $BIN_DIR/ (symlinked to repo)"
 else
     # Remove existing files/symlinks first, then copy fresh
-    rm -f "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/get-session-id" "$BIN_DIR/focus-helper"
+    rm -f "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/get-session-id" "$BIN_DIR/focus-helper" "$BIN_DIR/mcp-server"
     cp "$SCRIPT_DIR/bin/claude-slack-notify" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/slack-notify-start" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/slack-notify-check" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/get-session-id" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/focus-helper" "$BIN_DIR/"
-    chmod +x "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/get-session-id" "$BIN_DIR/focus-helper"
+    cp "$SCRIPT_DIR/bin/mcp-server" "$BIN_DIR/"
+    chmod +x "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/get-session-id" "$BIN_DIR/focus-helper" "$BIN_DIR/mcp-server"
     echo_info "Installed scripts to $BIN_DIR/"
 fi
 
 # Install Claude command
 cp "$SCRIPT_DIR/commands/slack-notify.md" "$COMMANDS_DIR/"
 echo_info "Installed Claude command to $COMMANDS_DIR/"
+
+# Build MCP server (optional - for Slack button actions)
+if [[ -d "$SCRIPT_DIR/mcp-server" ]]; then
+    echo_info "Building MCP server..."
+    cd "$SCRIPT_DIR/mcp-server"
+    if command -v bun &> /dev/null; then
+        bun install --silent
+        bun run build
+        echo_info "MCP server built successfully"
+    elif command -v npm &> /dev/null; then
+        npm install --silent
+        npm run build
+        echo_info "MCP server built successfully"
+    else
+        echo_warn "Neither bun nor npm found. MCP server not built."
+        echo_warn "To build later: cd $SCRIPT_DIR/mcp-server && bun install && bun run build"
+    fi
+    cd "$SCRIPT_DIR"
+fi
 
 # macOS-specific: Install ClaudeFocus.app and LaunchAgent
 if [[ "$(uname)" == "Darwin" ]]; then
@@ -377,6 +399,9 @@ if [[ "$(uname)" == "Darwin" ]]; then
     echo -e "  ${GREEN}✓${NC} LaunchAgent loaded"
 fi
 echo -e "  ${GREEN}✓${NC} Button config at ${BOLD}~/.claude/button-config${NC}"
+if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
+    echo -e "  ${GREEN}✓${NC} MCP server built (start with: ${BOLD}~/.claude/bin/mcp-server${NC})"
+fi
 echo ""
 
 print_section "Next Steps"

@@ -52,6 +52,19 @@ json_escape() {
     echo "$str"
 }
 
+# Check if MCP server is running (for hybrid button support)
+is_mcp_server_running() {
+    local pid_file="${CLAUDE_DIR}/.mcp-server.pid"
+    if [[ -f "$pid_file" ]]; then
+        local pid
+        pid=$(cat "$pid_file" 2>/dev/null)
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
 # -----------------------------------------------------------------------------
 # Link command - creates a link for SSH or JupyterLab sessions
 # Run this on LOCAL machine before SSH to create a reference to the local terminal
@@ -813,6 +826,12 @@ SAFE_FOCUS_URL=$(json_escape "$FOCUS_URL")
 # Build button block if we have a focus URL
 BUTTON_BLOCK=""
 if [[ -n "$FOCUS_URL" ]]; then
+    # Check if MCP server is running for hybrid button support
+    MCP_SERVER_RUNNING=""
+    if is_mcp_server_running; then
+        MCP_SERVER_RUNNING="1"
+    fi
+
     # Read button config or use defaults
     BUTTON_CONFIG="$CLAUDE_DIR/button-config"
     if [[ ! -f "$BUTTON_CONFIG" ]]; then
@@ -836,24 +855,52 @@ Push|push"
         safe_action=$(json_escape "${FOCUS_URL}?action=$(url_encode "$action")")
         safe_label=$(json_escape "$label")
 
-        ACTION_BUTTONS="${ACTION_BUTTONS},
+        # Build button with optional action_id/value for mobile support
+        if [[ -n "$MCP_SERVER_RUNNING" ]]; then
+            # Hybrid button: url for desktop, action_id/value for mobile
+            ACTION_BUTTONS="${ACTION_BUTTONS},
+        {
+          \"type\": \"button\",
+          \"text\": { \"type\": \"plain_text\", \"text\": \"${safe_label}\" },
+          \"url\": \"${safe_action}\",
+          \"action_id\": \"session_action_${BUTTON_COUNT}\",
+          \"value\": \"${INSTANCE_ID}|${action}\"
+        }"
+        else
+            # Desktop-only button: just url
+            ACTION_BUTTONS="${ACTION_BUTTONS},
         {
           \"type\": \"button\",
           \"text\": { \"type\": \"plain_text\", \"text\": \"${safe_label}\" },
           \"url\": \"${safe_action}\"
         }"
+        fi
         ((BUTTON_COUNT++))
     done <<< "$BUTTON_CONFIG_CONTENT"
 
-    BUTTON_BLOCK=",{
-      \"type\": \"actions\",
-      \"elements\": [
-        {
+    # Build Focus button with optional hybrid support
+    if [[ -n "$MCP_SERVER_RUNNING" ]]; then
+        FOCUS_BUTTON="{
+          \"type\": \"button\",
+          \"text\": { \"type\": \"plain_text\", \"text\": \"Focus\" },
+          \"url\": \"${SAFE_FOCUS_URL}\",
+          \"style\": \"primary\",
+          \"action_id\": \"session_focus\",
+          \"value\": \"${INSTANCE_ID}|focus\"
+        }"
+    else
+        FOCUS_BUTTON="{
           \"type\": \"button\",
           \"text\": { \"type\": \"plain_text\", \"text\": \"Focus\" },
           \"url\": \"${SAFE_FOCUS_URL}\",
           \"style\": \"primary\"
-        }${ACTION_BUTTONS}
+        }"
+    fi
+
+    BUTTON_BLOCK=",{
+      \"type\": \"actions\",
+      \"elements\": [
+        ${FOCUS_BUTTON}${ACTION_BUTTONS}
       ]
     }"
 fi

@@ -147,15 +147,23 @@ ENVEOF"
         fi
 
         echo ""
-        echo "Link ID: $LINK_ID"
-        echo "JupyterLab URL: $JUPYTER_URL"
-        echo "SSH Host: $SSH_HOST"
+        echo "╭─────────────────────────────────────────────────────────────╮"
+        echo "│  JupyterLab Link Created                                    │"
+        echo "╰─────────────────────────────────────────────────────────────╯"
         echo ""
-        echo "In your JupyterLab terminal, run:"
-        echo "  source ~/.claude/jupyter-env"
-        echo "  tmux new -s claude"
-        echo "  claude"
-        echo "  /slack-notify"
+        echo "  Link ID:  $LINK_ID"
+        echo "  SSH Host: $SSH_HOST"
+        echo "  URL:      $JUPYTER_URL"
+        echo ""
+        echo "╭─────────────────────────────────────────────────────────────╮"
+        echo "│  Next Steps (in JupyterLab terminal)                        │"
+        echo "╰─────────────────────────────────────────────────────────────╯"
+        echo ""
+        echo "  1. source ~/.claude/jupyter-env"
+        echo "  2. tmux new -s claude"
+        echo "  3. claude"
+        echo "  4. /slack-notify"
+        echo ""
         exit 0
     fi
 
@@ -230,11 +238,22 @@ EOF
 
     # If --host provided, SSH directly and start tmux
     if [[ -n "$SSH_HOST" ]]; then
-        echo "Link ID: $LINK_ID"
-        echo "Connecting to $SSH_HOST..."
         echo ""
-        echo "Once connected, run: claude"
-        echo "Then in Claude, run: /slack-notify"
+        echo "╭─────────────────────────────────────────────────────────────╮"
+        echo "│  SSH Link Created                                           │"
+        echo "╰─────────────────────────────────────────────────────────────╯"
+        echo ""
+        echo "  Link ID: $LINK_ID"
+        echo "  Host:    $SSH_HOST"
+        echo ""
+        echo "  Connecting and starting tmux..."
+        echo ""
+        echo "╭─────────────────────────────────────────────────────────────╮"
+        echo "│  Once connected                                             │"
+        echo "╰─────────────────────────────────────────────────────────────╯"
+        echo ""
+        echo "  1. claude"
+        echo "  2. /slack-notify"
         echo ""
         # Create new tmux session that exports env vars into the shell
         # The vars must be exported INSIDE the shell tmux spawns, not just for tmux itself
@@ -242,14 +261,25 @@ EOF
             "tmux new-session -s claude-$LINK_ID 'export CLAUDE_LINK_ID=$LINK_ID CLAUDE_SSH_HOST=$SSH_HOST; exec \$SHELL -l'"
     fi
 
-    # Otherwise print instructions
-    echo "Link ID: $LINK_ID"
+    # Otherwise print instructions (no --host)
     echo ""
-    echo "SSH with:"
-    echo "  export CLAUDE_LINK_ID=$LINK_ID"
+    echo "╭─────────────────────────────────────────────────────────────╮"
+    echo "│  Link Created                                               │"
+    echo "╰─────────────────────────────────────────────────────────────╯"
     echo ""
-    echo "Or use --host to connect directly:"
-    echo "  claude-slack-notify link --host <hostname>"
+    echo "  Link ID: $LINK_ID"
+    echo ""
+    echo "╭─────────────────────────────────────────────────────────────╮"
+    echo "│  Next Steps                                                 │"
+    echo "╰─────────────────────────────────────────────────────────────╯"
+    echo ""
+    echo "  Option 1: Use --host to connect directly"
+    echo "    claude-slack-notify link --host <hostname>"
+    echo ""
+    echo "  Option 2: SSH manually with link ID"
+    echo "    export CLAUDE_LINK_ID=$LINK_ID"
+    echo "    ssh <hostname>"
+    echo ""
     exit 0
 fi
 

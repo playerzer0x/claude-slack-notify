@@ -701,21 +701,6 @@ if [[ "$1" == "check" ]]; then
                         fi
                     done)
                     if [[ -n "$LAST_MSG" ]]; then
-                        # Take the last 300 chars (where questions/prompts are)
-                        # and clean up to last sentence boundary
-                        MSG_LEN=${#LAST_MSG}
-                        if [[ $MSG_LEN -gt 300 ]]; then
-                            # Get last 300 chars
-                            LAST_MSG="${LAST_MSG: -300}"
-                            # Try to start at a sentence boundary (after . or ?)
-                            if [[ "$LAST_MSG" =~ [\.\?][[:space:]]+(.*) ]]; then
-                                LAST_MSG="${BASH_REMATCH[1]}"
-                            fi
-                        fi
-                        # Truncate to 200 chars for notification display
-                        if [[ ${#LAST_MSG} -gt 200 ]]; then
-                            LAST_MSG="${LAST_MSG:0:197}..."
-                        fi
                         CONTEXT="$LAST_MSG"
                     fi
                 fi

@@ -70,12 +70,18 @@ foreach ($dir in $dirsToCreate) {
     }
 }
 
-# Copy scripts
-Copy-Item "$ScriptDir\bin\claude-slack-notify" "$BinDir\" -Force
-Copy-Item "$ScriptDir\bin\focus-helper" "$BinDir\" -Force
-Copy-Item "$ScriptDir\bin\focus-helper-windows.ps1" "$BinDir\" -Force
+# Install scripts as symlinks (so updates to repo are automatically available)
+# Remove existing files/symlinks first
+Remove-Item "$BinDir\claude-slack-notify" -Force -ErrorAction SilentlyContinue
+Remove-Item "$BinDir\focus-helper" -Force -ErrorAction SilentlyContinue
+Remove-Item "$BinDir\focus-helper-windows.ps1" -Force -ErrorAction SilentlyContinue
+
+# Create symlinks
+New-Item -ItemType SymbolicLink -Path "$BinDir\claude-slack-notify" -Target "$ScriptDir\bin\claude-slack-notify" -Force | Out-Null
+New-Item -ItemType SymbolicLink -Path "$BinDir\focus-helper" -Target "$ScriptDir\bin\focus-helper" -Force | Out-Null
+New-Item -ItemType SymbolicLink -Path "$BinDir\focus-helper-windows.ps1" -Target "$ScriptDir\bin\focus-helper-windows.ps1" -Force | Out-Null
 Copy-Item "$ScriptDir\commands\slack-notify.md" "$CommandsDir\" -Force
-Write-Info "Installed scripts to $BinDir"
+Write-Info "Installed scripts to $BinDir (symlinked to repo)"
 Write-Info "Installed Claude command to $CommandsDir"
 
 # Create URL handler batch file
@@ -140,6 +146,17 @@ fi
 $wslWrapperPath = "$BinDir\claude-slack-notify-wsl"
 Set-Content -Path $wslWrapperPath -Value $wslWrapperContent -NoNewline
 Write-Info "Created WSL wrapper script"
+
+# Add ~/.claude/bin to PATH if not already there
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($userPath -notlike "*$BinDir*") {
+    $newPath = "$BinDir;$userPath"
+    [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+    Write-Info "Added $BinDir to user PATH"
+    Write-Warn "Restart your terminal for PATH changes to take effect"
+} else {
+    Write-Info "$BinDir already in PATH"
+}
 
 # Show completion message
 Write-Host ""

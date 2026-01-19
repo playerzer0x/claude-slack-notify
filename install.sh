@@ -52,11 +52,10 @@ echo_info "Installing Claude Slack Notify..."
 # Create directories
 mkdir -p "$BIN_DIR" "$COMMANDS_DIR" "$APP_DIR" "$HOME/Library/LaunchAgents"
 
-# Install scripts
-cp "$SCRIPT_DIR/bin/claude-slack-notify" "$BIN_DIR/"
-cp "$SCRIPT_DIR/bin/focus-helper" "$BIN_DIR/"
-chmod +x "$BIN_DIR/claude-slack-notify" "$BIN_DIR/focus-helper"
-echo_info "Installed scripts to $BIN_DIR/"
+# Install scripts as symlinks (so updates to repo are automatically available)
+ln -sf "$SCRIPT_DIR/bin/claude-slack-notify" "$BIN_DIR/"
+ln -sf "$SCRIPT_DIR/bin/focus-helper" "$BIN_DIR/"
+echo_info "Installed scripts to $BIN_DIR/ (symlinked to repo)"
 
 # Install Claude command
 cp "$SCRIPT_DIR/commands/slack-notify.md" "$COMMANDS_DIR/"
@@ -122,6 +121,32 @@ end open location'
 else
     echo_warn "Not macOS - skipping ClaudeFocus.app installation"
     echo_warn "Slack notifications will work but without clickable focus buttons"
+fi
+
+# Add ~/.claude/bin to PATH if not already there
+add_to_path() {
+    local shell_rc="$1"
+    if [[ -f "$shell_rc" ]]; then
+        if ! grep -q 'export PATH="\$HOME/.claude/bin:\$PATH"' "$shell_rc" 2>/dev/null; then
+            echo '' >> "$shell_rc"
+            echo '# Claude Code tools' >> "$shell_rc"
+            echo 'export PATH="$HOME/.claude/bin:$PATH"' >> "$shell_rc"
+            echo_info "Added ~/.claude/bin to PATH in $shell_rc"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+PATH_ADDED=false
+if [[ "$SHELL" == */zsh ]]; then
+    add_to_path "$HOME/.zshrc" && PATH_ADDED=true
+elif [[ "$SHELL" == */bash ]]; then
+    add_to_path "$HOME/.bashrc" && PATH_ADDED=true
+fi
+
+if [[ "$PATH_ADDED" == "true" ]]; then
+    echo_warn "Restart your shell or run: source ~/.${SHELL##*/}rc"
 fi
 
 # Setup hooks if settings.json exists

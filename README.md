@@ -138,7 +138,7 @@ When running Claude on a remote Linux server via SSH, you can configure the Focu
 
 ### Setup
 
-**Option 1: One-liner with --host (recommended)**
+**One-liner with --host (recommended)**
 
 ```bash
 # Using SSH config alias
@@ -154,25 +154,13 @@ claude-slack-notify link --host ubuntu@192.168.1.100
 claude-slack-notify link --host deploy@prod-server -p 2222
 ```
 
-This creates a link and SSHs in one command.
+This creates a link, SSHs, and **automatically starts a tmux session** named "claude".
 
-**Option 2: Manual two-step**
+**After connecting:**
+1. Run `claude` to start Claude
+2. In Claude, run `/slack-notify` to register
 
-```bash
-# Step 1: Create link
-claude-slack-notify link
-# Output: Link ID: abc12345
-
-# Step 2: SSH with the link ID
-ssh -t remote-server "CLAUDE_LINK_ID=abc12345 exec bash -l"
-```
-
-**Step 3: Register on the remote**
-
-```bash
-# On the remote Linux server, inside Claude:
-/slack-notify
-```
+**Important: tmux is required on the remote** for the input buttons (1/2/Continue/Push) to work. The `--host` option automatically starts tmux for you. Without tmux, only the Focus button works (switches to local terminal).
 
 ### How It Works
 
@@ -214,8 +202,15 @@ claude-slack-notify links clean
 ### Requirements
 
 - **Local**: macOS with iTerm2 or Terminal.app
-- **Remote**: tmux running on the Linux server
+- **Remote**: tmux installed on the Linux server (required for input buttons)
 - **SSH**: Key-based authentication (for sending input without password prompts)
+
+**Note**: The `--host` option automatically starts a tmux session. If you connect manually, make sure to run Claude inside tmux:
+```bash
+tmux new -s claude  # Then run claude inside tmux
+```
+
+Without tmux, the Focus button will still switch to your local terminal, but the input buttons (1/2/Continue/Push) won't work.
 
 ### Configuration
 

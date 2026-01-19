@@ -148,10 +148,16 @@ if [[ "$1" == "link" ]]; then
 }
 EOF
 
-    # If --host provided, SSH directly
+    # If --host provided, SSH directly and start tmux
     if [[ -n "$SSH_HOST" ]]; then
-        echo "Link ID: $LINK_ID (connecting to $SSH_HOST...)"
-        exec ssh -t "${SSH_ARGS[@]}" "$SSH_HOST" "CLAUDE_LINK_ID=$LINK_ID exec bash -l"
+        echo "Link ID: $LINK_ID"
+        echo "Connecting to $SSH_HOST and starting tmux session 'claude'..."
+        echo ""
+        echo "Once connected, run: claude"
+        echo "Then in Claude, run: /slack-notify"
+        echo ""
+        # Use tmux new-session -A to attach if exists, create if not
+        exec ssh -t "${SSH_ARGS[@]}" "$SSH_HOST" "CLAUDE_LINK_ID=$LINK_ID tmux new-session -A -s claude"
     fi
 
     # Otherwise print instructions

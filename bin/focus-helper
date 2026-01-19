@@ -195,6 +195,30 @@ TMUX_SOCKET="/private/tmp/tmux-$(id -u)/default"
 # Links directory (for ssh-linked mode)
 LINKS_DIR="$HOME/.claude/links"
 
+# Switch remote tmux to the correct window/pane via SSH
+switch_remote_tmux() {
+    local ssh_host="$1"
+    local ssh_user="$2"
+    local ssh_port="$3"
+    local tmux_target="$4"  # format: session:window.pane
+
+    if [[ -n "$tmux_target" ]]; then
+        echo "$(date): Switching remote tmux to $tmux_target via SSH" >> $LOG_FILE
+
+        local ssh_cmd="ssh -o BatchMode=yes -o ConnectTimeout=5 -p $ssh_port $ssh_user@$ssh_host"
+
+        # Extract session:window.pane components
+        local session="${tmux_target%%:*}"
+        local window_pane="${tmux_target#*:}"
+        local window="${window_pane%%.*}"
+
+        # Switch to the window and select the pane
+        local result
+        result=$($ssh_cmd "tmux select-window -t '$session:$window' 2>/dev/null; tmux select-pane -t '$tmux_target' 2>/dev/null" 2>&1)
+        echo "$(date): Remote tmux switch result: $? - $result" >> $LOG_FILE
+    fi
+}
+
 # Send input to remote tmux session via SSH
 # Uses the same robust pattern as local tmux
 send_ssh_tmux_input() {
@@ -420,7 +444,12 @@ case "$TYPE" in
             echo "$(date): Link file not found: $link_file" >> "$LOG_FILE"
         fi
 
-        # Step 2: Send input to REMOTE via SSH (if we have a tmux target)
+        # Step 2: Switch remote tmux to the correct window/pane
+        if [[ -n "$remote_tmux_target" ]]; then
+            switch_remote_tmux "$ssh_host" "$ssh_user" "$ssh_port" "$remote_tmux_target"
+        fi
+
+        # Step 3: Send input to REMOTE via SSH (if action specified)
         if [[ -n "$ACTION_INPUT" && -n "$remote_tmux_target" ]]; then
             send_ssh_tmux_input "$ssh_host" "$ssh_user" "$ssh_port" "$remote_tmux_target" "$ACTION_INPUT"
         fi
@@ -435,7 +464,12 @@ case "$TYPE" in
 
         echo "$(date): SSH-tmux (direct): host=$ssh_host user=$ssh_user port=$ssh_port tmux=$remote_tmux_target" >> "$LOG_FILE"
 
-        # No local terminal to focus, just send input to remote
+        # Switch remote tmux to correct window/pane
+        if [[ -n "$remote_tmux_target" ]]; then
+            switch_remote_tmux "$ssh_host" "$ssh_user" "$ssh_port" "$remote_tmux_target"
+        fi
+
+        # Send input to remote
         if [[ -n "$ACTION_INPUT" && -n "$remote_tmux_target" ]]; then
             send_ssh_tmux_input "$ssh_host" "$ssh_user" "$ssh_port" "$remote_tmux_target" "$ACTION_INPUT"
         fi

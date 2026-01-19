@@ -674,34 +674,59 @@ if [[ "$1" == "check" ]]; then
         # Threshold exceeded - clear timestamp and notify
         rm -f "$TIMESTAMP_FILE"
 
-        # Try to get Claude's last message from transcript
+        # Try to get context from hook input
         CONTEXT=""
         if [[ ! -t 0 ]]; then
             STDIN_DATA=$(timeout 1 cat 2>/dev/null || true)
             if [[ -n "$STDIN_DATA" ]] && command -v jq &>/dev/null; then
-                TRANSCRIPT_PATH=$(echo "$STDIN_DATA" | jq -r '.transcript_path // empty' 2>/dev/null)
-                if [[ -n "$TRANSCRIPT_PATH" && -f "$TRANSCRIPT_PATH" ]]; then
-                    # Get last assistant message from transcript (JSONL format)
-                    # Extract the LAST portion of the message (where questions/prompts usually are)
-                    LAST_MSG=$(tac "$TRANSCRIPT_PATH" 2>/dev/null | while read -r line; do
-                        MSG_TYPE=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
-                        if [[ "$MSG_TYPE" == "assistant" ]]; then
-                            # Extract text content from message
-                            TEXT=$(echo "$line" | jq -r '
-                                if .message.content then
-                                    [.message.content[] | select(.type == "text") | .text] | join(" ")
-                                else
-                                    empty
-                                end
-                            ' 2>/dev/null)
-                            if [[ -n "$TEXT" ]]; then
-                                echo "$TEXT"
-                                break
+                HOOK_EVENT=$(echo "$STDIN_DATA" | jq -r '.hook_event_name // empty' 2>/dev/null)
+
+                # For permission prompts, show the tool/command being requested
+                if [[ "$HOOK_EVENT" == "Notification" ]]; then
+                    TOOL_NAME=$(echo "$STDIN_DATA" | jq -r '.tool_name // empty' 2>/dev/null)
+                    if [[ -n "$TOOL_NAME" ]]; then
+                        # Get command or description for Bash, otherwise tool input summary
+                        if [[ "$TOOL_NAME" == "Bash" ]]; then
+                            CMD=$(echo "$STDIN_DATA" | jq -r '.tool_input.command // empty' 2>/dev/null)
+                            DESC=$(echo "$STDIN_DATA" | jq -r '.tool_input.description // empty' 2>/dev/null)
+                            if [[ -n "$DESC" ]]; then
+                                CONTEXT="Permission: $TOOL_NAME - $DESC"
+                            elif [[ -n "$CMD" ]]; then
+                                CONTEXT="Permission: $TOOL_NAME - $CMD"
+                            else
+                                CONTEXT="Permission: $TOOL_NAME"
                             fi
+                        else
+                            CONTEXT="Permission: $TOOL_NAME"
                         fi
-                    done)
-                    if [[ -n "$LAST_MSG" ]]; then
-                        CONTEXT="$LAST_MSG"
+                    fi
+                fi
+
+                # Fall back to transcript for Stop events or if no tool info
+                if [[ -z "$CONTEXT" ]]; then
+                    TRANSCRIPT_PATH=$(echo "$STDIN_DATA" | jq -r '.transcript_path // empty' 2>/dev/null)
+                    if [[ -n "$TRANSCRIPT_PATH" && -f "$TRANSCRIPT_PATH" ]]; then
+                        # Get last assistant message from transcript (JSONL format)
+                        LAST_MSG=$(tac "$TRANSCRIPT_PATH" 2>/dev/null | while read -r line; do
+                            MSG_TYPE=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
+                            if [[ "$MSG_TYPE" == "assistant" ]]; then
+                                # Extract text content from message
+                                TEXT=$(echo "$line" | jq -r '
+                                    if .message.content then
+                                        [.message.content[] | select(.type == "text") | .text] | join(" ")
+                                    else
+                                        empty
+                                    end
+                                ' 2>/dev/null)
+                                if [[ -n "$TEXT" ]]; then
+                                    echo "$TEXT"
+                                    break
+                                fi
+                            fi
+                        done)
+                        if [[ -n "$LAST_MSG" ]]; then
+                            CONTEXT="$LAST_MSG"
+                        fi
                     fi
                 fi
             fi

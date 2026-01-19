@@ -187,7 +187,8 @@ This creates a link, SSHs, and **automatically starts a tmux session** named "cl
 When you click the Focus button in Slack:
 1. The focus-helper reads the link file to find your local terminal
 2. Switches to that iTerm2/Terminal.app tab
-3. SSHs to the remote server and sends input to the tmux pane
+3. Switches the remote tmux to the correct window/pane (via SSH)
+4. Sends input to the tmux pane (if action button clicked)
 
 ### Managing Links
 

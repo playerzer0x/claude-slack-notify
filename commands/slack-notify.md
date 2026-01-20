@@ -5,15 +5,15 @@ Enable Slack notifications for this Claude session with a unique instance name.
 ## Subcommands
 
 - `/slack-notify` - Register the current session (default)
-- `/slack-notify stop` - Stop the tunnel and MCP server
+- `/slack-notify stop` - Unregister session and stop tunnel (if local)
 
 ## Stop Command
 
-If the user runs `/slack-notify stop`, stop the tunnel:
+If the user runs `/slack-notify stop`:
 ```bash
 ~/.claude/bin/claude-slack-notify stop
 ```
-This stops the cloudflared tunnel and MCP server. Confirm that services were stopped.
+This unregisters the session and stops the tunnel/MCP server if running locally. On remote machines (where tunnel doesn't run), it just unregisters the session.
 
 ## Register Command (default)
 

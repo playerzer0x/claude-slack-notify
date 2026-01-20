@@ -683,16 +683,22 @@ if [[ "$1" == "list" ]]; then
 fi
 
 # -----------------------------------------------------------------------------
-# Stop - stop the tunnel and MCP server
+# Stop - unregister session and stop tunnel (if available)
 # Usage: claude-slack-notify stop
+# On local Mac: stops tunnel + MCP server + unregisters session
+# On remote: just unregisters session (tunnel runs on local Mac)
 # -----------------------------------------------------------------------------
 if [[ "$1" == "stop" ]]; then
+    # Unregister this session
+    if [[ -f "$INSTANCE_FILE" ]]; then
+        rm -f "$INSTANCE_FILE"
+        echo "Session unregistered"
+    fi
+
+    # Stop tunnel if available (only on local Mac)
     SLACK_TUNNEL="${CLAUDE_DIR}/bin/slack-tunnel"
     if [[ -x "$SLACK_TUNNEL" ]]; then
         "$SLACK_TUNNEL" --stop
-    else
-        echo "slack-tunnel not found at $SLACK_TUNNEL" >&2
-        exit 1
     fi
     exit 0
 fi

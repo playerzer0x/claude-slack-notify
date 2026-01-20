@@ -890,6 +890,15 @@ Push|push"
         BUTTON_CONFIG_CONTENT=$(cat "$BUTTON_CONFIG")
     fi
 
+    # For remote sessions (ssh-linked, jupyter-tmux), embed the focus URL directly
+    # in the button value so the local MCP server doesn't need to look up the session
+    # (session file is on remote, MCP server is on local)
+    BUTTON_VALUE_PREFIX="${INSTANCE_ID}"
+    if [[ "$TERM_TYPE" == "ssh-linked" || "$TERM_TYPE" == "jupyter-tmux" ]]; then
+        # Use url: prefix so MCP server knows to use focus URL directly
+        BUTTON_VALUE_PREFIX="url:${FOCUS_URL}"
+    fi
+
     # Build action buttons from config
     ACTION_BUTTONS=""
     BUTTON_COUNT=0
@@ -910,7 +919,7 @@ Push|push"
           \"type\": \"button\",
           \"text\": { \"type\": \"plain_text\", \"text\": \"${safe_label}\" },
           \"action_id\": \"session_action_${BUTTON_COUNT}\",
-          \"value\": \"${INSTANCE_ID}|${action}\"
+          \"value\": \"${BUTTON_VALUE_PREFIX}|${action}\"
         }"
         else
             # Desktop-only button: just url (custom URL scheme)
@@ -931,7 +940,7 @@ Push|push"
           \"text\": { \"type\": \"plain_text\", \"text\": \"Focus\" },
           \"style\": \"primary\",
           \"action_id\": \"session_focus\",
-          \"value\": \"${INSTANCE_ID}|focus\"
+          \"value\": \"${BUTTON_VALUE_PREFIX}|focus\"
         }"
     else
         FOCUS_BUTTON="{

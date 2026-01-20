@@ -103,6 +103,38 @@ export async function executeFocus(
     };
   }
 
+  return executeFocusWithUrl(focusUrl, session.name || session.id, action);
+}
+
+/**
+ * Execute focus using a direct URL (for remote sessions where session file is not local).
+ *
+ * @param baseUrl - The base focus URL (without action query param)
+ * @param action - The action to perform (default: "focus")
+ * @returns A promise resolving to the result of the focus operation
+ */
+export async function executeFocusUrl(
+  baseUrl: string,
+  action: FocusAction = "focus"
+): Promise<FocusResult> {
+  // Build the full URL with action if needed
+  let focusUrl = baseUrl;
+  if (action && action !== "focus") {
+    const separator = baseUrl.includes("?") ? "&" : "?";
+    focusUrl = `${baseUrl}${separator}action=${action}`;
+  }
+
+  return executeFocusWithUrl(focusUrl, "remote session", action);
+}
+
+/**
+ * Internal function to execute focus-helper with a given URL.
+ */
+async function executeFocusWithUrl(
+  focusUrl: string,
+  sessionDesc: string,
+  action: FocusAction
+): Promise<FocusResult> {
   const focusHelperPath = getFocusHelperPath();
 
   return new Promise((resolve) => {
@@ -124,7 +156,7 @@ export async function executeFocus(
         const actionSuffix = action !== "focus" ? ` with action '${action}'` : "";
         resolve({
           success: true,
-          message: `Focused session ${session.name || session.id}${actionSuffix}`,
+          message: `Focused ${sessionDesc}${actionSuffix}`,
         });
       } else {
         resolve({

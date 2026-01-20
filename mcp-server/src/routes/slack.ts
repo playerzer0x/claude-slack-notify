@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { Router } from 'express';
 
-import { executeFocus, type FocusAction } from '../lib/focus-executor.js';
+import { executeFocus, executeFocusUrl, type FocusAction } from '../lib/focus-executor.js';
 import { getSession } from '../lib/session-store.js';
 import { verifySlackSignature } from '../lib/slack-verify.js';
 
@@ -46,24 +46,40 @@ router.post('/actions', verifySlackSignature, async (req: Request, res: Response
 
     const action = payload.actions[0];
 
-    // Parse action value: "session_id|action"
-    const [sessionId, actionType] = action.value.split('|');
-
-    if (!sessionId || !actionType) {
-      console.error('Invalid action value format:', action.value);
+    // Parse action value - two formats supported:
+    // 1. "session_id|action" - traditional format, looks up session by ID
+    // 2. "url:focus_url|action" - direct URL format for remote sessions (ssh-linked, jupyter-tmux)
+    const pipeIndex = action.value.lastIndexOf('|');
+    if (pipeIndex === -1) {
+      console.error('Invalid action value format (no pipe):', action.value);
       ack();
       return;
     }
 
-    const session = await getSession({ id: sessionId });
-    if (!session) {
-      console.error('Session not found:', sessionId);
-      ack();
-      return;
-    }
+    const firstPart = action.value.substring(0, pipeIndex);
+    const actionType = action.value.substring(pipeIndex + 1);
 
     if (!isValidAction(actionType)) {
       console.error('Invalid action type:', actionType);
+      ack();
+      return;
+    }
+
+    // Check if this is a direct URL format (for remote sessions)
+    if (firstPart.startsWith('url:')) {
+      const focusUrl = firstPart.substring(4); // Remove "url:" prefix
+      console.log(`Direct URL action: ${focusUrl} / ${actionType}`);
+      const result = await executeFocusUrl(focusUrl, actionType);
+      console.log(`Focus URL result for ${actionType}:`, result);
+      ack();
+      return;
+    }
+
+    // Traditional session ID lookup
+    const sessionId = firstPart;
+    const session = await getSession({ id: sessionId });
+    if (!session) {
+      console.error('Session not found:', sessionId);
       ack();
       return;
     }

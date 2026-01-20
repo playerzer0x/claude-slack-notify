@@ -129,7 +129,17 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     rm -f "$CLAUDE_DIR/button-config"
     rm -rf "$CLAUDE_DIR/instances/"
     rm -f "$CLAUDE_DIR/settings.json.backup"
+    rm -f "$CLAUDE_DIR/.slack-config"
     echo_info "Removed configuration files"
+
+    # Remove tunnel-related files
+    rm -f "$CLAUDE_DIR/.ngrok.log"
+    rm -f "$CLAUDE_DIR/.cloudflared.log"
+    rm -f "$CLAUDE_DIR/.tunnel-url"
+    rm -f "$CLAUDE_DIR/.tunnel.pid"
+    rm -f "$CLAUDE_DIR/.tunnel-watchdog.pid"
+    rm -f "$CLAUDE_DIR/.tunnel-last-activity"
+    echo_info "Removed tunnel files"
 
     # Remove MCP server and hooks from settings.json
     SETTINGS_FILE="$CLAUDE_DIR/settings.json"

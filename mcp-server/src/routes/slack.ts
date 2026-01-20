@@ -1,9 +1,21 @@
 import type { Request, Response } from 'express';
 import { Router } from 'express';
+import { writeFileSync } from 'fs';
+import { homedir } from 'os';
 
 import { executeFocus, executeFocusUrl, type FocusAction } from '../lib/focus-executor.js';
 import { getSession } from '../lib/session-store.js';
 import { verifySlackSignature } from '../lib/slack-verify.js';
+
+// Touch activity file to reset idle timeout
+function touchActivityFile(): void {
+  try {
+    const activityFile = `${homedir()}/.claude/.tunnel-last-activity`;
+    writeFileSync(activityFile, '');
+  } catch {
+    // Ignore errors - file may not exist if tunnel not running
+  }
+}
 
 const router = Router();
 
@@ -25,6 +37,9 @@ function isValidAction(action: string): action is FocusAction {
 
 // POST /slack/actions - Handle Slack interactive button clicks
 router.post('/actions', verifySlackSignature, async (req: Request, res: Response) => {
+  // Touch activity file to reset idle timeout
+  touchActivityFile();
+
   // Always return 200 to acknowledge receipt and prevent Slack retries
   const ack = () => res.status(200).send();
 

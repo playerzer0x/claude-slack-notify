@@ -639,6 +639,28 @@ if [[ "$1" == "register" ]]; then
 
     echo "$INSTANCE_JSON" > "$INSTANCE_FILE"
 
+    # Auto-start tunnel if configured but not running
+    TUNNEL_ID_FILE="${CLAUDE_DIR}/.tunnel-id"
+    TUNNEL_PID_FILE="${CLAUDE_DIR}/.tunnel.pid"
+    if [[ -f "$TUNNEL_ID_FILE" ]]; then
+        # Check if tunnel is already running
+        TUNNEL_RUNNING=false
+        if [[ -f "$TUNNEL_PID_FILE" ]]; then
+            EXISTING_PID=$(cat "$TUNNEL_PID_FILE" 2>/dev/null)
+            if [[ -n "$EXISTING_PID" ]] && kill -0 "$EXISTING_PID" 2>/dev/null; then
+                TUNNEL_RUNNING=true
+            fi
+        fi
+
+        if [[ "$TUNNEL_RUNNING" == "false" ]]; then
+            SLACK_TUNNEL="${CLAUDE_DIR}/bin/slack-tunnel"
+            if [[ -x "$SLACK_TUNNEL" ]]; then
+                # Start tunnel in background (silently)
+                "$SLACK_TUNNEL" --background >/dev/null 2>&1 || true
+            fi
+        fi
+    fi
+
     echo "$INSTANCE_NAME"
     exit 0
 fi

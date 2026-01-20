@@ -364,8 +364,11 @@ start_tunnel_and_get_url() {
     # Start cloudflared and capture output to get URL
     local log_file="$CLAUDE_DIR/.cloudflared.log"
 
+    # Delete log file to ensure we get THIS tunnel's URL, not an old one
+    rm -f "$log_file"
+
     if [[ "$background" == "true" ]]; then
-        nohup cloudflared tunnel --url "http://localhost:$MCP_PORT" >> "$log_file" 2>&1 &
+        nohup cloudflared tunnel --url "http://localhost:$MCP_PORT" > "$log_file" 2>&1 &
     else
         cloudflared tunnel --url "http://localhost:$MCP_PORT" > "$log_file" 2>&1 &
     fi
@@ -373,11 +376,12 @@ start_tunnel_and_get_url() {
     echo "$TUNNEL_PID" > "$TUNNEL_PID_FILE"
 
     # Wait for URL to appear in logs (cloudflared outputs it to stderr)
+    # Use tail -1 to get the LATEST URL in case tunnel restarts
     local tunnel_url=""
     for i in {1..30}; do
         if [[ -f "$log_file" ]]; then
             # Cloudflared outputs URL like: "https://xxx.trycloudflare.com"
-            tunnel_url=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$log_file" 2>/dev/null | head -1 || true)
+            tunnel_url=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$log_file" 2>/dev/null | tail -1 || true)
             if [[ -n "$tunnel_url" ]]; then
                 break
             fi

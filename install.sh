@@ -743,7 +743,12 @@ fi
 
 print_section "Next Steps"
 echo ""
-echo -e "  ${CYAN}1.${NC} In Claude, run: ${BOLD}/slack-notify${NC}"
+if [[ -f "$CLAUDE_DIR/.slack-config" ]]; then
+    echo -e "  ${CYAN}1.${NC} Start the tunnel: ${BOLD}slack-tunnel${NC} (or ${BOLD}slack-tunnel --background${NC})"
+    echo -e "  ${CYAN}2.${NC} In Claude, run: ${BOLD}/slack-notify${NC}"
+else
+    echo -e "  ${CYAN}1.${NC} In Claude, run: ${BOLD}/slack-notify${NC}"
+fi
 echo ""
 echo -e "  ${DIM}The Focus button will switch to the correct terminal tab.${NC}"
 echo -e "  ${DIM}Run ${BOLD}./install.sh --configure${NC}${DIM} to change button layout.${NC}"

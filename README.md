@@ -26,13 +26,20 @@ This adds Slack notifications so you can step away while Claude works - get ping
 
 The installer guides you through creating a Slack app, configuring webhooks, and setting up button actions.
 
-Then in Claude Code:
+Then start the tunnel (in a separate terminal or background):
+
+```bash
+slack-tunnel              # Foreground (see status)
+slack-tunnel --background # Background (for convenience)
+```
+
+And in Claude Code:
 
 ```
 /slack-notify
 ```
 
-> **Note**: The tunnel auto-terminates after 1 hour of inactivity and restarts when you run `/slack-notify`.
+> **Note**: The tunnel auto-terminates after 1 hour of inactivity. Run `slack-tunnel --background` to restart it.
 
 ## Platform Support
 

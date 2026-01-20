@@ -639,11 +639,11 @@ if [[ "$1" == "register" ]]; then
 
     echo "$INSTANCE_JSON" > "$INSTANCE_FILE"
 
-    # Auto-start tunnel if configured but not running
+    # Check if tunnel is running when Slack is configured (local only - warn if not)
     SLACK_CONFIG_FILE="${CLAUDE_DIR}/.slack-config"
     TUNNEL_PID_FILE="${CLAUDE_DIR}/.tunnel.pid"
-    if [[ -f "$SLACK_CONFIG_FILE" ]]; then
-        # Check if tunnel is already running
+    if [[ -f "$SLACK_CONFIG_FILE" ]] && [[ "$TERM_TYPE" != "ssh-linked" ]] && [[ "$TERM_TYPE" != "jupyter-tmux" ]]; then
+        # Check if tunnel is running
         TUNNEL_RUNNING=false
         if [[ -f "$TUNNEL_PID_FILE" ]]; then
             EXISTING_PID=$(cat "$TUNNEL_PID_FILE" 2>/dev/null)
@@ -653,11 +653,8 @@ if [[ "$1" == "register" ]]; then
         fi
 
         if [[ "$TUNNEL_RUNNING" == "false" ]]; then
-            SLACK_TUNNEL="${CLAUDE_DIR}/bin/slack-tunnel"
-            if [[ -x "$SLACK_TUNNEL" ]]; then
-                # Start tunnel in background (silently)
-                "$SLACK_TUNNEL" --background >/dev/null 2>&1 || true
-            fi
+            echo "Warning: Slack buttons require 'slack-tunnel' to be running" >&2
+            echo "         Run: slack-tunnel --background" >&2
         fi
     fi
 

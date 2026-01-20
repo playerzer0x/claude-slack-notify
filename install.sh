@@ -117,11 +117,12 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     rm -f "$COMMANDS_DIR/slack-notify.md"
     echo_info "Removed scripts from ~/.claude/bin/"
 
-    # Remove MCP server runtime files
+    # Remove MCP server runtime files and dist
     rm -f "$CLAUDE_DIR/.mcp-server.port"
     rm -f "$CLAUDE_DIR/.mcp-server.pid"
     rm -f "$CLAUDE_DIR/mcp-server.log"
     rm -f "$CLAUDE_DIR/focus-request"
+    rm -rf "$CLAUDE_DIR/mcp-server-dist"
 
     # Remove configuration files
     rm -f "$CLAUDE_DIR/slack-webhook-url"
@@ -245,21 +246,36 @@ cp "$SCRIPT_DIR/commands/slack-notify.md" "$COMMANDS_DIR/"
 echo_info "Installed Claude command to $COMMANDS_DIR/"
 
 # Build MCP server (optional - for Slack button actions)
+MCP_DIST_DIR="$CLAUDE_DIR/mcp-server-dist"
 if [[ -d "$SCRIPT_DIR/mcp-server" ]]; then
     echo_info "Building MCP server..."
     cd "$SCRIPT_DIR/mcp-server"
+    MCP_BUILD_SUCCESS=false
     if command -v bun &> /dev/null; then
         bun install --silent
         bun run build
+        MCP_BUILD_SUCCESS=true
         echo_info "MCP server built successfully"
     elif command -v npm &> /dev/null; then
         npm install --silent
         npm run build
+        MCP_BUILD_SUCCESS=true
         echo_info "MCP server built successfully"
     else
         echo_warn "Neither bun nor npm found. MCP server not built."
         echo_warn "To build later: cd $SCRIPT_DIR/mcp-server && bun install && bun run build"
     fi
+
+    # Copy MCP server files to ~/.claude/mcp-server-dist/ (unless using --link)
+    if [[ "$MCP_BUILD_SUCCESS" == "true" && "${1:-}" != "--link" ]]; then
+        rm -rf "$MCP_DIST_DIR"
+        mkdir -p "$MCP_DIST_DIR"
+        cp -r "$SCRIPT_DIR/mcp-server/dist" "$MCP_DIST_DIR/"
+        cp -r "$SCRIPT_DIR/mcp-server/node_modules" "$MCP_DIST_DIR/"
+        cp "$SCRIPT_DIR/mcp-server/package.json" "$MCP_DIST_DIR/"
+        echo_info "MCP server installed to $MCP_DIST_DIR"
+    fi
+
     cd "$SCRIPT_DIR"
 fi
 

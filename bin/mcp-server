@@ -3,14 +3,20 @@
 # Provides HTTP endpoints for Slack button actions and MCP tools
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MCP_SERVER_DIR="$SCRIPT_DIR/../mcp-server"
+CLAUDE_DIR="$HOME/.claude"
 
-# Check if built
-if [ ! -d "$MCP_SERVER_DIR/dist" ]; then
-    echo "MCP server not built. Run: cd $MCP_SERVER_DIR && bun run build"
+# Check multiple locations for the MCP server:
+# 1. Installed location: ~/.claude/mcp-server-dist/ (contains dist/, node_modules/, package.json)
+# 2. Development (symlink): $SCRIPT_DIR/../mcp-server/
+if [ -d "$CLAUDE_DIR/mcp-server-dist/dist" ]; then
+    MCP_SERVER_DIR="$CLAUDE_DIR/mcp-server-dist"
+elif [ -d "$SCRIPT_DIR/../mcp-server/dist" ]; then
+    MCP_SERVER_DIR="$SCRIPT_DIR/../mcp-server"
+else
+    echo "MCP server not found. Run install.sh to build and install."
     exit 1
 fi
 
-# Start the server
+# Start the server from the MCP server directory (so node_modules are found)
 cd "$MCP_SERVER_DIR"
 exec node dist/index.js "$@"

@@ -9,7 +9,7 @@
 # 4. Creates an ngrok tunnel and displays the URL for Slack configuration
 # =============================================================================
 
-set -euo pipefail
+set -uo pipefail
 
 MCP_PORT=8463
 CLAUDE_DIR="$HOME/.claude"
@@ -166,7 +166,7 @@ main() {
     # Wait for URL to appear in logs
     for i in {1..30}; do
         if [[ -f "$CLAUDE_DIR/.ngrok.log" ]]; then
-            TUNNEL_URL=$(grep -oE '"url":"https://[^"]+' "$CLAUDE_DIR/.ngrok.log" 2>/dev/null | head -1 | cut -d'"' -f4)
+            TUNNEL_URL=$(grep -oE '"url":"https://[^"]+' "$CLAUDE_DIR/.ngrok.log" 2>/dev/null | head -1 | cut -d'"' -f4 || true)
             if [[ -n "$TUNNEL_URL" && "$TUNNEL_URL" == https://* ]]; then
                 break
             fi

@@ -855,19 +855,19 @@ Push|push"
         safe_action=$(json_escape "${FOCUS_URL}?action=$(url_encode "$action")")
         safe_label=$(json_escape "$label")
 
-        # Build button with optional action_id/value for mobile support
+        # Build button with action_id when MCP server running (works on mobile + desktop)
+        # Otherwise use url (desktop-only with custom URL scheme)
         if [[ -n "$MCP_SERVER_RUNNING" ]]; then
-            # Hybrid button: url for desktop, action_id/value for mobile
+            # Interactive button: action_id/value only, no url (works on mobile)
             ACTION_BUTTONS="${ACTION_BUTTONS},
         {
           \"type\": \"button\",
           \"text\": { \"type\": \"plain_text\", \"text\": \"${safe_label}\" },
-          \"url\": \"${safe_action}\",
           \"action_id\": \"session_action_${BUTTON_COUNT}\",
           \"value\": \"${INSTANCE_ID}|${action}\"
         }"
         else
-            # Desktop-only button: just url
+            # Desktop-only button: just url (custom URL scheme)
             ACTION_BUTTONS="${ACTION_BUTTONS},
         {
           \"type\": \"button\",
@@ -878,12 +878,11 @@ Push|push"
         ((BUTTON_COUNT++))
     done <<< "$BUTTON_CONFIG_CONTENT"
 
-    # Build Focus button with optional hybrid support
+    # Build Focus button: interactive when MCP server running, url-based otherwise
     if [[ -n "$MCP_SERVER_RUNNING" ]]; then
         FOCUS_BUTTON="{
           \"type\": \"button\",
           \"text\": { \"type\": \"plain_text\", \"text\": \"Focus\" },
-          \"url\": \"${SAFE_FOCUS_URL}\",
           \"style\": \"primary\",
           \"action_id\": \"session_focus\",
           \"value\": \"${INSTANCE_ID}|focus\"

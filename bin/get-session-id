@@ -19,7 +19,8 @@ if [[ -d "$TRANSCRIPTS_DIR" ]]; then
 fi
 
 # Fallback: search all project directories for most recent transcript
-NEWEST=$(find "$CLAUDE_DIR/projects" -name "*.jsonl" -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2)
+# Use stat for macOS compatibility instead of GNU find -printf
+NEWEST=$(find "$CLAUDE_DIR/projects" -name "*.jsonl" -type f -exec stat -f '%m %N' {} \; 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
 if [[ -n "$NEWEST" ]]; then
     basename "$NEWEST" .jsonl
     exit 0

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -11,8 +12,9 @@ import slackRouter from './routes/slack.js';
 import { registerTools } from './tools/index.js';
 
 const PORT = 8463;
-const PID_FILE = join(dirname(process.cwd()), '.mcp-server.pid');
-const PORT_FILE = join(dirname(process.cwd()), '.mcp-server.port');
+const CLAUDE_DIR = join(homedir(), '.claude');
+const PID_FILE = join(CLAUDE_DIR, '.mcp-server.pid');
+const PORT_FILE = join(CLAUDE_DIR, '.mcp-server.port');
 
 // JSON-RPC error response helper
 function jsonRpcError(code: number, message: string): object {
@@ -22,7 +24,8 @@ function jsonRpcError(code: number, message: string): object {
 // Create Express app
 const app = express();
 
-// Capture raw body for Slack signature verification (must be before body parsers)
+// Capture raw body for Slack signature verification AND parse body for /slack routes
+// This must consume the stream and parse manually since we need both raw and parsed body
 app.use('/slack', (req, _res, next) => {
   let data = '';
   req.on('data', (chunk: Buffer) => {
@@ -30,12 +33,28 @@ app.use('/slack', (req, _res, next) => {
   });
   req.on('end', () => {
     (req as Request & { rawBody: string }).rawBody = data;
+    // Parse URL-encoded body manually (Slack sends application/x-www-form-urlencoded)
+    const params = new URLSearchParams(data);
+    req.body = Object.fromEntries(params.entries());
     next();
   });
 });
 
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
+// Body parsers for non-slack routes (skip /slack since we handle it above)
+app.use((req, res, next) => {
+  if (req.path.startsWith('/slack')) {
+    next();
+  } else {
+    express.urlencoded({ extended: true })(req, res, next);
+  }
+});
+app.use((req, res, next) => {
+  if (req.path.startsWith('/slack')) {
+    next();
+  } else {
+    express.json()(req, res, next);
+  }
+});
 
 // Create and configure MCP server
 const mcpServer = new McpServer({
@@ -128,9 +147,8 @@ app.delete('/mcp', async (req: Request, res: Response) => {
 
 function writeRuntimeFiles(): void {
   try {
-    const runtimeDir = dirname(PID_FILE);
-    if (!existsSync(runtimeDir)) {
-      mkdirSync(runtimeDir, { recursive: true });
+    if (!existsSync(CLAUDE_DIR)) {
+      mkdirSync(CLAUDE_DIR, { recursive: true });
     }
     writeFileSync(PID_FILE, process.pid.toString());
     writeFileSync(PORT_FILE, PORT.toString());

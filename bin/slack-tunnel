@@ -439,9 +439,15 @@ cmd_setup() {
     echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
     echo ""
     echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps${NC}"
-    echo -e "  ${CYAN}2.${NC} Scroll down to ${BOLD}\"Your App Configuration Tokens\"${NC}"
-    echo -e "  ${CYAN}3.${NC} Click ${BOLD}\"Generate Token\"${NC} and select your workspace"
-    echo -e "  ${CYAN}4.${NC} Copy the ${BOLD}Access Token${NC} (starts with xoxe.xox...)"
+    echo -e "  ${CYAN}2.${NC} Scroll to the ${BOLD}bottom${NC} of the page (below your apps list)"
+    echo -e "  ${CYAN}3.${NC} Find ${BOLD}\"Your App Configuration Tokens\"${NC} section"
+    echo -e "  ${CYAN}4.${NC} Click ${BOLD}\"Generate Token\"${NC}"
+    echo -e "  ${CYAN}5.${NC} Select your ${BOLD}workspace${NC} from the dropdown"
+    echo -e "  ${CYAN}6.${NC} Click ${BOLD}\"Generate\"${NC}"
+    echo ""
+    echo -e "  ${DIM}(This adds \"Slack Tooling Tokens Vendor\" app to your workspace)${NC}"
+    echo ""
+    echo -e "  ${CYAN}7.${NC} Copy the ${BOLD}Access Token${NC} (starts with xoxe-...)"
     echo ""
     echo -ne "  ${YELLOW}?${NC} Paste the Access Token: "
     read -r SLACK_ACCESS_TOKEN
@@ -452,7 +458,7 @@ cmd_setup() {
     fi
 
     echo ""
-    echo -e "  ${CYAN}5.${NC} Now copy the ${BOLD}Refresh Token${NC} (shown below the access token)"
+    echo -e "  ${CYAN}8.${NC} Copy the ${BOLD}Refresh Token${NC} (shown below the access token)"
     echo ""
     echo -ne "  ${YELLOW}?${NC} Paste the Refresh Token: "
     read -r SLACK_REFRESH_TOKEN

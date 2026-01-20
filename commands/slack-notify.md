@@ -2,7 +2,22 @@ Enable Slack notifications for this Claude session with a unique instance name.
 
 **Note**: If the user ran `install.sh`, the webhook URL and Claude hooks are typically already configured. This command just registers the current session.
 
-When the user runs this command:
+## Subcommands
+
+- `/slack-notify` - Register the current session (default)
+- `/slack-notify stop` - Stop the tunnel and MCP server
+
+## Stop Command
+
+If the user runs `/slack-notify stop`, stop the tunnel:
+```bash
+~/.claude/bin/claude-slack-notify stop
+```
+This stops the cloudflared tunnel and MCP server. Confirm that services were stopped.
+
+## Register Command (default)
+
+When the user runs `/slack-notify` (with no arguments or a custom name):
 
 1. **Check webhook configuration**: If ~/.claude/slack-webhook-url doesn't exist, ask for their Slack webhook URL and save it. (Usually already set by installer)
 

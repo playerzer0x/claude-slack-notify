@@ -683,6 +683,21 @@ if [[ "$1" == "list" ]]; then
 fi
 
 # -----------------------------------------------------------------------------
+# Stop - stop the tunnel and MCP server
+# Usage: claude-slack-notify stop
+# -----------------------------------------------------------------------------
+if [[ "$1" == "stop" ]]; then
+    SLACK_TUNNEL="${CLAUDE_DIR}/bin/slack-tunnel"
+    if [[ -x "$SLACK_TUNNEL" ]]; then
+        "$SLACK_TUNNEL" --stop
+    else
+        echo "slack-tunnel not found at $SLACK_TUNNEL" >&2
+        exit 1
+    fi
+    exit 0
+fi
+
+# -----------------------------------------------------------------------------
 # Start timing
 # Usage: claude-slack-notify start
 # -----------------------------------------------------------------------------

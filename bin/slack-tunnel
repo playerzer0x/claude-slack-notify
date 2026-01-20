@@ -96,6 +96,77 @@ check_mcp_server() {
     return 1
 }
 
+# Find the MCP server source directory
+find_mcp_source_dir() {
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+    # Check if bin/mcp-server is a symlink pointing to repo
+    if [[ -L "$CLAUDE_DIR/bin/mcp-server" ]]; then
+        local target
+        target="$(readlink "$CLAUDE_DIR/bin/mcp-server")"
+        local repo_dir
+        repo_dir="$(dirname "$target")/.."
+        if [[ -d "$repo_dir/mcp-server/src" ]]; then
+            echo "$repo_dir/mcp-server"
+            return 0
+        fi
+    fi
+
+    # Check relative to this script (development mode)
+    if [[ -d "$script_dir/../mcp-server/src" ]]; then
+        echo "$script_dir/../mcp-server"
+        return 0
+    fi
+
+    return 1
+}
+
+# Check if source is newer than dist and rebuild if needed
+rebuild_if_needed() {
+    local mcp_source_dir
+    if ! mcp_source_dir=$(find_mcp_source_dir); then
+        # No source directory found, skip rebuild
+        return 0
+    fi
+
+    local src_dir="$mcp_source_dir/src"
+    local dist_dir="$mcp_source_dir/dist"
+    local installed_dist="$CLAUDE_DIR/mcp-server-dist/dist"
+
+    # Find newest source file
+    local newest_src
+    newest_src=$(find "$src_dir" -name "*.ts" -type f -exec stat -f "%m %N" {} \; 2>/dev/null | sort -rn | head -1 | cut -d' ' -f1)
+
+    # Find oldest dist file (if dist exists)
+    local oldest_dist=0
+    if [[ -d "$dist_dir" ]]; then
+        oldest_dist=$(find "$dist_dir" -name "*.js" -type f -exec stat -f "%m %N" {} \; 2>/dev/null | sort -n | head -1 | cut -d' ' -f1)
+    fi
+
+    # Rebuild if source is newer than dist
+    if [[ -n "$newest_src" ]] && [[ "$newest_src" -gt "$oldest_dist" ]]; then
+        echo_info "Source files changed, rebuilding MCP server..."
+        (
+            cd "$mcp_source_dir"
+            if command -v bun &>/dev/null; then
+                bun run build
+            elif command -v npm &>/dev/null; then
+                npm run build
+            else
+                echo_warn "No build tool found (bun/npm), skipping rebuild"
+                return 0
+            fi
+        )
+
+        # Copy to installed location if it exists
+        if [[ -d "$installed_dist" ]]; then
+            cp -r "$dist_dir"/* "$installed_dist"/
+            echo_info "Updated installed MCP server"
+        fi
+    fi
+}
+
 # Start MCP server
 start_mcp_server() {
     if [[ ! -x "$MCP_SERVER" ]]; then
@@ -122,13 +193,20 @@ start_mcp_server() {
     exit 1
 }
 
-# Cleanup on exit
+# Cleanup on exit - kill both ngrok and MCP server
 cleanup() {
+    echo ""
+    echo_info "Shutting down..."
     if [[ -n "${NGROK_PID:-}" ]]; then
         kill "$NGROK_PID" 2>/dev/null || true
     fi
+    if [[ -n "${MCP_PID:-}" ]]; then
+        kill "$MCP_PID" 2>/dev/null || true
+        rm -f "$CLAUDE_DIR/.mcp-server.pid"
+        echo_info "MCP server stopped"
+    fi
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 # Main
 main() {
@@ -145,14 +223,22 @@ main() {
     # Step 2: Check auth
     setup_ngrok_auth
 
-    # Step 3: Check MCP server
-    if ! check_mcp_server; then
-        start_mcp_server
-    else
-        echo_info "MCP server already running on port $MCP_PORT"
-    fi
+    # Step 3: Rebuild MCP server if source changed
+    rebuild_if_needed
 
-    # Step 4: Start ngrok
+    # Step 4: Kill existing MCP server and start fresh (ensures new code is used)
+    if check_mcp_server; then
+        echo_info "Stopping existing MCP server..."
+        local old_pid
+        old_pid=$(cat "$CLAUDE_DIR/.mcp-server.pid" 2>/dev/null)
+        if [[ -n "$old_pid" ]]; then
+            kill "$old_pid" 2>/dev/null || true
+            sleep 1
+        fi
+    fi
+    start_mcp_server
+
+    # Step 5: Start ngrok
     echo_info "Starting ngrok tunnel..."
     echo ""
 

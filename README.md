@@ -57,6 +57,8 @@ slack-tunnel
 
 This creates a Cloudflare tunnel and auto-updates your Slack app's Request URL.
 
+> **Note**: The tunnel automatically terminates after 1 hour of inactivity to conserve resources. It restarts automatically when you run `/slack-notify`.
+
 ### 4. Start Using
 
 In Claude Code, run:
@@ -130,12 +132,25 @@ Format: `LABEL|ACTION` per line. Reconfigure with `./install.sh --configure`.
 
 ## Commands
 
+### Claude Code
+
+```
+/slack-notify           # Register session and start tunnel
+/slack-notify MyProject # Register with custom name
+/slack-notify stop      # Stop the tunnel and MCP server
+```
+
+### Terminal
+
 ```bash
 ./install.sh              # Install
 ./install.sh --uninstall  # Uninstall completely
 ./install.sh --configure  # Reconfigure buttons
 ./install.sh --link       # Install with symlinks (development)
-slack-tunnel              # Start ngrok tunnel for mobile support
+slack-tunnel              # Start tunnel (foreground)
+slack-tunnel --background # Start tunnel (background)
+slack-tunnel --stop       # Stop tunnel
+slack-tunnel --status     # Check tunnel status
 ```
 
 ## Debugging

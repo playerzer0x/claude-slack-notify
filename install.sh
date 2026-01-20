@@ -99,10 +99,12 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     # Stop and remove LaunchAgent
     launchctl unload "$LAUNCHAGENT_PATH" 2>/dev/null || true
     rm -f "$LAUNCHAGENT_PATH"
+    echo_info "Removed LaunchAgent"
 
     # Remove ClaudeFocus.app
     rm -rf "$APP_PATH"
     /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$APP_PATH" 2>/dev/null || true
+    echo_info "Removed ClaudeFocus.app"
 
     # Remove scripts
     rm -f "$BIN_DIR/claude-slack-notify"
@@ -113,9 +115,57 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     rm -f "$BIN_DIR/mcp-server"
     rm -f "$BIN_DIR/slack-tunnel"
     rm -f "$COMMANDS_DIR/slack-notify.md"
+    echo_info "Removed scripts from ~/.claude/bin/"
 
-    echo_info "Uninstalled successfully"
-    echo_warn "Note: ~/.claude/slack-webhook-url and ~/.claude/instances/ were preserved"
+    # Remove MCP server runtime files
+    rm -f "$CLAUDE_DIR/.mcp-server.port"
+    rm -f "$CLAUDE_DIR/.mcp-server.pid"
+    rm -f "$CLAUDE_DIR/mcp-server.log"
+    rm -f "$CLAUDE_DIR/focus-request"
+
+    # Remove configuration files
+    rm -f "$CLAUDE_DIR/slack-webhook-url"
+    rm -f "$CLAUDE_DIR/button-config"
+    rm -rf "$CLAUDE_DIR/instances/"
+    rm -f "$CLAUDE_DIR/settings.json.backup"
+    echo_info "Removed configuration files"
+
+    # Remove MCP server and hooks from settings.json
+    SETTINGS_FILE="$CLAUDE_DIR/settings.json"
+    if [[ -f "$SETTINGS_FILE" ]] && command -v jq &> /dev/null; then
+        # Check if slack-notify MCP server exists
+        if jq -e '.mcpServers["slack-notify"]' "$SETTINGS_FILE" &>/dev/null 2>&1; then
+            jq 'del(.mcpServers["slack-notify"])' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
+            echo_info "Removed slack-notify from mcpServers"
+        fi
+
+        # Check if hooks contain slack-notify references and remove them
+        if grep -q "slack-notify" "$SETTINGS_FILE" 2>/dev/null; then
+            # Remove hook entries that reference slack-notify scripts
+            # Structure: .hooks.EventName[] = {hooks: [{command: "..."}], matcher?: "..."}
+            jq '
+              if .hooks then
+                .hooks |= (
+                  with_entries(
+                    .value |= if type == "array" then
+                      map(select(
+                        (.hooks // []) | all(.command | test("slack-notify") | not)
+                      ))
+                    else . end
+                  ) |
+                  with_entries(select(.value | (type != "array") or (length > 0)))
+                )
+              else . end |
+              if .hooks == {} then del(.hooks) else . end
+            ' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
+            echo_info "Removed slack-notify hooks from settings.json"
+        fi
+    elif [[ -f "$SETTINGS_FILE" ]]; then
+        echo_warn "jq not found - manually remove 'slack-notify' entries from ~/.claude/settings.json"
+    fi
+
+    echo ""
+    echo_info "Uninstall complete!"
     exit 0
 fi
 

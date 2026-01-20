@@ -354,6 +354,11 @@ start_tunnel_and_get_url() {
         exit 1
     fi
 
+    # Kill any existing cloudflared tunnels to prevent accumulation
+    pkill -f "cloudflared tunnel.*localhost:${MCP_PORT}" 2>/dev/null || true
+    rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE"
+    sleep 0.5
+
     echo_info "Starting Cloudflare Quick Tunnel..."
 
     # Start cloudflared and capture output to get URL
@@ -525,16 +530,24 @@ cmd_background() {
         exit 1
     fi
 
-    # Check if already running
-    if [[ -f "$TUNNEL_PID_FILE" ]]; then
+    # Check if already running (and there's only ONE tunnel)
+    local tunnel_count
+    tunnel_count=$(pgrep -f "cloudflared tunnel.*localhost:${MCP_PORT}" 2>/dev/null | wc -l | tr -d ' ')
+
+    if [[ -f "$TUNNEL_PID_FILE" ]] && [[ "$tunnel_count" -eq 1 ]]; then
         local existing_pid
         existing_pid=$(cat "$TUNNEL_PID_FILE")
         if kill -0 "$existing_pid" 2>/dev/null; then
             echo_info "Tunnel already running (PID: $existing_pid)"
             return 0
         fi
-        rm -f "$TUNNEL_PID_FILE"
     fi
+
+    # Clean up stale state (multiple tunnels or orphaned PID file)
+    if [[ "$tunnel_count" -gt 0 ]]; then
+        echo_info "Cleaning up stale tunnel processes..."
+    fi
+    rm -f "$TUNNEL_PID_FILE"
 
     # Rebuild MCP server if needed
     rebuild_if_needed
@@ -574,16 +587,33 @@ cmd_stop() {
         stopped=true
     fi
 
+    # Kill the tunnel from PID file
     if [[ -f "$TUNNEL_PID_FILE" ]]; then
         local pid
         pid=$(cat "$TUNNEL_PID_FILE")
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
             kill "$pid" 2>/dev/null || true
-            echo_info "Tunnel stopped"
             stopped=true
         fi
         rm -f "$TUNNEL_PID_FILE"
     fi
+
+    # Kill ANY remaining cloudflared tunnel processes (cleanup stale tunnels)
+    local stale_count=0
+    while IFS= read -r pid; do
+        if [[ -n "$pid" ]]; then
+            kill "$pid" 2>/dev/null || true
+            ((stale_count++)) || true
+        fi
+    done < <(pgrep -f "cloudflared tunnel.*localhost:${MCP_PORT:-8463}" 2>/dev/null || true)
+
+    if [[ "$stale_count" -gt 0 || "$stopped" == "true" ]]; then
+        echo_info "Tunnel stopped"
+        stopped=true
+    fi
+
+    # Remove tunnel URL file
+    rm -f "$TUNNEL_URL_FILE"
 
     if [[ -f "$CLAUDE_DIR/.mcp-server.pid" ]]; then
         stop_mcp_server

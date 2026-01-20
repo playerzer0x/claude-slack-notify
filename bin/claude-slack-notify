@@ -763,6 +763,43 @@ if [[ "$1" == "check" ]]; then
                         fi
                     fi
                 done)
+
+                # For Notification events, extract tool request details from transcript
+                # This provides more context than the generic "needs permission" message
+                if [[ "$HOOK_EVENT" == "Notification" ]]; then
+                    TOOL_REQUEST=$(tac "$TRANSCRIPT_PATH" 2>/dev/null | while read -r line; do
+                        MSG_TYPE=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
+                        if [[ "$MSG_TYPE" == "assistant" ]]; then
+                            # Look for tool_use blocks in the message content
+                            TOOL_INFO=$(echo "$line" | jq -r '
+                                if .message.content then
+                                    [.message.content[] | select(.type == "tool_use") |
+                                        {name: .name, desc: .input.description}] | first |
+                                        if . then
+                                            if .desc and .desc != "" then
+                                                "Claude wants to \(.desc)"
+                                            else
+                                                "Claude wants to use \(.name)"
+                                            end
+                                        else
+                                            empty
+                                        end
+                                else
+                                    empty
+                                end
+                            ' 2>/dev/null)
+                            if [[ -n "$TOOL_INFO" ]]; then
+                                echo "$TOOL_INFO"
+                                break
+                            fi
+                        fi
+                    done)
+
+                    # Replace generic notification with detailed tool request if available
+                    if [[ -n "$TOOL_REQUEST" ]]; then
+                        NOTIF_MSG="$TOOL_REQUEST"
+                    fi
+                fi
             fi
         fi
     fi

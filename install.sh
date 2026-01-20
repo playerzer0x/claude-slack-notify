@@ -120,6 +120,15 @@ fi
 
 echo_info "Installing Claude Slack Notify..."
 
+# Check for optional jq dependency
+if ! command -v jq &> /dev/null; then
+    echo_warn "jq not found - notifications will work but without transcript context"
+    echo_warn "Install jq for richer notifications:"
+    echo_warn "  macOS:  brew install jq"
+    echo_warn "  Ubuntu: sudo apt install jq"
+    echo_warn "  Fedora: sudo dnf install jq"
+fi
+
 # Create directories
 mkdir -p "$BIN_DIR" "$COMMANDS_DIR" "$APP_DIR" "$HOME/Library/LaunchAgents"
 
@@ -171,6 +180,18 @@ fi
 
 # macOS-specific: Install ClaudeFocus.app and LaunchAgent
 if [[ "$(uname)" == "Darwin" ]]; then
+    print_section "macOS Focus Button Setup"
+    echo ""
+    echo -e "  ${DIM}Installing ClaudeFocus.app to enable the 'Focus Terminal' button in Slack.${NC}"
+    echo -e "  ${DIM}This app handles claude-focus:// URLs to switch to your terminal.${NC}"
+    echo ""
+    echo -e "  ${YELLOW}Note:${NC} macOS may prompt you to grant permissions:"
+    echo -e "    ${CYAN}•${NC} ${BOLD}Accessibility${NC} - to focus terminal windows"
+    echo -e "    ${CYAN}•${NC} ${BOLD}Automation${NC} - to control iTerm2/Terminal.app"
+    echo ""
+    echo -e "  ${DIM}These are safe to approve - the app only switches window focus.${NC}"
+    echo ""
+
     # Create LaunchAgent that watches for focus requests
     # Uses ~/.claude/focus-request (user-owned, not world-writable /tmp)
     cat > "$LAUNCHAGENT_PATH" << 'EOF'
@@ -404,16 +425,55 @@ if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
 fi
 echo ""
 
+WEBHOOK_FILE="$CLAUDE_DIR/slack-webhook-url"
+
+if [[ -f "$WEBHOOK_FILE" ]]; then
+    print_section "Webhook Configuration"
+    echo ""
+    echo -e "  ${GREEN}✓${NC} Webhook URL already configured at ${BOLD}~/.claude/slack-webhook-url${NC}"
+    echo ""
+else
+    print_section "Slack Webhook Setup"
+    echo ""
+    echo -e "  ${DIM}To receive notifications, you need a Slack webhook URL.${NC}"
+    echo ""
+    echo -e "  ${BOLD}Quick setup:${NC}"
+    echo -e "    1. Go to ${CYAN}https://api.slack.com/apps${NC}"
+    echo -e "    2. Create New App → From scratch"
+    echo -e "    3. Enable Incoming Webhooks"
+    echo -e "    4. Add New Webhook to Workspace"
+    echo -e "    5. Copy the webhook URL"
+    echo ""
+
+    if [[ -t 0 ]]; then
+        echo -e "  ${YELLOW}?${NC} Paste your Slack webhook URL (or press Enter to skip): "
+        read -r webhook_url
+
+        if [[ -n "$webhook_url" ]]; then
+            if [[ "$webhook_url" =~ ^https://hooks\.slack\.com/ ]]; then
+                echo "$webhook_url" > "$WEBHOOK_FILE"
+                chmod 600 "$WEBHOOK_FILE"
+                echo_info "Webhook URL saved to ~/.claude/slack-webhook-url"
+            else
+                echo_warn "URL doesn't look like a Slack webhook (should start with https://hooks.slack.com/)"
+                echo_warn "Saving anyway - you can edit ~/.claude/slack-webhook-url later"
+                echo "$webhook_url" > "$WEBHOOK_FILE"
+                chmod 600 "$WEBHOOK_FILE"
+            fi
+        else
+            echo_warn "Skipped - run this later to set up:"
+            echo_warn "  echo 'YOUR_URL' > ~/.claude/slack-webhook-url"
+        fi
+    else
+        echo -e "  ${DIM}(Non-interactive mode - skipping webhook prompt)${NC}"
+        echo -e "  ${DIM}Run: echo 'YOUR_URL' > ~/.claude/slack-webhook-url${NC}"
+    fi
+    echo ""
+fi
+
 print_section "Next Steps"
 echo ""
-echo -e "  ${CYAN}1.${NC} Get a Slack webhook URL:"
-echo -e "     ${DIM}https://api.slack.com/apps${NC}"
-echo ""
-echo -e "  ${CYAN}2.${NC} Save the webhook URL:"
-echo -e "     ${DIM}echo 'YOUR_URL' > ~/.claude/slack-webhook-url${NC}"
-echo ""
-echo -e "  ${CYAN}3.${NC} In Claude, run:"
-echo -e "     ${BOLD}/slack-notify${NC}"
+echo -e "  ${CYAN}•${NC} In Claude, run: ${BOLD}/slack-notify${NC}"
 echo ""
 echo -e "  ${DIM}The Focus button will switch to the correct terminal tab.${NC}"
 echo -e "  ${DIM}Run ${BOLD}./install.sh --configure${NC}${DIM} to change button layout.${NC}"

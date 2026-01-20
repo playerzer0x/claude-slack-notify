@@ -267,9 +267,9 @@ send_ssh_tmux_input() {
 # Usage: switch_iterm_session <property> <value>
 # property: "tty" or "id"
 #
-# Uses window ID (stable integer) for verification instead of window name.
-# Key insight: After `select w`, the target becomes `first window` in System Events.
-# Includes retry loop with increasing delays for reliability.
+# Handles multi-monitor setups with fullscreen windows in different Spaces.
+# Uses window ID (stable integer) for verification.
+# Detects fullscreen state and applies appropriate delays for Space switching.
 switch_iterm_session() {
     local property="$1"
     local target="$2"
@@ -278,12 +278,15 @@ switch_iterm_session() {
     local result
     result=$(osascript << APPLESCRIPT 2>&1
 tell application "iTerm2"
-    -- Phase 1: Find target session and get window ID for verification
+    -- Phase 1: Find target session and get window info for verification
     set targetWindowId to 0
     set targetTabIndex to 0
     set targetWindow to missing value
+    set targetWindowIndex to 0
 
+    set winIndex to 0
     repeat with w in windows
+        set winIndex to winIndex + 1
         set tabIndex to 0
         repeat with t in tabs of w
             set tabIndex to tabIndex + 1
@@ -292,6 +295,7 @@ tell application "iTerm2"
                     set targetWindowId to id of w
                     set targetTabIndex to tabIndex
                     set targetWindow to w
+                    set targetWindowIndex to winIndex
                     exit repeat
                 end if
             end repeat
@@ -304,55 +308,91 @@ tell application "iTerm2"
         return "$property $target not found"
     end if
 
-    -- Phase 2: Focus sequence with retry loop (up to 3 attempts)
+    -- Check if target window is in fullscreen (requires different handling)
+    set isFullscreen to false
+    try
+        tell application "System Events"
+            tell process "iTerm2"
+                -- Find the window by matching position in window list
+                set winCount to count of windows
+                if targetWindowIndex ≤ winCount then
+                    set isFullscreen to value of attribute "AXFullScreen" of window targetWindowIndex
+                end if
+            end tell
+        end tell
+    on error
+        -- Can't determine fullscreen state, assume normal
+        set isFullscreen to false
+    end try
+
+    -- Phase 2: Focus sequence with retry loop (up to 4 attempts for fullscreen)
     set maxAttempts to 3
+    if isFullscreen then set maxAttempts to 4
     set attemptNum to 0
     set focusSuccess to false
+    set baseDelay to 0.15
+    if isFullscreen then set baseDelay to 0.3
 
     repeat while attemptNum < maxAttempts and not focusSuccess
         set attemptNum to attemptNum + 1
 
-        -- Select the tab within the window
+        -- Step 1: Select the tab within the window
         tell targetWindow to select tab targetTabIndex
 
-        -- Make this the key window in iTerm2
+        -- Step 2: Make this window front in iTerm2's window ordering
+        -- This is crucial for multi-window scenarios
+        set index of targetWindow to 1
+
+        -- Step 3: Select window to give it keyboard focus
         select targetWindow
 
-        -- Delay 150ms for select to take effect
-        delay 0.15
+        -- Delay for iTerm2 to process (longer for fullscreen/Space switching)
+        delay baseDelay
 
-        -- Activate iTerm2
+        -- Step 4: Activate iTerm2 - this triggers Space switch if needed
         activate
 
-        -- Delay 100ms for activate
-        delay 0.1
+        -- Longer delay for Space switching animation
+        if isFullscreen or attemptNum > 1 then
+            delay 0.4
+        else
+            delay 0.15
+        end if
 
-        -- Use System Events to raise the window
-        -- After select, target window becomes first window in iTerm2
+        -- Step 5: Use System Events to ensure window is raised
         tell application "System Events"
             tell process "iTerm2"
                 set frontmost to true
+                delay 0.05
                 try
+                    -- After setting index to 1, target should be first window
                     perform action "AXRaise" of first window
-                on error errMsg
-                    -- Log but continue - AXRaise can fail silently
+                on error
+                    -- AXRaise failed, try setting frontmost again
+                    set frontmost to true
                 end try
             end tell
         end tell
 
-        -- Delay 100ms for AXRaise
+        -- Delay for AXRaise
         delay 0.1
 
-        -- Phase 3: Verify the correct window is focused by checking ID
+        -- Phase 3: Verify the correct window is focused
         try
             set frontWindowId to id of first window
             if frontWindowId is equal to targetWindowId then
                 set focusSuccess to true
             else
-                -- Wrong window focused, wait longer before retry
-                delay (0.2 * attemptNum)
+                -- Wrong window focused
+                -- On retry, try more aggressive approach
+                if attemptNum < maxAttempts then
+                    delay (0.3 * attemptNum)
+                    -- Try activating again - sometimes helps with Space switching
+                    activate
+                    delay 0.2
+                end if
             end if
-        on error
+        on error errMsg
             -- Could not verify, assume success on last attempt
             if attemptNum is maxAttempts then
                 set focusSuccess to true
@@ -360,10 +400,40 @@ tell application "iTerm2"
         end try
     end repeat
 
+    -- Final aggressive attempt if still not focused
+    if not focusSuccess then
+        -- One more try with maximum delays
+        set index of targetWindow to 1
+        select targetWindow
+        delay 0.5
+        activate
+        delay 0.5
+        tell application "System Events"
+            tell process "iTerm2"
+                set frontmost to true
+                delay 0.1
+                try
+                    perform action "AXRaise" of first window
+                end try
+            end tell
+        end tell
+        -- Check one more time
+        try
+            set frontWindowId to id of first window
+            if frontWindowId is equal to targetWindowId then
+                set focusSuccess to true
+            end if
+        end try
+    end if
+
     if focusSuccess then
-        return "SUCCESS: Focused window id " & targetWindowId & " tab " & targetTabIndex & " for $property $target"
+        if isFullscreen then
+            return "SUCCESS: Focused fullscreen window id " & targetWindowId & " tab " & targetTabIndex & " for $property $target"
+        else
+            return "SUCCESS: Focused window id " & targetWindowId & " tab " & targetTabIndex & " for $property $target"
+        end if
     else
-        return "FOCUS_FAILED: Requested window id " & targetWindowId & " but could not verify focus after " & maxAttempts & " attempts"
+        return "FOCUS_FAILED: Requested window id " & targetWindowId & " (fullscreen=" & isFullscreen & ") but front window has different id after " & maxAttempts & " attempts"
     end if
 end tell
 APPLESCRIPT

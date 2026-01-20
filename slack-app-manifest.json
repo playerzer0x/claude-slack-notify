@@ -1,0 +1,30 @@
+{
+  "_metadata": {
+    "major_version": 1,
+    "minor_version": 1
+  },
+  "display_information": {
+    "name": "Claude Notifier",
+    "description": "Get notifications when Claude Code needs your attention",
+    "background_color": "#4A154B",
+    "long_description": "Receive Slack notifications when Claude Code (Anthropic's AI coding assistant) is waiting for your input. Includes clickable buttons to focus the correct terminal tab and send quick responses."
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Claude Notifier",
+      "always_online": false
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "incoming-webhook"
+      ]
+    }
+  },
+  "settings": {
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

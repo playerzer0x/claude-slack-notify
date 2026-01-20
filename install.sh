@@ -383,11 +383,67 @@ elif [[ ! -f "$BUTTON_CONFIG" ]]; then
 fi
 
 # =============================================================================
-# Setup hooks if settings.json exists
+# Setup hooks in settings.json
 # =============================================================================
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
+
+# Our hooks to add
+SLACK_HOOKS='{
+  "hooks": {
+    "UserPromptSubmit": [
+      {"hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-start", "timeout": 5}]}
+    ],
+    "Stop": [
+      {"hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10}]}
+    ],
+    "Notification": [
+      {"matcher": "idle_prompt", "hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10}]},
+      {"matcher": "elicitation_dialog", "hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10}]},
+      {"matcher": "permission_prompt", "hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10}]}
+    ]
+  }
+}'
+
 if [[ -f "$SETTINGS_FILE" ]]; then
-    if ! grep -q "claude-slack-notify" "$SETTINGS_FILE" 2>/dev/null; then
+    if grep -q "slack-notify" "$SETTINGS_FILE" 2>/dev/null; then
+        # Already configured
+        :
+    elif command -v jq &> /dev/null; then
+        # Auto-merge using jq
+        print_section "Claude Hooks"
+        echo -e "  ${DIM}Adding notification hooks to $SETTINGS_FILE${NC}"
+        echo ""
+
+        # Create backup
+        cp "$SETTINGS_FILE" "$SETTINGS_FILE.backup"
+
+        # Deep merge: combine hooks arrays instead of replacing
+        MERGED=$(jq -s '
+          def merge_hooks:
+            reduce .[] as $item ({};
+              . as $acc |
+              $item | to_entries | reduce .[] as $e ($acc;
+                if .[$e.key] then
+                  .[$e.key] += $e.value
+                else
+                  .[$e.key] = $e.value
+                end
+              )
+            );
+          .[0] * {hooks: ([.[0].hooks // {}, .[1].hooks] | merge_hooks)}
+        ' "$SETTINGS_FILE" <(echo "$SLACK_HOOKS") 2>/dev/null)
+
+        if [[ -n "$MERGED" ]] && echo "$MERGED" | jq . > /dev/null 2>&1; then
+            echo "$MERGED" > "$SETTINGS_FILE"
+            echo_info "Hooks added to settings.json (backup at settings.json.backup)"
+        else
+            echo_warn "Failed to merge hooks - restoring backup"
+            mv "$SETTINGS_FILE.backup" "$SETTINGS_FILE"
+            echo_warn "Add hooks manually (see below)"
+        fi
+        echo ""
+    else
+        # No jq - show manual instructions
         print_section "Claude Hooks"
         echo -e "  ${DIM}Add these hooks to $SETTINGS_FILE for automatic notifications:${NC}"
         echo ""
@@ -404,7 +460,7 @@ if [[ -f "$SETTINGS_FILE" ]]; then
         echo -e "      {\"matcher\": \"permission_prompt\", \"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-check\", \"timeout\": 10}]}"
         echo -e "    ]"
         echo -e "  }${NC}"
-        echo -e "  ${DIM}(Notification hooks handle plan mode, questions, and permission dialogs)${NC}"
+        echo -e "  ${DIM}(Install jq for automatic hook configuration: brew install jq)${NC}"
         echo ""
     fi
 fi

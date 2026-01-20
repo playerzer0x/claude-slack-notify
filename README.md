@@ -2,7 +2,7 @@
 
 Slack notifications for Claude Code with clickable buttons to focus terminals and send commands.
 
-Designed for orchestrating multiple AI agents: get notified when attention is needed, click to jump to the right terminal, and send commands without context switching.
+**Keep using Claude in your preferred terminal.** This adds Slack notifications so you can step away while Claude works - get pinged when it needs input, click to jump back, or respond directly from Slack (even on mobile).
 
 ## Features
 

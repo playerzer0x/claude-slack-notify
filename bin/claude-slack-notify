@@ -811,6 +811,21 @@ if [[ -f "$INSTANCE_FILE" ]]; then
             TERM_TYPE=$(grep -o '"term_type": *"[^"]*"' "$INSTANCE_FILE" | cut -d'"' -f4)
             TERM_TARGET=$(grep -o '"term_target": *"[^"]*"' "$INSTANCE_FILE" | cut -d'"' -f4)
             FOCUS_URL="$STORED_FOCUS_URL"
+
+            # For linked sessions, update the tmux target dynamically (user may have switched windows)
+            if [[ "$TERM_TYPE" == "ssh-linked" || "$TERM_TYPE" == "jupyter-tmux" ]] && [[ -n "$TMUX" ]]; then
+                local current_session current_window current_pane new_tmux_target
+                current_session=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+                current_window=$(tmux display-message -p '#{window_index}' 2>/dev/null)
+                current_pane=$(tmux display-message -p '#{pane_index}' 2>/dev/null)
+                new_tmux_target="${current_session}:${current_window}.${current_pane}"
+
+                # Update FOCUS_URL with current tmux target (replace last path segment)
+                # Format: claude-focus://ssh-linked/LINK_ID/HOST/USER/PORT/TMUX_TARGET
+                FOCUS_URL=$(echo "$FOCUS_URL" | sed "s|/[^/]*$|/$(url_encode "$new_tmux_target")|")
+                # Also update TERM_TARGET (last field after |)
+                TERM_TARGET=$(echo "$TERM_TARGET" | sed "s|[^|]*$|$new_tmux_target|")
+            fi
         fi
     fi
 fi
@@ -853,8 +868,13 @@ SAFE_FOCUS_URL=$(json_escape "$FOCUS_URL")
 BUTTON_BLOCK=""
 if [[ -n "$FOCUS_URL" ]]; then
     # Check if MCP server is running for hybrid button support
+    # For linked sessions (ssh-linked, jupyter-tmux), assume MCP server is on the local machine
+    # which we can't reach from here - use interactive buttons (they'll route through ngrok)
     MCP_SERVER_RUNNING=""
-    if is_mcp_server_running; then
+    if [[ "$TERM_TYPE" == "ssh-linked" || "$TERM_TYPE" == "jupyter-tmux" ]]; then
+        # Linked session: MCP server is on local machine, use interactive buttons
+        MCP_SERVER_RUNNING="1"
+    elif is_mcp_server_running; then
         MCP_SERVER_RUNNING="1"
     fi
 

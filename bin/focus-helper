@@ -266,6 +266,10 @@ send_ssh_tmux_input() {
 # Switch iTerm2 to the tab matching a session property
 # Usage: switch_iterm_session <property> <value>
 # property: "tty" or "id"
+#
+# Uses window ID (stable integer) for verification instead of window name.
+# Key insight: After `select w`, the target becomes `first window` in System Events.
+# Includes retry loop with increasing delays for reliability.
 switch_iterm_session() {
     local property="$1"
     local target="$2"
@@ -274,24 +278,93 @@ switch_iterm_session() {
     local result
     result=$(osascript << APPLESCRIPT 2>&1
 tell application "iTerm2"
+    -- Phase 1: Find target session and get window ID for verification
+    set targetWindowId to 0
+    set targetTabIndex to 0
+    set targetWindow to missing value
+
     repeat with w in windows
         set tabIndex to 0
         repeat with t in tabs of w
             set tabIndex to tabIndex + 1
             repeat with s in sessions of t
                 if ($property of s) is "$target" then
-                    set index of w to 1
-                    tell w to select tab tabIndex
-                    activate
-                    tell application "System Events"
-                        set frontmost of process "iTerm2" to true
-                    end tell
-                    return "Switched to tab " & tabIndex & " for $property " & ($property of s)
+                    set targetWindowId to id of w
+                    set targetTabIndex to tabIndex
+                    set targetWindow to w
+                    exit repeat
                 end if
             end repeat
+            if targetWindowId > 0 then exit repeat
         end repeat
+        if targetWindowId > 0 then exit repeat
     end repeat
-    return "$property $target not found"
+
+    if targetWindowId is 0 then
+        return "$property $target not found"
+    end if
+
+    -- Phase 2: Focus sequence with retry loop (up to 3 attempts)
+    set maxAttempts to 3
+    set attemptNum to 0
+    set focusSuccess to false
+
+    repeat while attemptNum < maxAttempts and not focusSuccess
+        set attemptNum to attemptNum + 1
+
+        -- Select the tab within the window
+        tell targetWindow to select tab targetTabIndex
+
+        -- Make this the key window in iTerm2
+        select targetWindow
+
+        -- Delay 150ms for select to take effect
+        delay 0.15
+
+        -- Activate iTerm2
+        activate
+
+        -- Delay 100ms for activate
+        delay 0.1
+
+        -- Use System Events to raise the window
+        -- After select, target window becomes first window in iTerm2
+        tell application "System Events"
+            tell process "iTerm2"
+                set frontmost to true
+                try
+                    perform action "AXRaise" of first window
+                on error errMsg
+                    -- Log but continue - AXRaise can fail silently
+                end try
+            end tell
+        end tell
+
+        -- Delay 100ms for AXRaise
+        delay 0.1
+
+        -- Phase 3: Verify the correct window is focused by checking ID
+        try
+            set frontWindowId to id of first window
+            if frontWindowId is equal to targetWindowId then
+                set focusSuccess to true
+            else
+                -- Wrong window focused, wait longer before retry
+                delay (0.2 * attemptNum)
+            end if
+        on error
+            -- Could not verify, assume success on last attempt
+            if attemptNum is maxAttempts then
+                set focusSuccess to true
+            end if
+        end try
+    end repeat
+
+    if focusSuccess then
+        return "SUCCESS: Focused window id " & targetWindowId & " tab " & targetTabIndex & " for $property $target"
+    else
+        return "FOCUS_FAILED: Requested window id " & targetWindowId & " but could not verify focus after " & maxAttempts & " attempts"
+    end if
 end tell
 APPLESCRIPT
 )

@@ -111,6 +111,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     rm -f "$BIN_DIR/get-session-id"
     rm -f "$BIN_DIR/focus-helper"
     rm -f "$BIN_DIR/mcp-server"
+    rm -f "$BIN_DIR/slack-tunnel"
     rm -f "$COMMANDS_DIR/slack-notify.md"
 
     echo_info "Uninstalled successfully"
@@ -141,17 +142,19 @@ if [[ "${1:-}" == "--link" ]]; then
     ln -sf "$SCRIPT_DIR/bin/get-session-id" "$BIN_DIR/"
     ln -sf "$SCRIPT_DIR/bin/focus-helper" "$BIN_DIR/"
     ln -sf "$SCRIPT_DIR/bin/mcp-server" "$BIN_DIR/"
+    ln -sf "$SCRIPT_DIR/bin/slack-tunnel" "$BIN_DIR/"
     echo_info "Installed scripts to $BIN_DIR/ (symlinked to repo)"
 else
     # Remove existing files/symlinks first, then copy fresh
-    rm -f "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/get-session-id" "$BIN_DIR/focus-helper" "$BIN_DIR/mcp-server"
+    rm -f "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/get-session-id" "$BIN_DIR/focus-helper" "$BIN_DIR/mcp-server" "$BIN_DIR/slack-tunnel"
     cp "$SCRIPT_DIR/bin/claude-slack-notify" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/slack-notify-start" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/slack-notify-check" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/get-session-id" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/focus-helper" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/mcp-server" "$BIN_DIR/"
-    chmod +x "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/get-session-id" "$BIN_DIR/focus-helper" "$BIN_DIR/mcp-server"
+    cp "$SCRIPT_DIR/bin/slack-tunnel" "$BIN_DIR/"
+    chmod +x "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/get-session-id" "$BIN_DIR/focus-helper" "$BIN_DIR/mcp-server" "$BIN_DIR/slack-tunnel"
     echo_info "Installed scripts to $BIN_DIR/"
 fi
 
@@ -496,8 +499,8 @@ else
     echo -e "  ${BOLD}Quick setup:${NC}"
     echo -e "    1. Go to ${CYAN}https://api.slack.com/apps${NC}"
     echo -e "    2. Create New App → From scratch"
-    echo -e "    3. Enable Incoming Webhooks"
-    echo -e "    4. Add New Webhook to Workspace"
+    echo -e "    3. Click ${BOLD}Incoming Webhooks${NC} → Toggle ${BOLD}Activate Incoming Webhooks${NC} to On"
+    echo -e "    4. Click ${BOLD}Add New Webhook to Workspace${NC} → Select a channel → Click ${BOLD}Allow${NC}"
     echo -e "    5. Copy the webhook URL"
     echo ""
 
@@ -529,8 +532,95 @@ fi
 
 print_section "Next Steps"
 echo ""
-echo -e "  ${CYAN}•${NC} In Claude, run: ${BOLD}/slack-notify${NC}"
+echo -e "  ${CYAN}1.${NC} In Claude, run: ${BOLD}/slack-notify${NC}"
 echo ""
 echo -e "  ${DIM}The Focus button will switch to the correct terminal tab.${NC}"
 echo -e "  ${DIM}Run ${BOLD}./install.sh --configure${NC}${DIM} to change button layout.${NC}"
 echo ""
+
+# Show slack-tunnel info if MCP server was built
+if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
+    print_section "Slack Button Actions (Optional)"
+    echo ""
+    echo -e "  ${DIM}To respond to Claude directly from Slack (buttons like \"Continue\", \"1\", \"2\"):${NC}"
+    echo ""
+    echo -e "  ${CYAN}2.${NC} Run: ${BOLD}slack-tunnel${NC}"
+    echo -e "     ${DIM}This starts ngrok and displays a URL to add to your Slack app${NC}"
+    echo ""
+    echo -e "  ${CYAN}3.${NC} Configure your Slack app at ${BOLD}https://api.slack.com/apps${NC}:"
+    echo -e "     ${DIM}• Go to Interactivity & Shortcuts → Toggle Interactivity On${NC}"
+    echo -e "     ${DIM}• Paste the URL from slack-tunnel into Request URL${NC}"
+    echo -e "     ${DIM}• Click Save Changes${NC}"
+    echo ""
+    echo -e "  ${DIM}Note: Run slack-tunnel whenever you want Slack buttons to work${NC}"
+    echo ""
+fi
+
+# =============================================================================
+# Auto-configure MCP Server in settings.json
+# =============================================================================
+if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
+    MCP_CONFIGURED=false
+
+    if [[ -f "$SETTINGS_FILE" ]]; then
+        # Check if already configured
+        if jq -e '.mcpServers["slack-notify"]' "$SETTINGS_FILE" &>/dev/null 2>&1; then
+            MCP_CONFIGURED=true
+        elif command -v jq &> /dev/null; then
+            print_section "MCP Server Configuration"
+            echo -e "  ${DIM}Adding MCP server to settings.json for Slack button actions...${NC}"
+            echo ""
+
+            # Create backup if not already done
+            if [[ ! -f "$SETTINGS_FILE.backup" ]]; then
+                cp "$SETTINGS_FILE" "$SETTINGS_FILE.backup"
+            fi
+
+            # Add MCP server config
+            MCP_CONFIG="{\"mcpServers\": {\"slack-notify\": {\"type\": \"stdio\", \"command\": \"$HOME/.claude/bin/mcp-server\"}}}"
+
+            MERGED=$(jq ". * $MCP_CONFIG" "$SETTINGS_FILE" 2>/dev/null)
+
+            if [[ -n "$MERGED" ]] && echo "$MERGED" | jq . > /dev/null 2>&1; then
+                echo "$MERGED" > "$SETTINGS_FILE"
+                echo_info "MCP server added to settings.json"
+                MCP_CONFIGURED=true
+            else
+                echo_warn "Failed to add MCP config - add manually (see below)"
+            fi
+            echo ""
+        fi
+    else
+        # Create new settings.json with MCP config
+        if command -v jq &> /dev/null; then
+            print_section "MCP Server Configuration"
+            echo -e "  ${DIM}Creating settings.json with MCP server config...${NC}"
+            echo ""
+
+            echo "{\"mcpServers\": {\"slack-notify\": {\"type\": \"stdio\", \"command\": \"$HOME/.claude/bin/mcp-server\"}}}" | jq . > "$SETTINGS_FILE"
+            echo_info "Created settings.json with MCP server config"
+            MCP_CONFIGURED=true
+            echo ""
+        fi
+    fi
+
+    # Show manual instructions if auto-config failed
+    if [[ "$MCP_CONFIGURED" != "true" ]]; then
+        print_section "MCP Server Setup (Manual)"
+        echo ""
+        echo -e "  ${DIM}The MCP server enables Slack button actions (respond from Slack).${NC}"
+        echo -e "  ${DIM}Install jq for automatic configuration: brew install jq${NC}"
+        echo ""
+        echo -e "  Add to ${BOLD}~/.claude/settings.json${NC}:"
+        echo ""
+        echo -e "  ${CYAN}\"mcpServers\": {"
+        echo -e "    \"slack-notify\": {"
+        echo -e "      \"type\": \"stdio\","
+        echo -e "      \"command\": \"$HOME/.claude/bin/mcp-server\""
+        echo -e "    }"
+        echo -e "  }${NC}"
+        echo ""
+        echo -e "  Restart Claude Code for MCP to take effect"
+        echo ""
+    fi
+fi

@@ -1,0 +1,198 @@
+#!/bin/bash
+# =============================================================================
+# slack-tunnel - Start ngrok tunnel for Slack button actions
+#
+# This script:
+# 1. Installs ngrok if not present
+# 2. Configures ngrok auth token if needed
+# 3. Starts the MCP server if not running
+# 4. Creates an ngrok tunnel and displays the URL for Slack configuration
+# =============================================================================
+
+set -euo pipefail
+
+MCP_PORT=8463
+CLAUDE_DIR="$HOME/.claude"
+MCP_SERVER="$CLAUDE_DIR/bin/mcp-server"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+echo_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+echo_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+echo_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+# Check if ngrok is installed
+install_ngrok() {
+    echo_info "Installing ngrok..."
+
+    if [[ "$(uname)" == "Darwin" ]]; then
+        # macOS
+        if command -v brew &>/dev/null; then
+            brew install ngrok/ngrok/ngrok
+        else
+            echo_error "Homebrew not found. Install ngrok manually:"
+            echo "  https://ngrok.com/download"
+            exit 1
+        fi
+    elif [[ "$(uname)" == "Linux" ]]; then
+        # Linux - try apt first, then snap
+        if command -v apt-get &>/dev/null; then
+            curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
+            echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
+            sudo apt-get update && sudo apt-get install ngrok
+        elif command -v snap &>/dev/null; then
+            sudo snap install ngrok
+        else
+            echo_error "Could not install ngrok automatically. Install manually:"
+            echo "  https://ngrok.com/download"
+            exit 1
+        fi
+    else
+        echo_error "Unsupported OS. Install ngrok manually:"
+        echo "  https://ngrok.com/download"
+        exit 1
+    fi
+
+    echo_info "ngrok installed successfully"
+}
+
+# Check ngrok auth token
+setup_ngrok_auth() {
+    # Try to check if auth is configured
+    if ! ngrok config check &>/dev/null 2>&1; then
+        echo ""
+        echo -e "${YELLOW}╭────────────────────────────────────────────────────────────╮${NC}"
+        echo -e "${YELLOW}│${NC}  ${BOLD}ngrok requires a free auth token${NC}                          ${YELLOW}│${NC}"
+        echo -e "${YELLOW}╰────────────────────────────────────────────────────────────╯${NC}"
+        echo ""
+        echo -e "  ${CYAN}1.${NC} Sign up (free) at: ${BOLD}https://dashboard.ngrok.com/signup${NC}"
+        echo -e "  ${CYAN}2.${NC} Copy your authtoken from: ${BOLD}https://dashboard.ngrok.com/get-started/your-authtoken${NC}"
+        echo ""
+        echo -ne "  ${YELLOW}?${NC} Paste your ngrok authtoken: "
+        read -r token
+
+        if [[ -z "$token" ]]; then
+            echo_error "No token provided. Cannot continue."
+            exit 1
+        fi
+
+        ngrok config add-authtoken "$token"
+        echo_info "ngrok auth token configured"
+    fi
+}
+
+# Check if MCP server is running
+check_mcp_server() {
+    if curl -s "http://localhost:$MCP_PORT/health" &>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+# Start MCP server
+start_mcp_server() {
+    if [[ ! -x "$MCP_SERVER" ]]; then
+        echo_error "MCP server not found at $MCP_SERVER"
+        echo_error "Run install.sh first to build the MCP server"
+        exit 1
+    fi
+
+    echo_info "Starting MCP server..."
+    nohup "$MCP_SERVER" > "$CLAUDE_DIR/mcp-server.log" 2>&1 &
+    MCP_PID=$!
+    echo "$MCP_PID" > "$CLAUDE_DIR/.mcp-server.pid"
+
+    # Wait for server to start
+    for i in {1..10}; do
+        if check_mcp_server; then
+            echo_info "MCP server started (PID: $MCP_PID)"
+            return 0
+        fi
+        sleep 0.5
+    done
+
+    echo_error "MCP server failed to start. Check $CLAUDE_DIR/mcp-server.log"
+    exit 1
+}
+
+# Cleanup on exit
+cleanup() {
+    if [[ -n "${NGROK_PID:-}" ]]; then
+        kill "$NGROK_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+
+# Main
+main() {
+    echo ""
+    echo -e "${BOLD}Slack Tunnel for Claude Notifications${NC}"
+    echo -e "${DIM}Creates a public URL for Slack button actions${NC}"
+    echo ""
+
+    # Step 1: Check ngrok
+    if ! command -v ngrok &>/dev/null; then
+        install_ngrok
+    fi
+
+    # Step 2: Check auth
+    setup_ngrok_auth
+
+    # Step 3: Check MCP server
+    if ! check_mcp_server; then
+        start_mcp_server
+    else
+        echo_info "MCP server already running on port $MCP_PORT"
+    fi
+
+    # Step 4: Start ngrok
+    echo_info "Starting ngrok tunnel..."
+    echo ""
+
+    # Start ngrok in background and capture output
+    ngrok http "$MCP_PORT" --log=stdout --log-format=json 2>&1 | while IFS= read -r line; do
+        # Parse JSON log for the URL
+        if echo "$line" | grep -q '"url":'; then
+            URL=$(echo "$line" | grep -oE '"url":"https://[^"]+' | cut -d'"' -f4)
+            if [[ -n "$URL" && "$URL" == https://* ]]; then
+                echo ""
+                echo -e "${GREEN}╭──────────────────────────────────────────────────────────────╮${NC}"
+                echo -e "${GREEN}│${NC}                                                              ${GREEN}│${NC}"
+                echo -e "${GREEN}│${NC}  ${BOLD}Slack Interactivity URL:${NC}                                   ${GREEN}│${NC}"
+                echo -e "${GREEN}│${NC}                                                              ${GREEN}│${NC}"
+                echo -e "${GREEN}│${NC}  ${CYAN}${URL}/slack/actions${NC}"
+                echo -e "${GREEN}│${NC}                                                              ${GREEN}│${NC}"
+                echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
+                echo ""
+                echo -e "  ${BOLD}To configure Slack:${NC}"
+                echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps${NC} → your app"
+                echo -e "  ${CYAN}2.${NC} Click ${BOLD}Interactivity & Shortcuts${NC}"
+                echo -e "  ${CYAN}3.${NC} Toggle ${BOLD}Interactivity${NC} to On"
+                echo -e "  ${CYAN}4.${NC} Paste the URL above into ${BOLD}Request URL${NC}"
+                echo -e "  ${CYAN}5.${NC} Click ${BOLD}Save Changes${NC}"
+                echo ""
+                echo -e "  ${DIM}Press Ctrl+C to stop the tunnel${NC}"
+                echo ""
+            fi
+        fi
+
+        # Also show any errors
+        if echo "$line" | grep -q '"lvl":"error"'; then
+            MSG=$(echo "$line" | grep -oE '"msg":"[^"]+' | cut -d'"' -f4)
+            echo_error "ngrok: $MSG"
+        fi
+    done &
+    NGROK_PID=$!
+
+    # Wait for ngrok process
+    wait "$NGROK_PID" 2>/dev/null || true
+}
+
+main "$@"

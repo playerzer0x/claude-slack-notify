@@ -219,8 +219,8 @@ ENVEOF"
                 LINK_TERM_TARGET="${ITERM_SESSION_ID#*:}"
                 LINK_FOCUS_URL="claude-focus://iterm2/${LINK_TERM_TARGET}"
             elif [[ "$__CFBundleIdentifier" == "com.apple.Terminal" || "$TERM_PROGRAM" == "Apple_Terminal" ]]; then
-                local_terminal_tty=$(osascript -e 'tell application "Terminal" to return tty of selected tab of front window' 2>/dev/null)
-                if [[ -n "$local_terminal_tty" ]]; then
+                local_terminal_tty=$(tty 2>/dev/null)
+                if [[ -n "$local_terminal_tty" && "$local_terminal_tty" != "not a tty" ]]; then
                     LINK_TERM_TYPE="terminal"
                     LINK_TERM_TARGET="$local_terminal_tty"
                     LINK_FOCUS_URL="claude-focus://terminal/$(url_encode "$local_terminal_tty")"
@@ -531,10 +531,10 @@ detect_terminal() {
             TERM_TARGET="${ITERM_SESSION_ID#*:}"
             FOCUS_URL="claude-focus://iterm2/${TERM_TARGET}"
         elif [[ "$__CFBundleIdentifier" == "com.apple.Terminal" || "$TERM_PROGRAM" == "Apple_Terminal" ]]; then
-            # Terminal.app - get TTY of current tab via AppleScript (works even in subshells)
+            # Terminal.app - get TTY of current shell (works even in subshells)
             local terminal_tty
-            terminal_tty=$(osascript -e 'tell application "Terminal" to return tty of selected tab of front window' 2>/dev/null)
-            if [[ -n "$terminal_tty" ]]; then
+            terminal_tty=$(tty 2>/dev/null)
+            if [[ -n "$terminal_tty" && "$terminal_tty" != "not a tty" ]]; then
                 TERM_TYPE="terminal"
                 TERM_TARGET="$terminal_tty"
                 FOCUS_URL="claude-focus://terminal/$(url_encode "$terminal_tty")"

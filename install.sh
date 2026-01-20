@@ -356,7 +356,7 @@ configure_buttons_interactive() {
 
 # Only configure buttons interactively on fresh install or when --configure flag is passed
 if [[ "${1:-}" == "--configure" || ( ! -f "$BUTTON_CONFIG" && "${1:-}" != "--uninstall" ) ]]; then
-    configure_buttons "$1"
+    configure_buttons "${1:-}"
 elif [[ ! -f "$BUTTON_CONFIG" ]]; then
     echo "$DEFAULT_BUTTONS" > "$BUTTON_CONFIG"
 fi

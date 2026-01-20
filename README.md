@@ -46,7 +46,25 @@ Then in Claude Code:
 
 ## Remote SSH Sessions
 
-Focus your local terminal while sending input to a remote Claude session:
+Focus your local terminal while sending input to a remote Claude session.
+
+### Setup
+
+**On your Mac** (full install):
+```bash
+./install.sh
+```
+
+**On the remote server** (notifications only - no tunnel needed):
+```bash
+git clone https://github.com/anthropics/claude-slack-notify.git
+cd claude-slack-notify
+./install.sh
+```
+
+The remote install skips tunnel setup since the tunnel runs on your local Mac.
+
+### Usage
 
 ```bash
 # On your Mac:
@@ -58,7 +76,7 @@ claude                                        # Start Claude on remote
 /slack-notify                                 # Register in Slack
 ```
 
-**Requirements**: macOS locally, tmux on remote, SSH key authentication. The tunnel must run on your local Mac for buttons to work.
+**Requirements**: macOS locally, tmux on remote, SSH key authentication.
 
 ### JupyterLab
 

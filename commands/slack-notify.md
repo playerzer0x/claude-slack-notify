@@ -1,8 +1,10 @@
 Enable Slack notifications for this Claude session with a unique instance name.
 
+**Note**: If the user ran `install.sh`, the webhook URL and Claude hooks are typically already configured. This command just registers the current session.
+
 When the user runs this command:
 
-1. **Check webhook configuration**: If ~/.claude/slack-webhook-url doesn't exist, ask for their Slack webhook URL and save it.
+1. **Check webhook configuration**: If ~/.claude/slack-webhook-url doesn't exist, ask for their Slack webhook URL and save it. (Usually already set by installer)
 
 2. **Register this instance**: Run the command to register this Claude session:
    ```bash
@@ -29,9 +31,9 @@ The notification will include:
 
 If they need help getting a webhook URL:
 - Go to https://api.slack.com/apps
-- Create New App → From scratch → Name it "Claude Notifier"
-- Enable Incoming Webhooks in the sidebar
-- Add New Webhook to Workspace
+- Create New App → From an app manifest (fastest) or From scratch
+- If using manifest: paste the contents of `slack-app-manifest.json` from the repo
+- Enable Incoming Webhooks → Add New Webhook to Workspace
 - Choose a channel and copy the URL
 
 Environment variables that affect notifications:

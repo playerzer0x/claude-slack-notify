@@ -16,7 +16,7 @@ Designed for orchestrating multiple AI agents: get notified when attention is ne
 - **Shell**: Bash (macOS/Linux) or PowerShell (Windows)
 - **curl**: For sending notifications
 - **Claude Code CLI**: Required for integration
-- **jq** (optional): Richer notification context
+- **jq** (recommended): Enables richer notifications and auto-configures hooks
 - **tmux** (optional): Required for action buttons (1/2/Continue/Push)
 
 ### Platform Support
@@ -60,31 +60,46 @@ On first Focus button click, grant automation permission when prompted. If denie
 
 ## Setup
 
-1. **Create Slack webhook**: [api.slack.com/apps](https://api.slack.com/apps) > Create New App > Incoming Webhooks > Add to Workspace
+### Quick Setup (with jq)
 
-2. **Save webhook URL**:
-   ```bash
-   echo 'https://hooks.slack.com/services/...' > ~/.claude/slack-webhook-url
-   ```
+If you have `jq` installed, the installer handles most setup automatically:
 
-3. **Configure Claude hooks** (add to `~/.claude/settings.json`):
-   ```json
-   {
-     "hooks": {
-       "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "$HOME/.claude/bin/slack-notify-start", "timeout": 5 }] }],
-       "Stop": [{ "hooks": [{ "type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10 }] }],
-       "Notification": [
-         { "matcher": "idle_prompt", "hooks": [{ "type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10 }] },
-         { "matcher": "elicitation_dialog", "hooks": [{ "type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10 }] },
-         { "matcher": "permission_prompt", "hooks": [{ "type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10 }] }
-       ]
-     }
-   }
-   ```
+1. **Create Slack app** (choose one method):
 
-   **Note**: Notification hooks fire when Claude waits for input (plan approval, questions, permissions).
+   **Option A - Use manifest (fastest)**:
+   - Go to [api.slack.com/apps](https://api.slack.com/apps) > Create New App > From an app manifest
+   - Select your workspace, paste contents of `slack-app-manifest.json`, create
+   - Go to Incoming Webhooks > Add New Webhook to Workspace > Select channel
 
-4. **Register session**: In Claude, run `/slack-notify` or `/slack-notify MyProject`
+   **Option B - Manual**:
+   - Go to [api.slack.com/apps](https://api.slack.com/apps) > Create New App > From scratch
+   - Enable Incoming Webhooks > Add New Webhook to Workspace
+
+2. **Run installer**: `./install.sh`
+   - Prompts for webhook URL (paste when asked)
+   - Auto-configures hooks in `~/.claude/settings.json`
+
+3. **Register session**: In Claude, run `/slack-notify` or `/slack-notify MyProject`
+
+### Manual Setup (without jq)
+
+If `jq` is not available, add hooks manually to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "$HOME/.claude/bin/slack-notify-start", "timeout": 5 }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10 }] }],
+    "Notification": [
+      { "matcher": "idle_prompt", "hooks": [{ "type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10 }] },
+      { "matcher": "elicitation_dialog", "hooks": [{ "type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10 }] },
+      { "matcher": "permission_prompt", "hooks": [{ "type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10 }] }
+    ]
+  }
+}
+```
+
+**Note**: Notification hooks fire when Claude waits for input (plan approval, questions, permissions).
 
 ## Remote SSH Sessions
 

@@ -2,7 +2,7 @@
 
 Slack notifications for Claude Code with clickable buttons to focus terminals and send commands.
 
-**Keep using Claude in your preferred terminal.** This adds Slack notifications so you can step away while Claude works - get pinged when it needs input, click to jump back, or respond directly from Slack (even on mobile).
+**Keep working with Claude in your preferred terminal.** This adds Slack notifications so you can step away while Claude works - get pinged when it needs input, click to jump back, or respond directly from Slack (even on mobile).
 
 ## Features
 

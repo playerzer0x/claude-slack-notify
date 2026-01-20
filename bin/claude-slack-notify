@@ -640,9 +640,9 @@ if [[ "$1" == "register" ]]; then
     echo "$INSTANCE_JSON" > "$INSTANCE_FILE"
 
     # Auto-start tunnel if configured but not running
-    TUNNEL_ID_FILE="${CLAUDE_DIR}/.tunnel-id"
+    SLACK_CONFIG_FILE="${CLAUDE_DIR}/.slack-config"
     TUNNEL_PID_FILE="${CLAUDE_DIR}/.tunnel.pid"
-    if [[ -f "$TUNNEL_ID_FILE" ]]; then
+    if [[ -f "$SLACK_CONFIG_FILE" ]]; then
         # Check if tunnel is already running
         TUNNEL_RUNNING=false
         if [[ -f "$TUNNEL_PID_FILE" ]]; then

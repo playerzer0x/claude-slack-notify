@@ -2,16 +2,15 @@
 # =============================================================================
 # slack-tunnel - Start tunnel for Slack button actions
 #
-# Uses Cloudflare Named Tunnels by default for a stable URL (free, configure once)
-# Optionally supports ngrok with --ngrok flag
+# Uses Cloudflare Quick Tunnels (random URL, no account needed) and
+# automatically updates Slack's Request URL via API.
 #
 # Commands:
-#   slack-tunnel          - Interactive mode (start tunnel in foreground)
-#   slack-tunnel --setup  - One-time setup: login to Cloudflare, create named tunnel
-#   slack-tunnel --background - Start tunnel in background (for auto-start)
+#   slack-tunnel          - Start tunnel (interactive)
+#   slack-tunnel --setup  - One-time setup: configure Slack API tokens
+#   slack-tunnel --background - Start tunnel in background
 #   slack-tunnel --stop   - Stop background tunnel
 #   slack-tunnel --status - Check tunnel status
-#   slack-tunnel --ngrok  - Use ngrok instead of Cloudflare (requires ngrok auth)
 # =============================================================================
 
 set -uo pipefail
@@ -19,10 +18,9 @@ set -uo pipefail
 MCP_PORT=8463
 CLAUDE_DIR="$HOME/.claude"
 MCP_SERVER="$CLAUDE_DIR/bin/mcp-server"
-TUNNEL_NAME="claude-slack"
-TUNNEL_ID_FILE="$CLAUDE_DIR/.tunnel-id"
-TUNNEL_URL_FILE="$CLAUDE_DIR/.tunnel-url"
+SLACK_CONFIG_FILE="$CLAUDE_DIR/.slack-config"
 TUNNEL_PID_FILE="$CLAUDE_DIR/.tunnel.pid"
+TUNNEL_URL_FILE="$CLAUDE_DIR/.tunnel-url"
 WATCHDOG_PID_FILE="$CLAUDE_DIR/.tunnel-watchdog.pid"
 ACTIVITY_FILE="$CLAUDE_DIR/.tunnel-last-activity"
 TUNNEL_LOG="$CLAUDE_DIR/tunnel.log"
@@ -42,87 +40,135 @@ echo_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 echo_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # =============================================================================
-# Cloudflare tunnel helpers
+# Slack API helpers
 # =============================================================================
 
-# Check if cloudflared is logged in
-is_cloudflared_logged_in() {
-    cloudflared tunnel list &>/dev/null 2>&1
+# Load Slack config
+load_slack_config() {
+    if [[ ! -f "$SLACK_CONFIG_FILE" ]]; then
+        return 1
+    fi
+    # Source the config file (sets SLACK_APP_ID, SLACK_ACCESS_TOKEN, SLACK_REFRESH_TOKEN, SLACK_TOKEN_EXPIRES)
+    source "$SLACK_CONFIG_FILE"
+    return 0
 }
 
-# Get tunnel URL from tunnel ID
-get_tunnel_url() {
-    local tunnel_id="$1"
-    echo "https://${tunnel_id}.cfargotunnel.com"
+# Save Slack config
+save_slack_config() {
+    cat > "$SLACK_CONFIG_FILE" << EOF
+SLACK_APP_ID="$SLACK_APP_ID"
+SLACK_ACCESS_TOKEN="$SLACK_ACCESS_TOKEN"
+SLACK_REFRESH_TOKEN="$SLACK_REFRESH_TOKEN"
+SLACK_TOKEN_EXPIRES="$SLACK_TOKEN_EXPIRES"
+EOF
+    chmod 600 "$SLACK_CONFIG_FILE"
 }
 
-# Check if named tunnel exists
-tunnel_exists() {
-    cloudflared tunnel list 2>/dev/null | grep -q "$TUNNEL_NAME"
+# Check if token is expired (with 5 minute buffer)
+is_token_expired() {
+    local now
+    now=$(date +%s)
+    local buffer=300  # 5 minutes
+    if [[ -z "${SLACK_TOKEN_EXPIRES:-}" ]] || [[ $((SLACK_TOKEN_EXPIRES - buffer)) -lt $now ]]; then
+        return 0  # expired
+    fi
+    return 1  # not expired
 }
 
-# Get tunnel UUID by name
-get_tunnel_uuid() {
-    cloudflared tunnel list 2>/dev/null | grep "$TUNNEL_NAME" | awk '{print $1}'
-}
+# Rotate the Slack token using refresh token
+rotate_slack_token() {
+    echo_info "Refreshing Slack configuration token..."
 
-# =============================================================================
-# ngrok helpers (for --ngrok mode)
-# =============================================================================
+    local response
+    response=$(curl -s -X POST "https://slack.com/api/tooling.tokens.rotate" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "refresh_token=${SLACK_REFRESH_TOKEN}")
 
-install_ngrok() {
-    echo_info "Installing ngrok..."
+    local ok
+    ok=$(echo "$response" | jq -r '.ok // false')
 
-    if [[ "$(uname)" == "Darwin" ]]; then
-        if command -v brew &>/dev/null; then
-            brew install ngrok/ngrok/ngrok
-        else
-            echo_error "Homebrew not found. Install ngrok manually:"
-            echo "  https://ngrok.com/download"
-            exit 1
-        fi
-    elif [[ "$(uname)" == "Linux" ]]; then
-        if command -v apt-get &>/dev/null; then
-            curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
-            echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
-            sudo apt-get update && sudo apt-get install ngrok
-        elif command -v snap &>/dev/null; then
-            sudo snap install ngrok
-        else
-            echo_error "Could not install ngrok automatically. Install manually:"
-            echo "  https://ngrok.com/download"
-            exit 1
-        fi
-    else
-        echo_error "Unsupported OS. Install ngrok manually:"
-        echo "  https://ngrok.com/download"
-        exit 1
+    if [[ "$ok" != "true" ]]; then
+        local error
+        error=$(echo "$response" | jq -r '.error // "unknown error"')
+        echo_error "Failed to refresh token: $error"
+        echo_error "Run 'slack-tunnel --setup' to reconfigure"
+        return 1
     fi
 
-    echo_info "ngrok installed successfully"
+    SLACK_ACCESS_TOKEN=$(echo "$response" | jq -r '.token')
+    SLACK_REFRESH_TOKEN=$(echo "$response" | jq -r '.refresh_token')
+    local exp
+    exp=$(echo "$response" | jq -r '.exp')
+    SLACK_TOKEN_EXPIRES="$exp"
+
+    save_slack_config
+    echo_info "Token refreshed successfully"
+    return 0
 }
 
-setup_ngrok_auth() {
-    if ! ngrok config check &>/dev/null 2>&1; then
-        echo ""
-        echo -e "${YELLOW}╭────────────────────────────────────────────────────────────╮${NC}"
-        echo -e "${YELLOW}│${NC}  ${BOLD}ngrok requires a free auth token${NC}                          ${YELLOW}│${NC}"
-        echo -e "${YELLOW}╰────────────────────────────────────────────────────────────╯${NC}"
-        echo ""
-        echo -e "  ${CYAN}1.${NC} Sign up (free) at: ${BOLD}https://dashboard.ngrok.com/signup${NC}"
-        echo -e "  ${CYAN}2.${NC} Copy your authtoken from: ${BOLD}https://dashboard.ngrok.com/get-started/your-authtoken${NC}"
-        echo ""
-        echo -ne "  ${YELLOW}?${NC} Paste your ngrok authtoken: "
-        read -r token
+# Update Slack app's Request URL
+update_slack_request_url() {
+    local new_url="$1"
 
-        if [[ -z "$token" ]]; then
-            echo_error "No token provided. Cannot continue."
-            exit 1
+    # Ensure token is valid
+    if is_token_expired; then
+        if ! rotate_slack_token; then
+            return 1
         fi
-
-        ngrok config add-authtoken "$token"
-        echo_info "ngrok auth token configured"
     fi
+
+    echo_info "Updating Slack Request URL..."
+
+    # Export current manifest
+    local manifest_response
+    manifest_response=$(curl -s -X POST "https://slack.com/api/apps.manifest.export" \
+        -H "Authorization: Bearer ${SLACK_ACCESS_TOKEN}" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "app_id=${SLACK_APP_ID}")
+
+    local ok
+    ok=$(echo "$manifest_response" | jq -r '.ok // false')
+
+    if [[ "$ok" != "true" ]]; then
+        local error
+        error=$(echo "$manifest_response" | jq -r '.error // "unknown error"')
+        echo_error "Failed to export manifest: $error"
+        return 1
+    fi
+
+    # Update the request_url in the manifest
+    local updated_manifest
+    updated_manifest=$(echo "$manifest_response" | jq --arg url "$new_url" '
+        .manifest.settings.interactivity.is_enabled = true |
+        .manifest.settings.interactivity.request_url = $url |
+        .manifest
+    ')
+
+    # Update the manifest
+    local update_response
+    update_response=$(curl -s -X POST "https://slack.com/api/apps.manifest.update" \
+        -H "Authorization: Bearer ${SLACK_ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "{\"app_id\": \"${SLACK_APP_ID}\", \"manifest\": ${updated_manifest}}")
+
+    ok=$(echo "$update_response" | jq -r '.ok // false')
+
+    if [[ "$ok" != "true" ]]; then
+        local error
+        error=$(echo "$update_response" | jq -r '.error // "unknown error"')
+        echo_error "Failed to update manifest: $error"
+
+        # Show more details if available
+        local errors
+        errors=$(echo "$update_response" | jq -r '.errors // empty')
+        if [[ -n "$errors" ]]; then
+            echo_error "Details: $errors"
+        fi
+        return 1
+    fi
+
+    echo_info "Slack Request URL updated to: $new_url"
+    return 0
 }
 
 # =============================================================================
@@ -240,10 +286,8 @@ stop_mcp_server() {
 # =============================================================================
 
 start_watchdog() {
-    # Touch activity file to start fresh
     touch "$ACTIVITY_FILE"
 
-    # Start watchdog in background
     (
         while true; do
             sleep 300  # Check every 5 minutes
@@ -263,7 +307,6 @@ start_watchdog() {
             if [[ $((now - last)) -gt $IDLE_TIMEOUT ]]; then
                 echo "$(date): Idle timeout ($IDLE_TIMEOUT seconds), shutting down" >> "$TUNNEL_LOG"
 
-                # Stop tunnel
                 if [[ -f "$TUNNEL_PID_FILE" ]]; then
                     local tunnel_pid
                     tunnel_pid=$(cat "$TUNNEL_PID_FILE")
@@ -271,13 +314,8 @@ start_watchdog() {
                     rm -f "$TUNNEL_PID_FILE"
                 fi
 
-                # Stop MCP server
                 stop_mcp_server
-
-                # Remove activity file
                 rm -f "$ACTIVITY_FILE"
-
-                # Exit watchdog
                 rm -f "$WATCHDOG_PID_FILE"
                 exit 0
             fi
@@ -285,7 +323,7 @@ start_watchdog() {
     ) &
     local watchdog_pid=$!
     echo "$watchdog_pid" > "$WATCHDOG_PID_FILE"
-    echo_info "Idle watchdog started (PID: $watchdog_pid, timeout: ${IDLE_TIMEOUT}s)"
+    echo_info "Idle watchdog started (timeout: ${IDLE_TIMEOUT}s)"
 }
 
 stop_watchdog() {
@@ -300,72 +338,173 @@ stop_watchdog() {
 }
 
 # =============================================================================
-# --setup: One-time Cloudflare tunnel setup
+# Start tunnel and get URL
+# =============================================================================
+
+start_tunnel_and_get_url() {
+    local background="${1:-false}"
+
+    # Check cloudflared installed
+    if ! command -v cloudflared &>/dev/null; then
+        echo_error "cloudflared not installed."
+        echo ""
+        echo -e "  Install with:"
+        echo -e "    macOS:  ${BOLD}brew install cloudflared${NC}"
+        echo -e "    Linux:  See https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+        exit 1
+    fi
+
+    echo_info "Starting Cloudflare Quick Tunnel..."
+
+    # Start cloudflared and capture output to get URL
+    local log_file="$CLAUDE_DIR/.cloudflared.log"
+
+    if [[ "$background" == "true" ]]; then
+        nohup cloudflared tunnel --url "http://localhost:$MCP_PORT" >> "$log_file" 2>&1 &
+    else
+        cloudflared tunnel --url "http://localhost:$MCP_PORT" > "$log_file" 2>&1 &
+    fi
+    TUNNEL_PID=$!
+    echo "$TUNNEL_PID" > "$TUNNEL_PID_FILE"
+
+    # Wait for URL to appear in logs (cloudflared outputs it to stderr)
+    local tunnel_url=""
+    for i in {1..30}; do
+        if [[ -f "$log_file" ]]; then
+            # Cloudflared outputs URL like: "https://xxx.trycloudflare.com"
+            tunnel_url=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$log_file" 2>/dev/null | head -1 || true)
+            if [[ -n "$tunnel_url" ]]; then
+                break
+            fi
+        fi
+        sleep 0.5
+    done
+
+    if [[ -z "$tunnel_url" ]]; then
+        echo_error "Failed to get tunnel URL"
+        cat "$log_file" 2>/dev/null | tail -10
+        kill "$TUNNEL_PID" 2>/dev/null || true
+        rm -f "$TUNNEL_PID_FILE"
+        exit 1
+    fi
+
+    echo "$tunnel_url" > "$TUNNEL_URL_FILE"
+    TUNNEL_URL="$tunnel_url"
+    echo_info "Tunnel started: $tunnel_url"
+}
+
+# =============================================================================
+# --setup: Configure Slack API tokens
 # =============================================================================
 
 cmd_setup() {
     echo ""
-    echo -e "${BOLD}Cloudflare Tunnel Setup${NC}"
-    echo -e "${DIM}Creates a named tunnel with a stable URL${NC}"
+    echo -e "${BOLD}Slack Tunnel Setup${NC}"
+    echo -e "${DIM}Configure automatic Request URL updates${NC}"
     echo ""
 
-    # Check cloudflared installed
+    # Check dependencies
+    if ! command -v jq &>/dev/null; then
+        echo_error "jq is required but not installed."
+        echo "  Install with: brew install jq (macOS) or apt install jq (Linux)"
+        exit 1
+    fi
+
     if ! command -v cloudflared &>/dev/null; then
-        echo_error "cloudflared not installed. Run install.sh or:"
-        echo "  macOS:  brew install cloudflared"
-        echo "  Linux:  https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+        echo_error "cloudflared is required but not installed."
+        echo "  Install with: brew install cloudflared (macOS)"
         exit 1
     fi
 
-    # Step 1: Login to Cloudflare
-    if ! is_cloudflared_logged_in; then
-        echo_info "Step 1: Login to Cloudflare"
-        echo -e "  ${DIM}This will open a browser window for authentication${NC}"
-        echo ""
-        cloudflared tunnel login
-        echo ""
-    else
-        echo_info "Already logged in to Cloudflare"
-    fi
+    echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
+    echo -e "${CYAN}│${NC}  ${BOLD}Step 1: Get your Slack App ID${NC}                               ${CYAN}│${NC}"
+    echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
+    echo ""
+    echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps${NC}"
+    echo -e "  ${CYAN}2.${NC} Click on your app (or create one)"
+    echo -e "  ${CYAN}3.${NC} Copy the ${BOLD}App ID${NC} from the top of the page"
+    echo -e "     ${DIM}(Format: A0XXXXXXXXX)${NC}"
+    echo ""
+    echo -ne "  ${YELLOW}?${NC} Paste your App ID: "
+    read -r SLACK_APP_ID
 
-    # Step 2: Create named tunnel
-    if tunnel_exists; then
-        echo_info "Tunnel '$TUNNEL_NAME' already exists"
-        TUNNEL_UUID=$(get_tunnel_uuid)
-    else
-        echo_info "Step 2: Creating named tunnel '$TUNNEL_NAME'..."
-        cloudflared tunnel create "$TUNNEL_NAME"
-        TUNNEL_UUID=$(get_tunnel_uuid)
-    fi
-
-    if [[ -z "$TUNNEL_UUID" ]]; then
-        echo_error "Failed to get tunnel UUID"
+    if [[ -z "$SLACK_APP_ID" || ! "$SLACK_APP_ID" =~ ^A[A-Z0-9]+$ ]]; then
+        echo_error "Invalid App ID format. Should start with 'A' followed by letters/numbers."
         exit 1
     fi
 
-    # Save tunnel ID and URL
-    echo "$TUNNEL_UUID" > "$TUNNEL_ID_FILE"
-    TUNNEL_URL=$(get_tunnel_url "$TUNNEL_UUID")
-    echo "$TUNNEL_URL" > "$TUNNEL_URL_FILE"
+    echo ""
+    echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
+    echo -e "${CYAN}│${NC}  ${BOLD}Step 2: Generate a Configuration Token${NC}                     ${CYAN}│${NC}"
+    echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
+    echo ""
+    echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps${NC}"
+    echo -e "  ${CYAN}2.${NC} Scroll down to ${BOLD}\"Your App Configuration Tokens\"${NC}"
+    echo -e "  ${CYAN}3.${NC} Click ${BOLD}\"Generate Token\"${NC} and select your workspace"
+    echo -e "  ${CYAN}4.${NC} Copy the ${BOLD}Access Token${NC} (starts with xoxe.xox...)"
+    echo ""
+    echo -ne "  ${YELLOW}?${NC} Paste the Access Token: "
+    read -r SLACK_ACCESS_TOKEN
 
-    # Display success
+    if [[ -z "$SLACK_ACCESS_TOKEN" ]]; then
+        echo_error "Access token is required"
+        exit 1
+    fi
+
+    echo ""
+    echo -e "  ${CYAN}5.${NC} Now copy the ${BOLD}Refresh Token${NC} (shown below the access token)"
+    echo ""
+    echo -ne "  ${YELLOW}?${NC} Paste the Refresh Token: "
+    read -r SLACK_REFRESH_TOKEN
+
+    if [[ -z "$SLACK_REFRESH_TOKEN" ]]; then
+        echo_error "Refresh token is required"
+        exit 1
+    fi
+
+    # Set initial expiry (12 hours from now, but we'll refresh before using)
+    SLACK_TOKEN_EXPIRES=$(($(date +%s) + 43200))
+
+    # Save config
+    save_slack_config
+    echo ""
+    echo_info "Configuration saved to $SLACK_CONFIG_FILE"
+
+    # Verify by testing the token
+    echo ""
+    echo_info "Verifying configuration..."
+
+    local test_response
+    test_response=$(curl -s -X POST "https://slack.com/api/apps.manifest.export" \
+        -H "Authorization: Bearer ${SLACK_ACCESS_TOKEN}" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "app_id=${SLACK_APP_ID}")
+
+    local ok
+    ok=$(echo "$test_response" | jq -r '.ok // false')
+
+    if [[ "$ok" != "true" ]]; then
+        local error
+        error=$(echo "$test_response" | jq -r '.error // "unknown error"')
+        echo_error "Configuration test failed: $error"
+        echo_error "Please check your tokens and try again."
+        rm -f "$SLACK_CONFIG_FILE"
+        exit 1
+    fi
+
     echo ""
     echo -e "${GREEN}╭──────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Cloudflare Tunnel Created!${NC}                               ${GREEN}│${NC}"
+    echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Setup Complete!${NC}                                          ${GREEN}│${NC}"
     echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
     echo ""
-    echo -e "  ${BOLD}Your stable Slack URL:${NC}"
+    echo -e "  The tunnel will now automatically update your Slack app's"
+    echo -e "  Request URL each time it starts."
     echo ""
-    echo -e "    ${CYAN}${TUNNEL_URL}/slack/actions${NC}"
+    echo -e "  ${BOLD}To start the tunnel:${NC}"
+    echo -e "    slack-tunnel"
     echo ""
-    echo -e "  ${BOLD}Configure your Slack app (one time):${NC}"
-    echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps${NC} → your app"
-    echo -e "  ${CYAN}2.${NC} Click ${BOLD}Interactivity & Shortcuts${NC}"
-    echo -e "  ${CYAN}3.${NC} Toggle ${BOLD}Interactivity${NC} to On"
-    echo -e "  ${CYAN}4.${NC} Paste the URL above into ${BOLD}Request URL${NC}"
-    echo -e "  ${CYAN}5.${NC} Click ${BOLD}Save Changes${NC}"
-    echo ""
-    echo -e "  ${DIM}This URL never changes! You won't need to update Slack again.${NC}"
+    echo -e "  ${BOLD}Or for background mode:${NC}"
+    echo -e "    slack-tunnel --background"
     echo ""
 }
 
@@ -374,14 +513,11 @@ cmd_setup() {
 # =============================================================================
 
 cmd_background() {
-    # Check tunnel is configured
-    if [[ ! -f "$TUNNEL_ID_FILE" ]]; then
-        echo_error "Tunnel not configured. Run: slack-tunnel --setup"
+    # Check Slack is configured
+    if ! load_slack_config; then
+        echo_error "Slack not configured. Run: slack-tunnel --setup"
         exit 1
     fi
-
-    TUNNEL_UUID=$(cat "$TUNNEL_ID_FILE")
-    TUNNEL_URL=$(get_tunnel_url "$TUNNEL_UUID")
 
     # Check if already running
     if [[ -f "$TUNNEL_PID_FILE" ]]; then
@@ -402,17 +538,13 @@ cmd_background() {
         start_mcp_server
     fi
 
-    # Start cloudflared tunnel in background
-    echo_info "Starting Cloudflare tunnel..."
-    nohup cloudflared tunnel --url "http://localhost:$MCP_PORT" run "$TUNNEL_NAME" >> "$TUNNEL_LOG" 2>&1 &
-    TUNNEL_PID=$!
-    echo "$TUNNEL_PID" > "$TUNNEL_PID_FILE"
+    # Start tunnel
+    start_tunnel_and_get_url "true"
 
-    # Wait for tunnel to start
-    sleep 2
-    if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
-        echo_error "Tunnel failed to start. Check $TUNNEL_LOG"
-        exit 1
+    # Update Slack Request URL
+    if ! update_slack_request_url "${TUNNEL_URL}/slack/actions"; then
+        echo_warn "Failed to update Slack, but tunnel is running"
+        echo_warn "Manually set Request URL to: ${TUNNEL_URL}/slack/actions"
     fi
 
     # Start idle watchdog
@@ -421,8 +553,7 @@ cmd_background() {
     # Touch activity file
     touch "$ACTIVITY_FILE"
 
-    echo_info "Tunnel started in background (PID: $TUNNEL_PID)"
-    echo_info "URL: $TUNNEL_URL/slack/actions"
+    echo_info "Tunnel running in background (PID: $TUNNEL_PID)"
 }
 
 # =============================================================================
@@ -432,13 +563,11 @@ cmd_background() {
 cmd_stop() {
     local stopped=false
 
-    # Stop watchdog
     if [[ -f "$WATCHDOG_PID_FILE" ]]; then
         stop_watchdog
         stopped=true
     fi
 
-    # Stop tunnel
     if [[ -f "$TUNNEL_PID_FILE" ]]; then
         local pid
         pid=$(cat "$TUNNEL_PID_FILE")
@@ -450,13 +579,11 @@ cmd_stop() {
         rm -f "$TUNNEL_PID_FILE"
     fi
 
-    # Stop MCP server
     if [[ -f "$CLAUDE_DIR/.mcp-server.pid" ]]; then
         stop_mcp_server
         stopped=true
     fi
 
-    # Clean up activity file
     rm -f "$ACTIVITY_FILE"
 
     if [[ "$stopped" == "true" ]]; then
@@ -475,16 +602,17 @@ cmd_status() {
     echo -e "${BOLD}Tunnel Status${NC}"
     echo ""
 
-    # Check tunnel configured
-    if [[ -f "$TUNNEL_ID_FILE" ]]; then
-        local tunnel_uuid
-        tunnel_uuid=$(cat "$TUNNEL_ID_FILE")
-        local tunnel_url
-        tunnel_url=$(get_tunnel_url "$tunnel_uuid")
-        echo -e "  Tunnel ID:  ${CYAN}$tunnel_uuid${NC}"
-        echo -e "  Tunnel URL: ${CYAN}$tunnel_url/slack/actions${NC}"
+    # Check Slack config
+    if [[ -f "$SLACK_CONFIG_FILE" ]]; then
+        load_slack_config
+        echo -e "  Slack App:  ${CYAN}$SLACK_APP_ID${NC}"
+        if is_token_expired; then
+            echo -e "  Token:      ${YELLOW}Expired (will refresh on next use)${NC}"
+        else
+            echo -e "  Token:      ${GREEN}Valid${NC}"
+        fi
     else
-        echo -e "  Tunnel:     ${YELLOW}Not configured${NC} (run: slack-tunnel --setup)"
+        echo -e "  Slack:      ${YELLOW}Not configured${NC} (run: slack-tunnel --setup)"
     fi
     echo ""
 
@@ -494,6 +622,11 @@ cmd_status() {
         pid=$(cat "$TUNNEL_PID_FILE")
         if kill -0 "$pid" 2>/dev/null; then
             echo -e "  Tunnel:     ${GREEN}Running${NC} (PID: $pid)"
+            if [[ -f "$TUNNEL_URL_FILE" ]]; then
+                local url
+                url=$(cat "$TUNNEL_URL_FILE")
+                echo -e "  URL:        ${CYAN}$url/slack/actions${NC}"
+            fi
         else
             echo -e "  Tunnel:     ${YELLOW}Stopped${NC} (stale PID file)"
         fi
@@ -517,7 +650,7 @@ cmd_status() {
         local pid
         pid=$(cat "$WATCHDOG_PID_FILE")
         if kill -0 "$pid" 2>/dev/null; then
-            echo -e "  Watchdog:   ${GREEN}Running${NC} (PID: $pid)"
+            echo -e "  Watchdog:   ${GREEN}Running${NC}"
         else
             echo -e "  Watchdog:   ${YELLOW}Stopped${NC}"
         fi
@@ -545,91 +678,7 @@ cmd_status() {
 }
 
 # =============================================================================
-# --ngrok: Use ngrok instead
-# =============================================================================
-
-cmd_ngrok() {
-    echo ""
-    echo -e "${BOLD}Slack Tunnel (ngrok mode)${NC}"
-    echo -e "${DIM}Creates a temporary URL - must update Slack each restart${NC}"
-    echo ""
-
-    # Check ngrok
-    if ! command -v ngrok &>/dev/null; then
-        install_ngrok
-    fi
-
-    # Check auth
-    setup_ngrok_auth
-
-    # Rebuild MCP server if needed
-    rebuild_if_needed
-
-    # Kill existing MCP server and start fresh
-    if check_mcp_server; then
-        echo_info "Stopping existing MCP server..."
-        local old_pid
-        old_pid=$(cat "$CLAUDE_DIR/.mcp-server.pid" 2>/dev/null)
-        if [[ -n "$old_pid" ]]; then
-            kill "$old_pid" 2>/dev/null || true
-            sleep 1
-        fi
-    fi
-    start_mcp_server
-
-    # Start ngrok
-    echo_info "Starting ngrok tunnel..."
-    echo ""
-
-    TUNNEL_URL=""
-
-    ngrok http "$MCP_PORT" --log=stdout --log-format=json > "$CLAUDE_DIR/.ngrok.log" 2>&1 &
-    NGROK_PID=$!
-
-    for i in {1..30}; do
-        if [[ -f "$CLAUDE_DIR/.ngrok.log" ]]; then
-            TUNNEL_URL=$(grep -oE '"url":"https://[^"]+' "$CLAUDE_DIR/.ngrok.log" 2>/dev/null | head -1 | cut -d'"' -f4 || true)
-            if [[ -n "$TUNNEL_URL" && "$TUNNEL_URL" == https://* ]]; then
-                break
-            fi
-        fi
-        sleep 0.5
-    done
-
-    if [[ -z "$TUNNEL_URL" ]]; then
-        echo_error "Failed to get ngrok tunnel URL"
-        cat "$CLAUDE_DIR/.ngrok.log" 2>/dev/null | tail -5
-        exit 1
-    fi
-
-    # Cleanup on exit
-    cleanup_ngrok() {
-        echo ""
-        echo_info "Shutting down..."
-        kill "$NGROK_PID" 2>/dev/null || true
-        stop_mcp_server
-    }
-    trap cleanup_ngrok EXIT INT TERM
-
-    echo ""
-    echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC}                                                              ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${BOLD}Slack Interactivity URL:${NC}                                   ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}                                                              ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${BOLD}${TUNNEL_URL}/slack/actions${NC}"
-    echo -e "${CYAN}│${NC}                                                              ${CYAN}│${NC}"
-    echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
-    echo ""
-    echo -e "  ${YELLOW}Note:${NC} This URL changes each time you restart ngrok."
-    echo -e "  For a stable URL, use: ${BOLD}slack-tunnel --setup${NC}"
-    echo ""
-    echo -e "  ${DIM}Keep this running. Press Ctrl+C to stop.${NC}"
-
-    wait "$NGROK_PID" 2>/dev/null || true
-}
-
-# =============================================================================
-# Default: Interactive Cloudflare mode
+# Default: Interactive mode
 # =============================================================================
 
 cmd_interactive() {
@@ -638,21 +687,9 @@ cmd_interactive() {
     echo -e "${DIM}Creates a public URL for Slack button actions${NC}"
     echo ""
 
-    # Check cloudflared installed
-    if ! command -v cloudflared &>/dev/null; then
-        echo_error "cloudflared not installed."
-        echo ""
-        echo -e "  Install with:"
-        echo -e "    macOS:  ${BOLD}brew install cloudflared${NC}"
-        echo -e "    Linux:  See https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
-        echo ""
-        echo -e "  Or use ngrok: ${BOLD}slack-tunnel --ngrok${NC}"
-        exit 1
-    fi
-
-    # Check tunnel configured
-    if [[ ! -f "$TUNNEL_ID_FILE" ]]; then
-        echo_warn "Tunnel not configured yet."
+    # Check Slack is configured
+    if ! load_slack_config; then
+        echo_warn "Slack not configured yet."
         echo ""
         echo -ne "  ${YELLOW}?${NC} Run setup now? [Y/n] "
         read -r response
@@ -660,10 +697,8 @@ cmd_interactive() {
             exit 0
         fi
         cmd_setup
+        load_slack_config
     fi
-
-    TUNNEL_UUID=$(cat "$TUNNEL_ID_FILE")
-    TUNNEL_URL=$(get_tunnel_url "$TUNNEL_UUID")
 
     # Rebuild MCP server if needed
     rebuild_if_needed
@@ -681,31 +716,51 @@ cmd_interactive() {
     start_mcp_server
 
     # Cleanup on exit
-    cleanup_cloudflare() {
+    cleanup() {
         echo ""
         echo_info "Shutting down..."
+        if [[ -n "${TUNNEL_PID:-}" ]]; then
+            kill "$TUNNEL_PID" 2>/dev/null || true
+        fi
         stop_mcp_server
+        rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE"
     }
-    trap cleanup_cloudflare EXIT INT TERM
+    trap cleanup EXIT INT TERM
 
-    # Start cloudflared tunnel
-    echo_info "Starting Cloudflare tunnel..."
-    echo ""
-    echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC}                                                              ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${BOLD}Slack Interactivity URL:${NC}                                   ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}                                                              ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${BOLD}${TUNNEL_URL}/slack/actions${NC}"
-    echo -e "${CYAN}│${NC}                                                              ${CYAN}│${NC}"
-    echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
-    echo ""
-    echo -e "  ${GREEN}✓${NC} This URL is stable - no need to update Slack"
-    echo ""
-    echo -e "  ${DIM}Keep this running. Press Ctrl+C to stop.${NC}"
+    # Start tunnel
+    start_tunnel_and_get_url "false"
+
+    # Update Slack Request URL
+    if update_slack_request_url "${TUNNEL_URL}/slack/actions"; then
+        echo ""
+        echo -e "${GREEN}╭──────────────────────────────────────────────────────────────╮${NC}"
+        echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Slack Request URL updated automatically!${NC}                  ${GREEN}│${NC}"
+        echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
+        echo ""
+        echo -e "  Tunnel URL: ${CYAN}${TUNNEL_URL}/slack/actions${NC}"
+        echo ""
+        echo -e "  ${DIM}Buttons will work on both desktop and mobile Slack.${NC}"
+        echo -e "  ${DIM}Keep this running. Press Ctrl+C to stop.${NC}"
+    else
+        echo ""
+        echo -e "${YELLOW}╭──────────────────────────────────────────────────────────────╮${NC}"
+        echo -e "${YELLOW}│${NC}  ${YELLOW}!${NC} ${BOLD}Could not auto-update Slack${NC}                               ${YELLOW}│${NC}"
+        echo -e "${YELLOW}╰──────────────────────────────────────────────────────────────╯${NC}"
+        echo ""
+        echo -e "  Tunnel URL: ${CYAN}${TUNNEL_URL}/slack/actions${NC}"
+        echo ""
+        echo -e "  ${BOLD}Manually update in Slack:${NC}"
+        echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps/${SLACK_APP_ID}${NC}"
+        echo -e "  ${CYAN}2.${NC} Click ${BOLD}Interactivity & Shortcuts${NC}"
+        echo -e "  ${CYAN}3.${NC} Update ${BOLD}Request URL${NC} to the URL above"
+        echo -e "  ${CYAN}4.${NC} Click ${BOLD}Save Changes${NC}"
+        echo ""
+        echo -e "  ${DIM}Keep this running. Press Ctrl+C to stop.${NC}"
+    fi
     echo ""
 
-    # Run cloudflared (blocks until stopped)
-    cloudflared tunnel --url "http://localhost:$MCP_PORT" run "$TUNNEL_NAME"
+    # Keep running until interrupted
+    wait "$TUNNEL_PID" 2>/dev/null || true
 }
 
 # =============================================================================
@@ -725,19 +780,18 @@ case "${1:-}" in
     --status)
         cmd_status
         ;;
-    --ngrok)
-        cmd_ngrok
-        ;;
     --help|-h)
         echo "Usage: slack-tunnel [command]"
         echo ""
         echo "Commands:"
         echo "  (none)        Interactive mode - start tunnel in foreground"
-        echo "  --setup       One-time setup: login to Cloudflare, create named tunnel"
+        echo "  --setup       One-time setup: configure Slack API tokens"
         echo "  --background  Start tunnel in background (for auto-start)"
         echo "  --stop        Stop background tunnel"
         echo "  --status      Check tunnel status"
-        echo "  --ngrok       Use ngrok instead (temporary URLs)"
+        echo ""
+        echo "The tunnel uses Cloudflare Quick Tunnels (free, no account needed)"
+        echo "and automatically updates your Slack app's Request URL."
         echo ""
         ;;
     "")

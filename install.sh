@@ -741,19 +741,18 @@ echo ""
 
 # Show slack-tunnel info if MCP server was built
 if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
-    print_section "Slack Button Actions (Optional)"
+    print_section "Slack Button Actions (One-Time Setup)"
     echo ""
     echo -e "  ${DIM}To respond to Claude directly from Slack (buttons like \"Continue\", \"1\", \"2\"):${NC}"
     echo ""
-    echo -e "  ${CYAN}2.${NC} Run: ${BOLD}slack-tunnel${NC}"
-    echo -e "     ${DIM}This starts ngrok and displays a URL to add to your Slack app${NC}"
+    echo -e "  ${CYAN}2.${NC} Run: ${BOLD}slack-tunnel --setup${NC}"
     echo ""
-    echo -e "  ${CYAN}3.${NC} Configure your Slack app at ${BOLD}https://api.slack.com/apps${NC}:"
-    echo -e "     ${DIM}• Go to Interactivity & Shortcuts → Toggle Interactivity On${NC}"
-    echo -e "     ${DIM}• Paste the URL from slack-tunnel into Request URL${NC}"
-    echo -e "     ${DIM}• Click Save Changes${NC}"
+    echo -e "     ${DIM}This will guide you through:${NC}"
+    echo -e "     ${DIM}• Getting your Slack App ID${NC}"
+    echo -e "     ${DIM}• Generating a Configuration Token (at api.slack.com/apps)${NC}"
     echo ""
-    echo -e "  ${DIM}Note: Run slack-tunnel whenever you want Slack buttons to work${NC}"
+    echo -e "  ${DIM}Once configured, the tunnel auto-updates Slack's Request URL each time.${NC}"
+    echo -e "  ${DIM}Just run ${BOLD}/slack-notify${NC}${DIM} and buttons will work on mobile + desktop!${NC}"
     echo ""
 fi
 

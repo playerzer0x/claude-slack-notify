@@ -68,48 +68,17 @@ Or with a custom name:
 | Docker | No | No | Notifications only |
 | Remote SSH | Yes | Yes (with tmux) | SSH key auth required |
 
-## Remote Sessions
+## Remote SSH Sessions
 
-Two scenarios are supported depending on where you want to run Claude.
-
-### Scenario A: Mac Primary (SSH to Linux)
-
-Run Claude on a remote Linux machine, focus buttons switch to Mac terminal:
+Focus your local terminal while sending input to a remote Claude session:
 
 ```bash
-# On Mac: full install + start tunnel
-./install.sh && slack-tunnel
-
-# On Linux: remote install (hooks only)
-git clone <repo> && cd claude-slack-notify && ./install.sh --remote
-
-# Connect from Mac
 claude-slack-notify link --host user@server  # Creates link, SSHs, starts tmux
 claude                                        # Start Claude on remote
 /slack-notify                                 # Register in Slack
 ```
 
-### Scenario B: Linux Primary (Focus Mac)
-
-Run Claude on Linux, focus buttons switch to a Mac terminal:
-
-```bash
-# On Mac: local install (focus handler only)
-./install.sh --local
-
-# On Linux: full install
-./install.sh
-
-# Create reverse link (on Linux)
-claude-slack-notify link --to-host user@mac.local
-
-# Start tunnel and work
-slack-tunnel
-claude
-/slack-notify
-```
-
-**Requirements**: tmux on Linux, SSH key authentication both directions.
+**Requirements**: macOS locally, tmux on remote, SSH key authentication.
 
 ### JupyterLab
 
@@ -149,21 +118,11 @@ Format: `LABEL|ACTION` per line. Reconfigure with `./install.sh --configure`.
 ## Commands
 
 ```bash
-# Installation
-./install.sh              # Full install (Mac or Linux primary)
-./install.sh --remote     # Remote machine install (hooks + webhook only)
-./install.sh --local      # Local Mac install (focus handler only, for reverse link)
+./install.sh              # Install
 ./install.sh --uninstall  # Uninstall completely
 ./install.sh --configure  # Reconfigure buttons
 ./install.sh --link       # Install with symlinks (development)
-
-# Runtime
 slack-tunnel              # Start ngrok tunnel for mobile support
-
-# Remote linking
-claude-slack-notify link --host user@server      # SSH link (Mac -> Linux)
-claude-slack-notify link --to-host user@mac      # Reverse link (Linux -> Mac)
-claude-slack-notify link --jupyter --host user@server  # JupyterLab link
 ```
 
 ## Debugging

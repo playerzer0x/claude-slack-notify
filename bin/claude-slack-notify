@@ -84,26 +84,19 @@ is_mcp_server_running() {
 # -----------------------------------------------------------------------------
 # Link command - creates a link for SSH or JupyterLab sessions
 # Run this on LOCAL machine before SSH to create a reference to the local terminal
-# Usage: claude-slack-notify link [--host <hostname>] [--jupyter] [--to-host <mac>] [ssh-options...]
-#
-# --to-host: Reverse link - run on Linux to link BACK to a Mac for focus actions
+# Usage: claude-slack-notify link [--host <hostname>] [--jupyter] [ssh-options...]
 # -----------------------------------------------------------------------------
 if [[ "$1" == "link" ]]; then
     shift  # Remove "link" from args
 
     # Parse options
     SSH_HOST=""
-    TO_HOST=""
     JUPYTER_MODE=""
     SSH_ARGS=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --host|-h)
                 SSH_HOST="$2"
-                shift 2
-                ;;
-            --to-host|-t)
-                TO_HOST="$2"
                 shift 2
                 ;;
             --jupyter|-j)
@@ -119,74 +112,6 @@ if [[ "$1" == "link" ]]; then
     done
 
     mkdir -p "$LINKS_DIR"
-
-    # -------------------------------------------------------------------------
-    # Reverse link mode: --to-host creates link FROM Linux TO Mac for focus
-    # Run this on Linux to enable Focus buttons to switch to Mac terminal
-    # -------------------------------------------------------------------------
-    if [[ -n "$TO_HOST" ]]; then
-        # Parse user@host format
-        if [[ "$TO_HOST" == *"@"* ]]; then
-            MAC_USER="${TO_HOST%%@*}"
-            MAC_HOST="${TO_HOST#*@}"
-        else
-            MAC_USER=$(whoami)
-            MAC_HOST="$TO_HOST"
-        fi
-        MAC_PORT="${CLAUDE_SSH_PORT:-22}"
-
-        # Test SSH connectivity
-        echo "Testing SSH connection to $TO_HOST..."
-        if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "${SSH_ARGS[@]}" "$TO_HOST" "echo 'SSH OK'" 2>/dev/null; then
-            echo ""
-            echo "Error: Could not SSH to $TO_HOST" >&2
-            echo "Make sure:" >&2
-            echo "  1. SSH key authentication is set up (no password prompt)" >&2
-            echo "  2. The Mac is reachable from this machine" >&2
-            echo "  3. sshd is enabled on the Mac (System Settings > General > Sharing > Remote Login)" >&2
-            exit 1
-        fi
-
-        # Verify focus-helper exists on Mac
-        if ! ssh "${SSH_ARGS[@]}" "$TO_HOST" "test -x ~/.claude/bin/focus-helper" 2>/dev/null; then
-            echo ""
-            echo "Error: focus-helper not found on Mac" >&2
-            echo "Run this on the Mac first:" >&2
-            echo "  ./install.sh --local" >&2
-            exit 1
-        fi
-
-        # Save reverse link config
-        REVERSE_LINK_FILE="$CLAUDE_DIR/reverse-link.json"
-        cat > "$REVERSE_LINK_FILE" << EOF
-{
-  "mac_user": "${MAC_USER}",
-  "mac_host": "${MAC_HOST}",
-  "mac_port": "${MAC_PORT}",
-  "created_at": "$(date -Iseconds)"
-}
-EOF
-        chmod 600 "$REVERSE_LINK_FILE"
-
-        echo ""
-        echo "╭─────────────────────────────────────────────────────────────╮"
-        echo "│  Reverse Link Created                                       │"
-        echo "╰─────────────────────────────────────────────────────────────╯"
-        echo ""
-        echo "  Mac host: $TO_HOST"
-        echo "  Config:   $REVERSE_LINK_FILE"
-        echo ""
-        echo "╭─────────────────────────────────────────────────────────────╮"
-        echo "│  Next Steps                                                 │"
-        echo "╰─────────────────────────────────────────────────────────────╯"
-        echo ""
-        echo "  1. Start the tunnel: slack-tunnel"
-        echo "  2. In Claude, run: /slack-notify"
-        echo ""
-        echo "  Focus buttons will now switch to your Mac terminal."
-        echo ""
-        exit 0
-    fi
 
     # Generate unique link ID (8 chars, alphanumeric)
     LINK_ID=$(head -c 12 /dev/urandom | base64 | tr -dc 'a-z0-9' | head -c 8)

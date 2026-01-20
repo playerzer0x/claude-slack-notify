@@ -92,23 +92,6 @@ print_section() {
     echo -e "${NC}"
 }
 
-# Parse flags
-# --remote: Install on remote machine (hooks + notifications, no MCP server)
-# --local: Install on local Mac for reverse link (focus handler only, no hooks)
-REMOTE_ONLY=false
-LOCAL_ONLY=false
-if [[ "${1:-}" == "--remote" || "${1:-}" == "--hooks-only" ]]; then
-    REMOTE_ONLY=true
-    echo_info "Installing for remote machine (hooks + notifications only)"
-elif [[ "${1:-}" == "--local" || "${1:-}" == "--focus-only" ]]; then
-    LOCAL_ONLY=true
-    if [[ "$(uname)" != "Darwin" ]]; then
-        echo_error "--local is only supported on macOS"
-        exit 1
-    fi
-    echo_info "Installing for local Mac (focus handler for reverse link)"
-fi
-
 # Check for --uninstall flag
 if [[ "${1:-}" == "--uninstall" ]]; then
     echo_info "Uninstalling Claude Slack Notify..."
@@ -235,14 +218,7 @@ mkdir -p "$BIN_DIR" "$COMMANDS_DIR" "$APP_DIR" "$HOME/Library/LaunchAgents"
 
 # Install scripts (copy for portability, especially in Docker containers)
 # Use --link flag for development to create symlinks instead
-# --focus-only only installs focus-helper
-if [[ "$LOCAL_ONLY" == "true" ]]; then
-    # Only install focus-helper for reverse link setup
-    rm -f "$BIN_DIR/focus-helper"
-    cp "$SCRIPT_DIR/bin/focus-helper" "$BIN_DIR/"
-    chmod +x "$BIN_DIR/focus-helper"
-    echo_info "Installed focus-helper to $BIN_DIR/"
-elif [[ "${1:-}" == "--link" ]]; then
+if [[ "${1:-}" == "--link" ]]; then
     ln -sf "$SCRIPT_DIR/bin/claude-slack-notify" "$BIN_DIR/"
     ln -sf "$SCRIPT_DIR/bin/slack-notify-start" "$BIN_DIR/"
     ln -sf "$SCRIPT_DIR/bin/slack-notify-check" "$BIN_DIR/"
@@ -265,16 +241,13 @@ else
     echo_info "Installed scripts to $BIN_DIR/"
 fi
 
-# Install Claude command (skip for --focus-only)
-if [[ "$LOCAL_ONLY" != "true" ]]; then
-    cp "$SCRIPT_DIR/commands/slack-notify.md" "$COMMANDS_DIR/"
-    echo_info "Installed Claude command to $COMMANDS_DIR/"
-fi
+# Install Claude command
+cp "$SCRIPT_DIR/commands/slack-notify.md" "$COMMANDS_DIR/"
+echo_info "Installed Claude command to $COMMANDS_DIR/"
 
 # Build MCP server (optional - for Slack button actions)
-# Skip if --hooks-only or --focus-only
 MCP_DIST_DIR="$CLAUDE_DIR/mcp-server-dist"
-if [[ "$REMOTE_ONLY" != "true" && "$LOCAL_ONLY" != "true" && -d "$SCRIPT_DIR/mcp-server" ]]; then
+if [[ -d "$SCRIPT_DIR/mcp-server" ]]; then
     echo_info "Building MCP server..."
     cd "$SCRIPT_DIR/mcp-server"
     MCP_BUILD_SUCCESS=false
@@ -307,8 +280,7 @@ if [[ "$REMOTE_ONLY" != "true" && "$LOCAL_ONLY" != "true" && -d "$SCRIPT_DIR/mcp
 fi
 
 # macOS-specific: Install ClaudeFocus.app and LaunchAgent
-# Skip if --hooks-only (remote machines don't need focus app)
-if [[ "$REMOTE_ONLY" != "true" && "$(uname)" == "Darwin" ]]; then
+if [[ "$(uname)" == "Darwin" ]]; then
     print_section "macOS Focus Button Setup"
     echo ""
     echo -e "  ${DIM}Installing ClaudeFocus.app to enable the 'Focus Terminal' button in Slack.${NC}"
@@ -505,18 +477,14 @@ configure_buttons_interactive() {
 }
 
 # Only configure buttons interactively on fresh install or when --configure flag is passed
-# Skip for --local (focus handler only)
-if [[ "$LOCAL_ONLY" != "true" ]]; then
-    if [[ "${1:-}" == "--configure" || ( ! -f "$BUTTON_CONFIG" && "${1:-}" != "--uninstall" ) ]]; then
-        configure_buttons "${1:-}"
-    elif [[ ! -f "$BUTTON_CONFIG" ]]; then
-        echo "$DEFAULT_BUTTONS" > "$BUTTON_CONFIG"
-    fi
+if [[ "${1:-}" == "--configure" || ( ! -f "$BUTTON_CONFIG" && "${1:-}" != "--uninstall" ) ]]; then
+    configure_buttons "${1:-}"
+elif [[ ! -f "$BUTTON_CONFIG" ]]; then
+    echo "$DEFAULT_BUTTONS" > "$BUTTON_CONFIG"
 fi
 
 # =============================================================================
 # Setup hooks in settings.json
-# Skip for --local (focus handler only needs macOS setup, not hooks)
 # =============================================================================
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 
@@ -537,7 +505,7 @@ SLACK_HOOKS='{
   }
 }'
 
-if [[ "$LOCAL_ONLY" != "true" && -f "$SETTINGS_FILE" ]]; then
+if [[ -f "$SETTINGS_FILE" ]]; then
     if grep -q "slack-notify" "$SETTINGS_FILE" 2>/dev/null; then
         # Already configured
         :
@@ -603,101 +571,73 @@ fi
 # =============================================================================
 print_header "Installation Complete" 50
 
-if [[ "$LOCAL_ONLY" == "true" ]]; then
-    # --local mode: focus handler only
-    echo -e "  ${GREEN}✓${NC} Focus helper installed to ${BOLD}~/.claude/bin/focus-helper${NC}"
+echo -e "  ${GREEN}✓${NC} Scripts installed to ${BOLD}~/.claude/bin/${NC}"
+if [[ "$(uname)" == "Darwin" ]]; then
     echo -e "  ${GREEN}✓${NC} ClaudeFocus.app installed"
     echo -e "  ${GREEN}✓${NC} LaunchAgent loaded"
-    echo ""
+fi
+echo -e "  ${GREEN}✓${NC} Button config at ${BOLD}~/.claude/button-config${NC}"
+if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
+    echo -e "  ${GREEN}✓${NC} MCP server built (start with: ${BOLD}~/.claude/bin/mcp-server${NC})"
+fi
+echo ""
 
-    print_section "Next Steps"
+WEBHOOK_FILE="$CLAUDE_DIR/slack-webhook-url"
+
+if [[ -f "$WEBHOOK_FILE" ]]; then
+    print_section "Webhook Configuration"
     echo ""
-    echo -e "  ${CYAN}1.${NC} On your Linux machine, run: ${BOLD}./install.sh${NC} (full install)"
-    echo -e "  ${CYAN}2.${NC} Create reverse link: ${BOLD}claude-slack-notify link --to-host $(whoami)@$(hostname)${NC}"
-    echo -e "  ${CYAN}3.${NC} Start tunnel: ${BOLD}slack-tunnel${NC}"
-    echo ""
-    echo -e "  ${DIM}Focus buttons will switch to your Mac terminal.${NC}"
+    echo -e "  ${GREEN}✓${NC} Webhook URL already configured at ${BOLD}~/.claude/slack-webhook-url${NC}"
     echo ""
 else
-    # Normal or --remote mode
-    echo -e "  ${GREEN}✓${NC} Scripts installed to ${BOLD}~/.claude/bin/${NC}"
-    if [[ "$(uname)" == "Darwin" && "$REMOTE_ONLY" != "true" ]]; then
-        echo -e "  ${GREEN}✓${NC} ClaudeFocus.app installed"
-        echo -e "  ${GREEN}✓${NC} LaunchAgent loaded"
-    fi
-    if [[ "$REMOTE_ONLY" != "true" ]]; then
-        echo -e "  ${GREEN}✓${NC} Button config at ${BOLD}~/.claude/button-config${NC}"
-    fi
-    if [[ -d "$SCRIPT_DIR/mcp-server/dist" && "$REMOTE_ONLY" != "true" ]]; then
-        echo -e "  ${GREEN}✓${NC} MCP server built (start with: ${BOLD}~/.claude/bin/mcp-server${NC})"
-    fi
+    print_section "Slack Webhook Setup"
+    echo ""
+    echo -e "  ${DIM}To receive notifications, you need a Slack webhook URL.${NC}"
+    echo ""
+    echo -e "  ${BOLD}Quick setup:${NC}"
+    echo -e "    1. Go to ${CYAN}https://api.slack.com/apps${NC}"
+    echo -e "    2. Create New App → From scratch"
+    echo -e "    3. Click ${BOLD}Incoming Webhooks${NC} → Toggle ${BOLD}Activate Incoming Webhooks${NC} to On"
+    echo -e "    4. Click ${BOLD}Add New Webhook to Workspace${NC} → Select a channel → Click ${BOLD}Allow${NC}"
+    echo -e "    5. Copy the webhook URL"
     echo ""
 
-    WEBHOOK_FILE="$CLAUDE_DIR/slack-webhook-url"
+    if [[ -t 0 ]]; then
+        echo -e "  ${YELLOW}?${NC} Paste your Slack webhook URL (or press Enter to skip): "
+        read -r webhook_url
 
-    if [[ -f "$WEBHOOK_FILE" ]]; then
-        print_section "Webhook Configuration"
-        echo ""
-        echo -e "  ${GREEN}✓${NC} Webhook URL already configured at ${BOLD}~/.claude/slack-webhook-url${NC}"
-        echo ""
-    else
-        print_section "Slack Webhook Setup"
-        echo ""
-        echo -e "  ${DIM}To receive notifications, you need a Slack webhook URL.${NC}"
-        echo ""
-        echo -e "  ${BOLD}Quick setup:${NC}"
-        echo -e "    1. Go to ${CYAN}https://api.slack.com/apps${NC}"
-        echo -e "    2. Create New App → From scratch"
-        echo -e "    3. Click ${BOLD}Incoming Webhooks${NC} → Toggle ${BOLD}Activate Incoming Webhooks${NC} to On"
-        echo -e "    4. Click ${BOLD}Add New Webhook to Workspace${NC} → Select a channel → Click ${BOLD}Allow${NC}"
-        echo -e "    5. Copy the webhook URL"
-        echo ""
-
-        if [[ -t 0 ]]; then
-            echo -e "  ${YELLOW}?${NC} Paste your Slack webhook URL (or press Enter to skip): "
-            read -r webhook_url
-
-            if [[ -n "$webhook_url" ]]; then
-                if [[ "$webhook_url" =~ ^https://hooks\.slack\.com/ ]]; then
-                    echo "$webhook_url" > "$WEBHOOK_FILE"
-                    chmod 600 "$WEBHOOK_FILE"
-                    echo_info "Webhook URL saved to ~/.claude/slack-webhook-url"
-                else
-                    echo_warn "URL doesn't look like a Slack webhook (should start with https://hooks.slack.com/)"
-                    echo_warn "Saving anyway - you can edit ~/.claude/slack-webhook-url later"
-                    echo "$webhook_url" > "$WEBHOOK_FILE"
-                    chmod 600 "$WEBHOOK_FILE"
-                fi
+        if [[ -n "$webhook_url" ]]; then
+            if [[ "$webhook_url" =~ ^https://hooks\.slack\.com/ ]]; then
+                echo "$webhook_url" > "$WEBHOOK_FILE"
+                chmod 600 "$WEBHOOK_FILE"
+                echo_info "Webhook URL saved to ~/.claude/slack-webhook-url"
             else
-                echo_warn "Skipped - run this later to set up:"
-                echo_warn "  echo 'YOUR_URL' > ~/.claude/slack-webhook-url"
+                echo_warn "URL doesn't look like a Slack webhook (should start with https://hooks.slack.com/)"
+                echo_warn "Saving anyway - you can edit ~/.claude/slack-webhook-url later"
+                echo "$webhook_url" > "$WEBHOOK_FILE"
+                chmod 600 "$WEBHOOK_FILE"
             fi
         else
-            echo -e "  ${DIM}(Non-interactive mode - skipping webhook prompt)${NC}"
-            echo -e "  ${DIM}Run: echo 'YOUR_URL' > ~/.claude/slack-webhook-url${NC}"
+            echo_warn "Skipped - run this later to set up:"
+            echo_warn "  echo 'YOUR_URL' > ~/.claude/slack-webhook-url"
         fi
-        echo ""
-    fi
-
-    print_section "Next Steps"
-    echo ""
-    if [[ "$REMOTE_ONLY" == "true" ]]; then
-        echo -e "  ${CYAN}1.${NC} On your Mac, ensure you have the full install and ${BOLD}slack-tunnel${NC} running"
-        echo -e "  ${CYAN}2.${NC} Create link: ${BOLD}claude-slack-notify link --host $(whoami)@$(hostname)${NC}"
-        echo -e "  ${CYAN}3.${NC} In Claude, run: ${BOLD}/slack-notify${NC}"
     else
-        echo -e "  ${CYAN}1.${NC} In Claude, run: ${BOLD}/slack-notify${NC}"
-    fi
-    echo ""
-    echo -e "  ${DIM}The Focus button will switch to the correct terminal tab.${NC}"
-    if [[ "$REMOTE_ONLY" != "true" ]]; then
-        echo -e "  ${DIM}Run ${BOLD}./install.sh --configure${NC}${DIM} to change button layout.${NC}"
+        echo -e "  ${DIM}(Non-interactive mode - skipping webhook prompt)${NC}"
+        echo -e "  ${DIM}Run: echo 'YOUR_URL' > ~/.claude/slack-webhook-url${NC}"
     fi
     echo ""
 fi
 
-# Show slack-tunnel info if MCP server was built (skip for --local)
-if [[ "$LOCAL_ONLY" != "true" && -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
+print_section "Next Steps"
+echo ""
+echo -e "  ${CYAN}1.${NC} In Claude, run: ${BOLD}/slack-notify${NC}"
+echo ""
+echo -e "  ${DIM}The Focus button will switch to the correct terminal tab.${NC}"
+echo -e "  ${DIM}Run ${BOLD}./install.sh --configure${NC}${DIM} to change button layout.${NC}"
+echo ""
+
+# Show slack-tunnel info if MCP server was built
+if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
     print_section "Slack Button Actions (Optional)"
     echo ""
     echo -e "  ${DIM}To respond to Claude directly from Slack (buttons like \"Continue\", \"1\", \"2\"):${NC}"
@@ -716,9 +656,8 @@ fi
 
 # =============================================================================
 # Auto-configure MCP Server in settings.json
-# Skip if --remote or --local (only needed for full install)
 # =============================================================================
-if [[ "$REMOTE_ONLY" != "true" && "$LOCAL_ONLY" != "true" && -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
+if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
     MCP_CONFIGURED=false
 
     if [[ -f "$SETTINGS_FILE" ]]; then

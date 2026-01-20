@@ -125,6 +125,53 @@ claude
 /slack-notify
 ```
 
+## MCP Server (Mobile Support)
+
+The MCP server enables Slack button actions from mobile devices. Without it, Focus and action buttons only work on desktop.
+
+### Setup
+
+1. **Start the MCP server**:
+   ```bash
+   ~/.claude/bin/mcp-server
+   ```
+
+2. **Expose with ngrok** (or similar):
+   ```bash
+   ngrok http 8463
+   ```
+
+3. **Configure Slack Interactivity**:
+   - Go to your Slack app settings ([api.slack.com/apps](https://api.slack.com/apps))
+   - Navigate to **Interactivity & Shortcuts**
+   - Enable Interactivity
+   - Set Request URL to: `https://your-ngrok-url.ngrok.io/slack/actions`
+   - Save Changes
+
+4. **Add signing secret** (for security):
+   ```bash
+   # Get signing secret from Slack app > Basic Information > Signing Secret
+   echo 'your_signing_secret' > ~/.claude/slack-signing-secret
+   ```
+
+### How It Works
+
+- When you click a button in Slack, the request goes to your ngrok URL
+- The MCP server verifies the Slack signature and executes the action locally
+- Focus switches to the correct terminal, or input is sent to tmux
+
+### Persistent Setup
+
+For always-on mobile support, run the MCP server and ngrok as background services:
+
+```bash
+# Using launchd (macOS) or systemd (Linux)
+# See examples in mcp-server/examples/ (if available)
+
+# Or simply:
+nohup ~/.claude/bin/mcp-server > ~/.claude/logs/mcp-server.log 2>&1 &
+```
+
 ## Configuration
 
 ### Slack Buttons

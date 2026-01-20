@@ -49,17 +49,24 @@ Then in Claude Code:
 Focus your local terminal while sending input to a remote Claude session:
 
 ```bash
+# On your Mac:
+slack-tunnel                                  # Start tunnel (keep running)
+
+# In another terminal:
 claude-slack-notify link --host user@server  # Creates link, SSHs, starts tmux
 claude                                        # Start Claude on remote
 /slack-notify                                 # Register in Slack
 ```
 
-**Requirements**: macOS locally, tmux on remote, SSH key authentication.
+**Requirements**: macOS locally, tmux on remote, SSH key authentication. The tunnel must run on your local Mac for buttons to work.
 
 ### JupyterLab
 
 ```bash
-# From Mac terminal (with JupyterLab open in Chrome):
+# On your Mac (keep running):
+slack-tunnel
+
+# From another Mac terminal (with JupyterLab open in Chrome):
 claude-slack-notify link --jupyter --host user@jupyter-server
 
 # In JupyterLab terminal:

@@ -161,6 +161,12 @@ if [[ "${1:-}" == "--uninstall" ]]; then
             ' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
             echo_info "Removed slack-notify hooks from settings.json"
         fi
+
+        # Remove slack-notify permissions
+        if grep -q 'Bash(SESSION_ID=:\*)' "$SETTINGS_FILE" 2>/dev/null; then
+            jq '.permissions.allow = ([.permissions.allow // []] | flatten | map(select(. != "Bash(SESSION_ID=:*)")))' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
+            echo_info "Removed slack-notify permissions from settings.json"
+        fi
     elif [[ -f "$SETTINGS_FILE" ]]; then
         echo_warn "jq not found - manually remove 'slack-notify' entries from ~/.claude/settings.json"
     fi
@@ -484,9 +490,14 @@ elif [[ ! -f "$BUTTON_CONFIG" ]]; then
 fi
 
 # =============================================================================
-# Setup hooks in settings.json
+# Setup hooks and permissions in settings.json
 # =============================================================================
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
+
+# Permissions needed for /slack-notify command
+SLACK_PERMISSIONS='[
+  "Bash(SESSION_ID=:*)"
+]'
 
 # Our hooks to add
 SLACK_HOOKS='{
@@ -506,63 +517,110 @@ SLACK_HOOKS='{
 }'
 
 if [[ -f "$SETTINGS_FILE" ]]; then
-    if grep -q "slack-notify" "$SETTINGS_FILE" 2>/dev/null; then
-        # Already configured
-        :
-    elif command -v jq &> /dev/null; then
-        # Auto-merge using jq
-        print_section "Claude Hooks"
-        echo -e "  ${DIM}Adding notification hooks to $SETTINGS_FILE${NC}"
-        echo ""
+    HOOKS_CONFIGURED=false
+    PERMS_CONFIGURED=false
 
-        # Create backup
-        cp "$SETTINGS_FILE" "$SETTINGS_FILE.backup"
+    # Check what's already configured
+    if grep -q "slack-notify-start" "$SETTINGS_FILE" 2>/dev/null; then
+        HOOKS_CONFIGURED=true
+    fi
+    if grep -q 'Bash(SESSION_ID=:\*)' "$SETTINGS_FILE" 2>/dev/null; then
+        PERMS_CONFIGURED=true
+    fi
 
-        # Deep merge: combine hooks arrays instead of replacing
-        MERGED=$(jq -s '
-          def merge_hooks:
-            reduce .[] as $item ({};
-              . as $acc |
-              $item | to_entries | reduce .[] as $e ($acc;
-                if .[$e.key] then
-                  .[$e.key] += $e.value
-                else
-                  .[$e.key] = $e.value
-                end
-              )
-            );
-          .[0] * {hooks: ([.[0].hooks // {}, .[1].hooks] | merge_hooks)}
-        ' "$SETTINGS_FILE" <(echo "$SLACK_HOOKS") 2>/dev/null)
-
-        if [[ -n "$MERGED" ]] && echo "$MERGED" | jq . > /dev/null 2>&1; then
-            echo "$MERGED" > "$SETTINGS_FILE"
-            echo_info "Hooks added to settings.json (backup at settings.json.backup)"
-        else
-            echo_warn "Failed to merge hooks - restoring backup"
-            mv "$SETTINGS_FILE.backup" "$SETTINGS_FILE"
-            echo_warn "Add hooks manually (see below)"
+    if command -v jq &> /dev/null; then
+        # Create backup before any changes
+        if [[ "$HOOKS_CONFIGURED" != "true" || "$PERMS_CONFIGURED" != "true" ]]; then
+            cp "$SETTINGS_FILE" "$SETTINGS_FILE.backup"
         fi
-        echo ""
+
+        # Add hooks if not already configured
+        if [[ "$HOOKS_CONFIGURED" != "true" ]]; then
+            print_section "Claude Hooks"
+            echo -e "  ${DIM}Adding notification hooks to $SETTINGS_FILE${NC}"
+            echo ""
+
+            # Deep merge: combine hooks arrays instead of replacing
+            MERGED=$(jq -s '
+              def merge_hooks:
+                reduce .[] as $item ({};
+                  . as $acc |
+                  $item | to_entries | reduce .[] as $e ($acc;
+                    if .[$e.key] then
+                      .[$e.key] += $e.value
+                    else
+                      .[$e.key] = $e.value
+                    end
+                  )
+                );
+              .[0] * {hooks: ([.[0].hooks // {}, .[1].hooks] | merge_hooks)}
+            ' "$SETTINGS_FILE" <(echo "$SLACK_HOOKS") 2>/dev/null)
+
+            if [[ -n "$MERGED" ]] && echo "$MERGED" | jq . > /dev/null 2>&1; then
+                echo "$MERGED" > "$SETTINGS_FILE"
+                echo_info "Hooks added to settings.json (backup at settings.json.backup)"
+            else
+                echo_warn "Failed to merge hooks - add manually (see below)"
+            fi
+            echo ""
+        fi
+
+        # Add permissions if not already configured
+        if [[ "$PERMS_CONFIGURED" != "true" ]]; then
+            print_section "Bash Permissions"
+            echo -e "  ${DIM}Adding command permissions to $SETTINGS_FILE${NC}"
+            echo ""
+
+            # Merge permissions: add our permissions to existing allow list
+            MERGED=$(jq --argjson perms "$SLACK_PERMISSIONS" '
+              .permissions.allow = ((.permissions.allow // []) + $perms | unique)
+            ' "$SETTINGS_FILE" 2>/dev/null)
+
+            if [[ -n "$MERGED" ]] && echo "$MERGED" | jq . > /dev/null 2>&1; then
+                echo "$MERGED" > "$SETTINGS_FILE"
+                echo_info "Bash permissions added to settings.json"
+            else
+                echo_warn "Failed to add permissions - add manually:"
+                echo_warn '  "permissions": {"allow": ["Bash(SESSION_ID=:*)"]}'
+            fi
+            echo ""
+        fi
     else
         # No jq - show manual instructions
-        print_section "Claude Hooks"
-        echo -e "  ${DIM}Add these hooks to $SETTINGS_FILE for automatic notifications:${NC}"
-        echo ""
-        echo -e "  ${CYAN}\"hooks\": {"
-        echo -e "    \"UserPromptSubmit\": ["
-        echo -e "      {\"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-start\", \"timeout\": 5}]}"
-        echo -e "    ],"
-        echo -e "    \"Stop\": ["
-        echo -e "      {\"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-check\", \"timeout\": 10}]}"
-        echo -e "    ],"
-        echo -e "    \"Notification\": ["
-        echo -e "      {\"matcher\": \"idle_prompt\", \"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-check\", \"timeout\": 10}]},"
-        echo -e "      {\"matcher\": \"elicitation_dialog\", \"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-check\", \"timeout\": 10}]},"
-        echo -e "      {\"matcher\": \"permission_prompt\", \"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-check\", \"timeout\": 10}]}"
-        echo -e "    ]"
-        echo -e "  }${NC}"
-        echo -e "  ${DIM}(Install jq for automatic hook configuration: brew install jq)${NC}"
-        echo ""
+        if [[ "$HOOKS_CONFIGURED" != "true" ]]; then
+            print_section "Claude Hooks"
+            echo -e "  ${DIM}Add these hooks to $SETTINGS_FILE for automatic notifications:${NC}"
+            echo ""
+            echo -e "  ${CYAN}\"hooks\": {"
+            echo -e "    \"UserPromptSubmit\": ["
+            echo -e "      {\"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-start\", \"timeout\": 5}]}"
+            echo -e "    ],"
+            echo -e "    \"Stop\": ["
+            echo -e "      {\"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-check\", \"timeout\": 10}]}"
+            echo -e "    ],"
+            echo -e "    \"Notification\": ["
+            echo -e "      {\"matcher\": \"idle_prompt\", \"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-check\", \"timeout\": 10}]},"
+            echo -e "      {\"matcher\": \"elicitation_dialog\", \"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-check\", \"timeout\": 10}]},"
+            echo -e "      {\"matcher\": \"permission_prompt\", \"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-check\", \"timeout\": 10}]}"
+            echo -e "    ]"
+            echo -e "  }${NC}"
+            echo ""
+        fi
+        if [[ "$PERMS_CONFIGURED" != "true" ]]; then
+            print_section "Bash Permissions"
+            echo -e "  ${DIM}Add this permission to allow /slack-notify to run without prompts:${NC}"
+            echo ""
+            echo -e "  ${CYAN}\"permissions\": {"
+            echo -e "    \"allow\": ["
+            echo -e "      \"Bash(SESSION_ID=:*)\""
+            echo -e "    ]"
+            echo -e "  }${NC}"
+            echo ""
+        fi
+        if [[ "$HOOKS_CONFIGURED" != "true" || "$PERMS_CONFIGURED" != "true" ]]; then
+            echo -e "  ${DIM}(Install jq for automatic configuration: brew install jq)${NC}"
+            echo ""
+        fi
     fi
 fi
 

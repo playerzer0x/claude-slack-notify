@@ -739,21 +739,54 @@ echo -e "  ${DIM}The Focus button will switch to the correct terminal tab.${NC}"
 echo -e "  ${DIM}Run ${BOLD}./install.sh --configure${NC}${DIM} to change button layout.${NC}"
 echo ""
 
-# Show slack-tunnel info if MCP server was built
+# =============================================================================
+# Slack Button Actions Setup (App ID + Configuration Token)
+# =============================================================================
+SLACK_CONFIG_FILE="$CLAUDE_DIR/.slack-config"
+
 if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
-    print_section "Slack Button Actions (One-Time Setup)"
-    echo ""
-    echo -e "  ${DIM}To respond to Claude directly from Slack (buttons like \"Continue\", \"1\", \"2\"):${NC}"
-    echo ""
-    echo -e "  ${CYAN}2.${NC} Run: ${BOLD}slack-tunnel --setup${NC}"
-    echo ""
-    echo -e "     ${DIM}This will guide you through:${NC}"
-    echo -e "     ${DIM}• Getting your Slack App ID${NC}"
-    echo -e "     ${DIM}• Generating a Configuration Token (at api.slack.com/apps)${NC}"
-    echo ""
-    echo -e "  ${DIM}Once configured, the tunnel auto-updates Slack's Request URL each time.${NC}"
-    echo -e "  ${DIM}Just run ${BOLD}/slack-notify${NC}${DIM} and buttons will work on mobile + desktop!${NC}"
-    echo ""
+    if [[ -f "$SLACK_CONFIG_FILE" ]]; then
+        print_section "Slack Button Actions"
+        echo ""
+        echo -e "  ${GREEN}✓${NC} Slack tunnel already configured"
+        echo -e "  ${DIM}Run ${BOLD}slack-tunnel${NC}${DIM} to start the tunnel for button support.${NC}"
+        echo ""
+    else
+        print_section "Slack Button Actions (One-Time Setup)"
+        echo ""
+        echo -e "  ${DIM}To respond to Claude directly from Slack (buttons like \"Continue\", \"1\", \"2\"),${NC}"
+        echo -e "  ${DIM}you need to configure your Slack App ID and Configuration Token.${NC}"
+        echo ""
+        echo -e "  ${DIM}This enables:${NC}"
+        echo -e "    ${CYAN}•${NC} Click buttons in Slack to send input to Claude"
+        echo -e "    ${CYAN}•${NC} Works on mobile + desktop"
+        echo -e "    ${CYAN}•${NC} Auto-updates Slack's Request URL (no manual URL copying)${NC}"
+        echo ""
+
+        SETUP_NOW=false
+        if [[ -t 0 && "${1:-}" != "--link" ]]; then
+            echo -ne "  ${YELLOW}?${NC} Set up Slack button actions now? [Y/n] "
+            read -r response
+            echo ""
+
+            if [[ ! "$response" =~ ^[Nn]$ ]]; then
+                SETUP_NOW=true
+            fi
+        fi
+
+        if [[ "$SETUP_NOW" == "true" ]]; then
+            # Run slack-tunnel --setup inline
+            "$BIN_DIR/slack-tunnel" --setup
+        else
+            echo -e "  ${DIM}To set up later, run:${NC}"
+            echo -e "  ${CYAN}2.${NC} ${BOLD}slack-tunnel --setup${NC}"
+            echo ""
+            echo -e "     ${DIM}This will guide you through:${NC}"
+            echo -e "     ${DIM}• Getting your Slack App ID${NC}"
+            echo -e "     ${DIM}• Generating a Configuration Token (at api.slack.com/apps)${NC}"
+            echo ""
+        fi
+    fi
 fi
 
 # =============================================================================

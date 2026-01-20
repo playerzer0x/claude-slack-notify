@@ -31,20 +31,27 @@ Paste the contents of `slack-app-manifest.json`, then:
 ```
 
 The installer will:
-- Install `jq` if needed (for auto-configuration)
+- Install `jq` and `cloudflared` if needed
 - Build and install the MCP server
 - Configure hooks in `~/.claude/settings.json`
 - Prompt for your Slack webhook URL
+- **Offer to set up Slack button actions** (App ID + Configuration Token)
 
 ### 3. Enable Slack Buttons (Optional)
 
-To respond to Claude from Slack (including mobile):
+If you skipped the button setup during install, run:
+
+```bash
+slack-tunnel --setup
+```
+
+Then start the tunnel with:
 
 ```bash
 slack-tunnel
 ```
 
-This starts an ngrok tunnel and guides you through configuring Slack Interactivity.
+This creates a Cloudflare tunnel and auto-updates your Slack app's Request URL.
 
 ### 4. Start Using
 

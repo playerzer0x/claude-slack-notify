@@ -171,13 +171,45 @@ fi
 
 echo_info "Installing Claude Slack Notify..."
 
-# Check for optional jq dependency
+# Check for jq dependency and install if possible
 if ! command -v jq &> /dev/null; then
-    echo_warn "jq not found - notifications will work but without transcript context"
-    echo_warn "Install jq for richer notifications:"
-    echo_warn "  macOS:  brew install jq"
-    echo_warn "  Ubuntu: sudo apt install jq"
-    echo_warn "  Fedora: sudo dnf install jq"
+    echo_info "jq not found - attempting to install..."
+    JQ_INSTALLED=false
+
+    if [[ "$(uname)" == "Darwin" ]]; then
+        # macOS - try Homebrew
+        if command -v brew &>/dev/null; then
+            if brew install jq 2>/dev/null; then
+                JQ_INSTALLED=true
+                echo_info "jq installed via Homebrew"
+            fi
+        fi
+    elif [[ "$(uname)" == "Linux" ]]; then
+        # Linux - try apt, dnf, or yum
+        if command -v apt-get &>/dev/null; then
+            if sudo apt-get update -qq && sudo apt-get install -y jq 2>/dev/null; then
+                JQ_INSTALLED=true
+                echo_info "jq installed via apt"
+            fi
+        elif command -v dnf &>/dev/null; then
+            if sudo dnf install -y jq 2>/dev/null; then
+                JQ_INSTALLED=true
+                echo_info "jq installed via dnf"
+            fi
+        elif command -v yum &>/dev/null; then
+            if sudo yum install -y jq 2>/dev/null; then
+                JQ_INSTALLED=true
+                echo_info "jq installed via yum"
+            fi
+        fi
+    fi
+
+    if [[ "$JQ_INSTALLED" != "true" ]]; then
+        echo_warn "Could not auto-install jq. Install manually for auto-configuration:"
+        echo_warn "  macOS:  brew install jq"
+        echo_warn "  Ubuntu: sudo apt install jq"
+        echo_warn "  Fedora: sudo dnf install jq"
+    fi
 fi
 
 # Create directories

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="public/banner.jpg" alt="Claude Slack Notify" width="100%">
+</p>
+
 # Claude Slack Notify
 
 Slack notifications for Claude Code with clickable buttons to focus terminals and send commands.

@@ -73,6 +73,13 @@ Or with a custom name:
 Focus your local terminal while sending input to a remote Claude session:
 
 ```bash
+# On local Mac: full install + start tunnel
+./install.sh && slack-tunnel
+
+# On remote: hooks-only install
+git clone <repo> && cd claude-slack-notify && ./install.sh --hooks-only
+
+# Connect and work
 claude-slack-notify link --host user@server  # Creates link, SSHs, starts tmux
 claude                                        # Start Claude on remote
 /slack-notify                                 # Register in Slack
@@ -119,6 +126,7 @@ Format: `LABEL|ACTION` per line. Reconfigure with `./install.sh --configure`.
 
 ```bash
 ./install.sh              # Install
+./install.sh --hooks-only # Install on remote machines (hooks + webhook only)
 ./install.sh --uninstall  # Uninstall completely
 ./install.sh --configure  # Reconfigure buttons
 ./install.sh --link       # Install with symlinks (development)

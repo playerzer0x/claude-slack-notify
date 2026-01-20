@@ -92,6 +92,13 @@ print_section() {
     echo -e "${NC}"
 }
 
+# Parse flags
+HOOKS_ONLY=false
+if [[ "${1:-}" == "--hooks-only" ]]; then
+    HOOKS_ONLY=true
+    echo_info "Installing hooks only (for remote machines)"
+fi
+
 # Check for --uninstall flag
 if [[ "${1:-}" == "--uninstall" ]]; then
     echo_info "Uninstalling Claude Slack Notify..."
@@ -246,8 +253,9 @@ cp "$SCRIPT_DIR/commands/slack-notify.md" "$COMMANDS_DIR/"
 echo_info "Installed Claude command to $COMMANDS_DIR/"
 
 # Build MCP server (optional - for Slack button actions)
+# Skip if --hooks-only (remote machines don't need local MCP server)
 MCP_DIST_DIR="$CLAUDE_DIR/mcp-server-dist"
-if [[ -d "$SCRIPT_DIR/mcp-server" ]]; then
+if [[ "$HOOKS_ONLY" != "true" && -d "$SCRIPT_DIR/mcp-server" ]]; then
     echo_info "Building MCP server..."
     cd "$SCRIPT_DIR/mcp-server"
     MCP_BUILD_SUCCESS=false
@@ -280,7 +288,8 @@ if [[ -d "$SCRIPT_DIR/mcp-server" ]]; then
 fi
 
 # macOS-specific: Install ClaudeFocus.app and LaunchAgent
-if [[ "$(uname)" == "Darwin" ]]; then
+# Skip if --hooks-only (remote machines don't need focus app)
+if [[ "$HOOKS_ONLY" != "true" && "$(uname)" == "Darwin" ]]; then
     print_section "macOS Focus Button Setup"
     echo ""
     echo -e "  ${DIM}Installing ClaudeFocus.app to enable the 'Focus Terminal' button in Slack.${NC}"
@@ -656,8 +665,9 @@ fi
 
 # =============================================================================
 # Auto-configure MCP Server in settings.json
+# Skip if --hooks-only (remote machines don't need MCP server)
 # =============================================================================
-if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
+if [[ "$HOOKS_ONLY" != "true" && -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
     MCP_CONFIGURED=false
 
     if [[ -f "$SETTINGS_FILE" ]]; then

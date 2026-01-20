@@ -156,63 +156,106 @@ main() {
     echo_info "Starting ngrok tunnel..."
     echo ""
 
-    # Start ngrok in background and capture output
-    ngrok http "$MCP_PORT" --log=stdout --log-format=json 2>&1 | while IFS= read -r line; do
-        # Parse JSON log for the URL
-        if echo "$line" | grep -q '"url":'; then
-            URL=$(echo "$line" | grep -oE '"url":"https://[^"]+' | cut -d'"' -f4)
-            if [[ -n "$URL" && "$URL" == https://* ]]; then
-                # Verify the tunnel is working by hitting the health endpoint
-                echo -e "  ${DIM}Verifying tunnel connection...${NC}"
-                sleep 1  # Give ngrok a moment to establish
+    # Start ngrok and get the URL
+    TUNNEL_URL=""
 
-                if curl -sf "${URL}/health" --max-time 10 >/dev/null 2>&1; then
-                    echo ""
-                    echo -e "${GREEN}╭──────────────────────────────────────────────────────────────╮${NC}"
-                    echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Tunnel connected successfully!${NC}                            ${GREEN}│${NC}"
-                    echo -e "${GREEN}│${NC}                                                              ${GREEN}│${NC}"
-                    echo -e "${GREEN}│${NC}  ${BOLD}Slack Interactivity URL:${NC}                                   ${GREEN}│${NC}"
-                    echo -e "${GREEN}│${NC}                                                              ${GREEN}│${NC}"
-                    echo -e "${GREEN}│${NC}  ${CYAN}${URL}/slack/actions${NC}"
-                    echo -e "${GREEN}│${NC}                                                              ${GREEN}│${NC}"
-                    echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
-                else
-                    echo ""
-                    echo -e "${YELLOW}╭──────────────────────────────────────────────────────────────╮${NC}"
-                    echo -e "${YELLOW}│${NC}  ${YELLOW}⚠${NC}  ${BOLD}Tunnel created but verification failed${NC}                    ${YELLOW}│${NC}"
-                    echo -e "${YELLOW}│${NC}                                                              ${YELLOW}│${NC}"
-                    echo -e "${YELLOW}│${NC}  ${BOLD}Slack Interactivity URL:${NC}                                   ${YELLOW}│${NC}"
-                    echo -e "${YELLOW}│${NC}                                                              ${YELLOW}│${NC}"
-                    echo -e "${YELLOW}│${NC}  ${CYAN}${URL}/slack/actions${NC}"
-                    echo -e "${YELLOW}│${NC}                                                              ${YELLOW}│${NC}"
-                    echo -e "${YELLOW}│${NC}  ${DIM}(ngrok may require a few seconds to fully connect)${NC}        ${YELLOW}│${NC}"
-                    echo -e "${YELLOW}╰──────────────────────────────────────────────────────────────╯${NC}"
-                fi
-                echo ""
-                echo -e "  ${BOLD}To configure Slack (first time only):${NC}"
-                echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps${NC} → your app"
-                echo -e "  ${CYAN}2.${NC} Click ${BOLD}Interactivity & Shortcuts${NC}"
-                echo -e "  ${CYAN}3.${NC} Toggle ${BOLD}Interactivity${NC} to On"
-                echo -e "  ${CYAN}4.${NC} Paste the URL above into ${BOLD}Request URL${NC}"
-                echo -e "  ${CYAN}5.${NC} Click ${BOLD}Save Changes${NC}"
-                echo ""
-                echo -e "  ${BOLD}To start receiving notifications:${NC}"
-                echo -e "  Run ${CYAN}/slack-notify${NC} in Claude Code in your preferred terminal"
-                echo ""
-                echo -e "  ${DIM}Press Ctrl+C to stop the tunnel${NC}"
-                echo ""
-            fi
-        fi
-
-        # Also show any errors
-        if echo "$line" | grep -q '"lvl":"error"'; then
-            MSG=$(echo "$line" | grep -oE '"msg":"[^"]+' | cut -d'"' -f4)
-            echo_error "ngrok: $MSG"
-        fi
-    done &
+    # Start ngrok in background
+    ngrok http "$MCP_PORT" --log=stdout --log-format=json > "$CLAUDE_DIR/.ngrok.log" 2>&1 &
     NGROK_PID=$!
 
-    # Wait for ngrok process
+    # Wait for URL to appear in logs
+    for i in {1..30}; do
+        if [[ -f "$CLAUDE_DIR/.ngrok.log" ]]; then
+            TUNNEL_URL=$(grep -oE '"url":"https://[^"]+' "$CLAUDE_DIR/.ngrok.log" 2>/dev/null | head -1 | cut -d'"' -f4)
+            if [[ -n "$TUNNEL_URL" && "$TUNNEL_URL" == https://* ]]; then
+                break
+            fi
+        fi
+        sleep 0.5
+    done
+
+    if [[ -z "$TUNNEL_URL" ]]; then
+        echo_error "Failed to get ngrok tunnel URL"
+        cat "$CLAUDE_DIR/.ngrok.log" 2>/dev/null | tail -5
+        exit 1
+    fi
+
+    # Display the URL and configuration steps
+    echo ""
+    echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
+    echo -e "${CYAN}│${NC}                                                              ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${BOLD}Slack Interactivity URL:${NC}                                   ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}                                                              ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${BOLD}${TUNNEL_URL}/slack/actions${NC}"
+    echo -e "${CYAN}│${NC}                                                              ${CYAN}│${NC}"
+    echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
+    echo ""
+    echo -e "  ${BOLD}Configure your Slack app:${NC}"
+    echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps${NC} → your app"
+    echo -e "  ${CYAN}2.${NC} Click ${BOLD}Interactivity & Shortcuts${NC}"
+    echo -e "  ${CYAN}3.${NC} Toggle ${BOLD}Interactivity${NC} to On"
+    echo -e "  ${CYAN}4.${NC} Paste the URL above into ${BOLD}Request URL${NC}"
+    echo -e "  ${CYAN}5.${NC} Click ${BOLD}Save Changes${NC}"
+    echo ""
+
+    # Wait for user to confirm
+    echo -ne "  ${YELLOW}?${NC} Press ${BOLD}Enter${NC} when you've completed the steps above (or ${BOLD}q${NC} to quit): "
+    read -r response
+
+    if [[ "$response" == "q" || "$response" == "Q" ]]; then
+        echo_info "Tunnel stopped"
+        kill "$NGROK_PID" 2>/dev/null || true
+        exit 0
+    fi
+
+    # Verify the connection
+    echo ""
+    echo -e "  ${DIM}Verifying connection...${NC}"
+
+    if curl -sf "${TUNNEL_URL}/health" --max-time 10 >/dev/null 2>&1; then
+        echo ""
+        echo -e "${GREEN}╭──────────────────────────────────────────────────────────────╮${NC}"
+        echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Connection verified successfully!${NC}                         ${GREEN}│${NC}"
+        echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
+        echo ""
+        echo -e "  ${BOLD}You're all set! To start receiving notifications:${NC}"
+        echo -e "  Run ${CYAN}/slack-notify${NC} in Claude Code in your preferred terminal"
+        echo ""
+        echo -e "  ${DIM}Keep this tunnel running. Press Ctrl+C to stop.${NC}"
+    else
+        echo ""
+        echo -e "${RED}╭──────────────────────────────────────────────────────────────╮${NC}"
+        echo -e "${RED}│${NC}  ${RED}✗${NC} ${BOLD}Connection verification failed${NC}                            ${RED}│${NC}"
+        echo -e "${RED}╰──────────────────────────────────────────────────────────────╯${NC}"
+        echo ""
+        echo -e "  ${BOLD}Troubleshooting:${NC}"
+        echo -e "  ${CYAN}1.${NC} Verify the URL was saved correctly in Slack"
+        echo -e "  ${CYAN}2.${NC} Make sure you clicked ${BOLD}Save Changes${NC} in Slack"
+        echo -e "  ${CYAN}3.${NC} Check that the MCP server is running: ${DIM}curl http://localhost:${MCP_PORT}/health${NC}"
+        echo -e "  ${CYAN}4.${NC} Try the URL directly: ${DIM}curl ${TUNNEL_URL}/health${NC}"
+        echo ""
+        echo -e "  ${DIM}Press Enter to retry verification, or Ctrl+C to quit${NC}"
+
+        # Allow retry
+        while true; do
+            read -r
+            echo -e "  ${DIM}Retrying...${NC}"
+            if curl -sf "${TUNNEL_URL}/health" --max-time 10 >/dev/null 2>&1; then
+                echo ""
+                echo -e "  ${GREEN}✓${NC} ${BOLD}Connection verified!${NC}"
+                echo ""
+                echo -e "  ${BOLD}You're all set! To start receiving notifications:${NC}"
+                echo -e "  Run ${CYAN}/slack-notify${NC} in Claude Code in your preferred terminal"
+                echo ""
+                echo -e "  ${DIM}Keep this tunnel running. Press Ctrl+C to stop.${NC}"
+                break
+            else
+                echo -e "  ${RED}✗${NC} Still failing. Press Enter to retry, or Ctrl+C to quit"
+            fi
+        done
+    fi
+
+    # Keep running until interrupted
     wait "$NGROK_PID" 2>/dev/null || true
 }
 

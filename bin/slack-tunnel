@@ -162,14 +162,32 @@ main() {
         if echo "$line" | grep -q '"url":'; then
             URL=$(echo "$line" | grep -oE '"url":"https://[^"]+' | cut -d'"' -f4)
             if [[ -n "$URL" && "$URL" == https://* ]]; then
-                echo ""
-                echo -e "${GREEN}╭──────────────────────────────────────────────────────────────╮${NC}"
-                echo -e "${GREEN}│${NC}                                                              ${GREEN}│${NC}"
-                echo -e "${GREEN}│${NC}  ${BOLD}Slack Interactivity URL:${NC}                                   ${GREEN}│${NC}"
-                echo -e "${GREEN}│${NC}                                                              ${GREEN}│${NC}"
-                echo -e "${GREEN}│${NC}  ${CYAN}${URL}/slack/actions${NC}"
-                echo -e "${GREEN}│${NC}                                                              ${GREEN}│${NC}"
-                echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
+                # Verify the tunnel is working by hitting the health endpoint
+                echo -e "  ${DIM}Verifying tunnel connection...${NC}"
+                sleep 1  # Give ngrok a moment to establish
+
+                if curl -sf "${URL}/health" --max-time 10 >/dev/null 2>&1; then
+                    echo ""
+                    echo -e "${GREEN}╭──────────────────────────────────────────────────────────────╮${NC}"
+                    echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Tunnel connected successfully!${NC}                            ${GREEN}│${NC}"
+                    echo -e "${GREEN}│${NC}                                                              ${GREEN}│${NC}"
+                    echo -e "${GREEN}│${NC}  ${BOLD}Slack Interactivity URL:${NC}                                   ${GREEN}│${NC}"
+                    echo -e "${GREEN}│${NC}                                                              ${GREEN}│${NC}"
+                    echo -e "${GREEN}│${NC}  ${CYAN}${URL}/slack/actions${NC}"
+                    echo -e "${GREEN}│${NC}                                                              ${GREEN}│${NC}"
+                    echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
+                else
+                    echo ""
+                    echo -e "${YELLOW}╭──────────────────────────────────────────────────────────────╮${NC}"
+                    echo -e "${YELLOW}│${NC}  ${YELLOW}⚠${NC}  ${BOLD}Tunnel created but verification failed${NC}                    ${YELLOW}│${NC}"
+                    echo -e "${YELLOW}│${NC}                                                              ${YELLOW}│${NC}"
+                    echo -e "${YELLOW}│${NC}  ${BOLD}Slack Interactivity URL:${NC}                                   ${YELLOW}│${NC}"
+                    echo -e "${YELLOW}│${NC}                                                              ${YELLOW}│${NC}"
+                    echo -e "${YELLOW}│${NC}  ${CYAN}${URL}/slack/actions${NC}"
+                    echo -e "${YELLOW}│${NC}                                                              ${YELLOW}│${NC}"
+                    echo -e "${YELLOW}│${NC}  ${DIM}(ngrok may require a few seconds to fully connect)${NC}        ${YELLOW}│${NC}"
+                    echo -e "${YELLOW}╰──────────────────────────────────────────────────────────────╯${NC}"
+                fi
                 echo ""
                 echo -e "  ${BOLD}To configure Slack:${NC}"
                 echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps${NC} → your app"

@@ -20,58 +20,19 @@ This adds Slack notifications so you can step away while Claude works - get ping
 
 ## Quick Start
 
-### 1. Create Slack App
-
-Go to [api.slack.com/apps](https://api.slack.com/apps) → Create New App → **From an app manifest**
-
-Paste the contents of `slack-app-manifest.json`, then:
-- Go to **Incoming Webhooks** → Add New Webhook to Workspace → Select channel
-- Copy the webhook URL
-
-### 2. Install
-
 ```bash
 ./install.sh
 ```
 
-The installer will:
-- Install `jq` and `cloudflared` if needed
-- Build and install the MCP server
-- Configure hooks in `~/.claude/settings.json`
-- Prompt for your Slack webhook URL
-- **Offer to set up Slack button actions** (App ID + Configuration Token)
+The installer guides you through creating a Slack app, configuring webhooks, and setting up button actions.
 
-### 3. Enable Slack Buttons (Optional)
-
-If you skipped the button setup during install, run:
-
-```bash
-slack-tunnel --setup
-```
-
-Then start the tunnel with:
-
-```bash
-slack-tunnel
-```
-
-This creates a Cloudflare tunnel and auto-updates your Slack app's Request URL.
-
-> **Note**: The tunnel automatically terminates after 1 hour of inactivity to conserve resources. It restarts automatically when you run `/slack-notify`.
-
-### 4. Start Using
-
-In Claude Code, run:
+Then in Claude Code:
 
 ```
 /slack-notify
 ```
 
-Or with a custom name:
-
-```
-/slack-notify MyProject
-```
+> **Note**: The tunnel auto-terminates after 1 hour of inactivity and restarts when you run `/slack-notify`.
 
 ## Platform Support
 

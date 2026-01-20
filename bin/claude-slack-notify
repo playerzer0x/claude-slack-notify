@@ -673,77 +673,87 @@ if [[ "$1" == "check" ]]; then
         exit 0
     fi
 
+    # First, read stdin to check hook event type
+    STDIN_DATA=""
+    HOOK_EVENT=""
+    NOTIF_MSG=""
+    TRANSCRIPT_MSG=""
+    if [[ ! -t 0 ]]; then
+        STDIN_DATA=$(timeout 1 cat 2>/dev/null || true)
+        if [[ -n "$STDIN_DATA" ]] && command -v jq &>/dev/null; then
+            HOOK_EVENT=$(echo "$STDIN_DATA" | jq -r '.hook_event_name // empty' 2>/dev/null)
+
+            # Get notification message if this is a Notification event
+            if [[ "$HOOK_EVENT" == "Notification" ]]; then
+                NOTIF_MSG=$(echo "$STDIN_DATA" | jq -r '.message // empty' 2>/dev/null)
+            fi
+
+            # Get last assistant message from transcript
+            TRANSCRIPT_PATH=$(echo "$STDIN_DATA" | jq -r '.transcript_path // empty' 2>/dev/null)
+            if [[ -n "$TRANSCRIPT_PATH" && -f "$TRANSCRIPT_PATH" ]]; then
+                TRANSCRIPT_MSG=$(tac "$TRANSCRIPT_PATH" 2>/dev/null | while read -r line; do
+                    MSG_TYPE=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
+                    if [[ "$MSG_TYPE" == "assistant" ]]; then
+                        TEXT=$(echo "$line" | jq -r '
+                            if .message.content then
+                                [.message.content[] | select(.type == "text") | .text] | join(" ")
+                            else
+                                empty
+                            end
+                        ' 2>/dev/null)
+                        if [[ -n "$TEXT" ]]; then
+                            echo "$TEXT"
+                            break
+                        fi
+                    fi
+                done)
+            fi
+        fi
+    fi
+
+    # Calculate elapsed time if timestamp exists
+    ELAPSED=0
     if [[ -f "$TIMESTAMP_FILE" ]]; then
         START_TIME=$(cat "$TIMESTAMP_FILE")
         NOW=$(date +%s)
         ELAPSED=$((NOW - START_TIME))
+    fi
 
-        # Only notify and clear timestamp if elapsed >= threshold
-        # This preserves timing across multiple rapid tool calls
-        if [[ $ELAPSED -lt $MIN_DURATION ]]; then
-            exit 0
-        fi
-
+    # Notification events (user input requested) always notify immediately
+    # Other events only notify if elapsed >= threshold
+    if [[ "$HOOK_EVENT" == "Notification" ]]; then
+        # Always notify for Notification events - user input is requested
+        rm -f "$TIMESTAMP_FILE"
+    elif [[ $ELAPSED -lt $MIN_DURATION ]]; then
+        # Below threshold and not a Notification event - skip
+        exit 0
+    else
         # Threshold exceeded - clear timestamp and notify
         rm -f "$TIMESTAMP_FILE"
+    fi
 
-        # Try to get context from hook input
-        CONTEXT=""
-        if [[ ! -t 0 ]]; then
-            STDIN_DATA=$(timeout 1 cat 2>/dev/null || true)
-            if [[ -n "$STDIN_DATA" ]] && command -v jq &>/dev/null; then
-                HOOK_EVENT=$(echo "$STDIN_DATA" | jq -r '.hook_event_name // empty' 2>/dev/null)
-
-                # Get notification message if this is a Notification event
-                NOTIF_MSG=""
-                if [[ "$HOOK_EVENT" == "Notification" ]]; then
-                    NOTIF_MSG=$(echo "$STDIN_DATA" | jq -r '.message // empty' 2>/dev/null)
-                fi
-
-                # Get last assistant message from transcript
-                TRANSCRIPT_MSG=""
-                TRANSCRIPT_PATH=$(echo "$STDIN_DATA" | jq -r '.transcript_path // empty' 2>/dev/null)
-                if [[ -n "$TRANSCRIPT_PATH" && -f "$TRANSCRIPT_PATH" ]]; then
-                    TRANSCRIPT_MSG=$(tac "$TRANSCRIPT_PATH" 2>/dev/null | while read -r line; do
-                        MSG_TYPE=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
-                        if [[ "$MSG_TYPE" == "assistant" ]]; then
-                            TEXT=$(echo "$line" | jq -r '
-                                if .message.content then
-                                    [.message.content[] | select(.type == "text") | .text] | join(" ")
-                                else
-                                    empty
-                                end
-                            ' 2>/dev/null)
-                            if [[ -n "$TEXT" ]]; then
-                                echo "$TEXT"
-                                break
-                            fi
-                        fi
-                    done)
-                fi
-
-                # Build context: show both transcript and notification message
-                if [[ -n "$TRANSCRIPT_MSG" && -n "$NOTIF_MSG" ]]; then
-                    CONTEXT="${TRANSCRIPT_MSG}
+    # Build context: show both transcript and notification message
+    CONTEXT=""
+    if [[ -n "$TRANSCRIPT_MSG" && -n "$NOTIF_MSG" ]]; then
+        CONTEXT="${TRANSCRIPT_MSG}
 
 ---
 *${NOTIF_MSG}*"
-                elif [[ -n "$NOTIF_MSG" ]]; then
-                    CONTEXT="$NOTIF_MSG"
-                elif [[ -n "$TRANSCRIPT_MSG" ]]; then
-                    CONTEXT="$TRANSCRIPT_MSG"
-                fi
-            fi
-        fi
+    elif [[ -n "$NOTIF_MSG" ]]; then
+        CONTEXT="$NOTIF_MSG"
+    elif [[ -n "$TRANSCRIPT_MSG" ]]; then
+        CONTEXT="$TRANSCRIPT_MSG"
+    fi
 
-        # Build message
-        if [[ -n "$CONTEXT" ]]; then
+    # Build message
+    if [[ -n "$CONTEXT" ]]; then
+        if [[ $ELAPSED -gt 0 ]]; then
             MESSAGE="${CONTEXT} (${ELAPSED}s)"
         else
-            MESSAGE="Task completed (${ELAPSED}s)"
+            MESSAGE="$CONTEXT"
         fi
     else
-        exit 0
+        MESSAGE="Task completed (${ELAPSED}s)"
     fi
 else
     MESSAGE="${1:-Ready for input}"

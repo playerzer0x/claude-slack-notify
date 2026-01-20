@@ -53,8 +53,13 @@ json_escape() {
 }
 
 # Check if MCP server is running (for hybrid button support)
+# Checks: 1) PID file with valid process, 2) Health endpoint responds
 is_mcp_server_running() {
     local pid_file="${CLAUDE_DIR}/.mcp-server.pid"
+    local port_file="${CLAUDE_DIR}/.mcp-server.port"
+    local port="${MCP_SERVER_PORT:-8463}"
+
+    # Check PID file first (fastest)
     if [[ -f "$pid_file" ]]; then
         local pid
         pid=$(cat "$pid_file" 2>/dev/null)
@@ -62,6 +67,17 @@ is_mcp_server_running() {
             return 0
         fi
     fi
+
+    # Check port file for custom port
+    if [[ -f "$port_file" ]]; then
+        port=$(cat "$port_file" 2>/dev/null)
+    fi
+
+    # Check if health endpoint responds (catches servers started without PID file)
+    if curl -sf "http://localhost:${port}/health" --max-time 1 >/dev/null 2>&1; then
+        return 0
+    fi
+
     return 1
 }
 

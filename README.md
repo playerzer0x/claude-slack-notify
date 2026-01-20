@@ -68,24 +68,48 @@ Or with a custom name:
 | Docker | No | No | Notifications only |
 | Remote SSH | Yes | Yes (with tmux) | SSH key auth required |
 
-## Remote SSH Sessions
+## Remote Sessions
 
-Focus your local terminal while sending input to a remote Claude session:
+Two scenarios are supported depending on where you want to run Claude.
+
+### Scenario A: Mac Primary (SSH to Linux)
+
+Run Claude on a remote Linux machine, focus buttons switch to Mac terminal:
 
 ```bash
-# On local Mac: full install + start tunnel
+# On Mac: full install + start tunnel
 ./install.sh && slack-tunnel
 
-# On remote: hooks-only install
-git clone <repo> && cd claude-slack-notify && ./install.sh --hooks-only
+# On Linux: remote install (hooks only)
+git clone <repo> && cd claude-slack-notify && ./install.sh --remote
 
-# Connect and work
+# Connect from Mac
 claude-slack-notify link --host user@server  # Creates link, SSHs, starts tmux
 claude                                        # Start Claude on remote
 /slack-notify                                 # Register in Slack
 ```
 
-**Requirements**: macOS locally, tmux on remote, SSH key authentication.
+### Scenario B: Linux Primary (Focus Mac)
+
+Run Claude on Linux, focus buttons switch to a Mac terminal:
+
+```bash
+# On Mac: local install (focus handler only)
+./install.sh --local
+
+# On Linux: full install
+./install.sh
+
+# Create reverse link (on Linux)
+claude-slack-notify link --to-host user@mac.local
+
+# Start tunnel and work
+slack-tunnel
+claude
+/slack-notify
+```
+
+**Requirements**: tmux on Linux, SSH key authentication both directions.
 
 ### JupyterLab
 
@@ -125,12 +149,21 @@ Format: `LABEL|ACTION` per line. Reconfigure with `./install.sh --configure`.
 ## Commands
 
 ```bash
-./install.sh              # Install
-./install.sh --hooks-only # Install on remote machines (hooks + webhook only)
+# Installation
+./install.sh              # Full install (Mac or Linux primary)
+./install.sh --remote     # Remote machine install (hooks + webhook only)
+./install.sh --local      # Local Mac install (focus handler only, for reverse link)
 ./install.sh --uninstall  # Uninstall completely
 ./install.sh --configure  # Reconfigure buttons
 ./install.sh --link       # Install with symlinks (development)
+
+# Runtime
 slack-tunnel              # Start ngrok tunnel for mobile support
+
+# Remote linking
+claude-slack-notify link --host user@server      # SSH link (Mac -> Linux)
+claude-slack-notify link --to-host user@mac      # Reverse link (Linux -> Mac)
+claude-slack-notify link --jupyter --host user@server  # JupyterLab link
 ```
 
 ## Debugging

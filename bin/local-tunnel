@@ -355,8 +355,8 @@ enable_funnel_in_acl() {
     fi
 
     echo_info "Funnel enabled in ACL policy!"
-    echo -e "  ${DIM}Changes may take a few seconds to propagate.${NC}"
-    sleep 2
+    echo -e "  ${DIM}Changes may take up to 10 seconds to propagate.${NC}"
+    sleep 10
     return 0
 }
 

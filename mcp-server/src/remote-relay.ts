@@ -52,8 +52,12 @@ function getActionInput(action: FocusAction): string {
 }
 
 // Extract tmux target from focus URL
-// Format: claude-focus://ssh-linked/LINK_ID/HOST/USER/PORT/TMUX_TARGET
-// or: claude-focus://jupyter-tmux/LINK_ID/HOST/USER/PORT/TMUX_TARGET
+// Supported formats:
+// - claude-focus://ssh-linked/LINK_ID/HOST/USER/PORT/TMUX_TARGET
+// - claude-focus://jupyter-tmux/LINK_ID/HOST/USER/PORT/TMUX_TARGET
+// - claude-focus://ssh-tmux/HOST/USER/PORT/TMUX_TARGET
+// - claude-focus://linux-tmux/TTY/TMUX_TARGET
+// - claude-focus://tmux/TMUX_TARGET
 function extractTmuxTarget(focusUrl: string): string | null {
   try {
     // Remove claude-focus:// prefix
@@ -68,6 +72,20 @@ function extractTmuxTarget(focusUrl: string): string | null {
     // ssh-tmux has tmux target as 5th segment (index 4)
     if (parts[0] === 'ssh-tmux' && parts.length >= 5) {
       return decodeURIComponent(parts[4]);
+    }
+
+    // linux-tmux has tmux target as last segment: linux-tmux/dev/pts/X/tmux_target
+    // (TTY path like /dev/pts/0 contains slashes, so tmux target is always last)
+    // Minimum: linux-tmux + 2 parts for tty (like dev/tty1) + tmux_target = 4 parts
+    if (parts[0] === 'linux-tmux' && parts.length >= 4) {
+      const target = decodeURIComponent(parts[parts.length - 1]);
+      return target || null; // Return null if empty string
+    }
+
+    // tmux has tmux target as 2nd segment (index 1): tmux/tmux_target
+    if (parts[0] === 'tmux' && parts.length >= 2) {
+      const target = decodeURIComponent(parts[1]);
+      return target || null; // Return null if empty string
     }
 
     return null;
@@ -277,6 +295,24 @@ app.use('/slack', (req, _res, next) => {
 
 // Threads directory for reply routing
 const THREADS_DIR = join(CLAUDE_DIR, 'threads');
+
+// Sessions directory for session info lookup
+const INSTANCES_DIR = join(CLAUDE_DIR, 'instances');
+
+// Load session info by session ID
+function loadSessionInfo(sessionId: string): { focus_url: string; term_type: string } | null {
+  const sessionFile = join(INSTANCES_DIR, `${sessionId}.json`);
+  if (!existsSync(sessionFile)) {
+    return null;
+  }
+  try {
+    const content = readFileSync(sessionFile, 'utf-8');
+    const data = JSON.parse(content);
+    return { focus_url: data.focus_url, term_type: data.term_type };
+  } catch {
+    return null;
+  }
+}
 
 // Load thread info by thread_ts
 function loadThreadInfo(threadTs: string): { focus_url: string; term_type: string } | null {
@@ -525,16 +561,26 @@ app.post('/slack/actions', verifySlackSignature, async (req: Request, res: Respo
       console.log('Proxy failed, falling back to local handling');
     }
 
-    // Mac not reachable or proxy failed - try to handle locally
-    // Local handling only supports url: format (SSH-linked/jupyter-tmux sessions)
-    if (!firstPart.startsWith('url:')) {
-      // This is a Mac session (session_id format) and Mac is not reachable
-      console.log('Mac session button clicked but Mac not reachable - cannot handle locally');
-      ack();
-      return;
-    }
+    // Try to get focus URL either from url: prefix or from session file lookup
+    let focusUrl: string;
 
-    const focusUrl = firstPart.substring(4); // Remove "url:" prefix
+    if (firstPart.startsWith('url:')) {
+      // Direct URL format - use it directly
+      focusUrl = firstPart.substring(4); // Remove "url:" prefix
+    } else {
+      // Session ID format - try to load session file locally
+      console.log(`Looking up session file for: ${firstPart}`);
+      const sessionInfo = loadSessionInfo(firstPart);
+      if (sessionInfo?.focus_url) {
+        console.log(`Found session with focus_url: ${sessionInfo.focus_url}`);
+        focusUrl = sessionInfo.focus_url;
+      } else {
+        // No session file found locally - cannot handle
+        console.log('Session not found locally - cannot handle (Mac not reachable)');
+        ack();
+        return;
+      }
+    }
 
     // Handle locally - Focus is a no-op, but we can send input
     if (actionType === 'focus') {
@@ -597,4 +643,4 @@ if (isMain) {
   startRelay();
 }
 
-export { app, extractTmuxTarget, getActionInput, sendTmuxInput };
+export { app, extractTmuxTarget, getActionInput, INSTANCES_DIR, loadSessionInfo, sendTmuxInput };

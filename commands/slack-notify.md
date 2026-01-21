@@ -5,7 +5,34 @@ Enable Slack notifications for this Claude session with a unique instance name.
 ## Subcommands
 
 - `/slack-notify` - Register the current session (default)
+- `/slack-notify local` - Check/start local-tunnel (macOS), then register
+- `/slack-notify remote` - Check/start remote-tunnel (Linux), then register
+- `/slack-notify clean` - Kill stale claude-* tmux sessions (>1 day old)
 - `/slack-notify stop` - Unregister session and stop tunnel (if local)
+
+## Local Command (macOS)
+
+If the user runs `/slack-notify local`:
+```bash
+~/.claude/bin/claude-slack-notify local [optional-name]
+```
+This checks if local-tunnel is running, starts it if needed (in background), waits for healthy, then registers the session. Only works on macOS.
+
+## Remote Command (Linux)
+
+If the user runs `/slack-notify remote`:
+```bash
+~/.claude/bin/claude-slack-notify remote [optional-name]
+```
+Same as local but for Linux servers with remote-tunnel. Note that the Focus button won't switch windows since the Mac isn't connected.
+
+## Clean Command
+
+If the user runs `/slack-notify clean`:
+```bash
+~/.claude/bin/claude-slack-notify clean
+```
+Lists all `claude-*` tmux sessions, kills any older than 1 day (skips attached sessions). Useful for cleaning up stale sessions from previous work.
 
 ## Stop Command
 

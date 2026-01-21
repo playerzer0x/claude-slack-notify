@@ -216,19 +216,21 @@ remote-tunnel --use-localtunnel  # Force Localtunnel
 > Last updated: 2026-01-21
 
 ### Recent Changes
-- **Single get-session-id call**: The `/slack-notify` command now uses a single `get-session-id` call for both register and notify. Previously, calling it twice could return different IDs if another session's transcript was modified between calls, causing the notification to show "Claude" instead of the session name.
-- **Auto-enable Tailscale Funnel**: When Funnel fails due to missing ACL permissions, scripts now:
-  - Prompt for Tailscale API key (opens browser to key creation page)
-  - Call Tailscale API to add `funnel` attribute to ACL policy
-  - Retry Funnel after enabling
-  - API key stored in `~/.claude/.env` as `TAILSCALE_API_KEY=...`
-- **Credentials in .env**: Tailscale API key stored in `~/.claude/.env`, not copied to remotes
-- **Stale session cleanup**: When registering, old session files for the same terminal are deleted to prevent stale session ID errors
-- **Tailscale Funnel as default**: Both `local-tunnel` and `remote-tunnel` use Tailscale Funnel when available
-  - Falls back to Localtunnel if Tailscale isn't available
-  - New flags: `--use-tailscale` (force Tailscale), `--use-localtunnel` (force Localtunnel)
-- **Orphan process cleanup**: Scripts detect and clean up orphan processes on their ports
-- **Session persistence**: Sessions don't need to re-register after tunnel restart
+- **New `/slack-notify` subcommands**: Added `local`, `remote`, and `clean` commands to simplify workflow:
+  - `/slack-notify local` (macOS): Auto-starts local-tunnel if needed, then registers session
+  - `/slack-notify remote` (Linux): Auto-starts remote-tunnel if needed, then registers session
+  - `/slack-notify clean`: Kills stale `claude-*` tmux sessions older than 1 day (skips attached)
+- **Tunnel status helper functions**: New `check_local_tunnel_status()`, `check_remote_tunnel_status()`, and `wait_for_tunnel()` functions for robust tunnel detection
+- **Tailscale section in install.sh**: Shows Tailscale Funnel status and installation instructions during install
+- **Updated documentation**: README.md now includes Tailscale setup guide, command table, and troubleshooting section
+
+### Previous Changes
+- Remote-only tmux command support in `remote-relay.ts`
+- URL format support for `linux-tmux` and `tmux` schemes
+- Single get-session-id call for consistent session registration
+- Auto-enable Tailscale Funnel with API key prompt
+- Stale session cleanup on registration
+- Tailscale Funnel as default tunnel backend
 
 ### Runtime Files Added
 | File | Purpose |

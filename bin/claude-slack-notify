@@ -83,6 +83,125 @@ is_mcp_server_running() {
     return 1
 }
 
+# Check local-tunnel status
+# Returns: "running:URL", "mcp_only", "tunnel_only:URL", "stopped"
+check_local_tunnel_status() {
+    local mcp_running=false
+    local tunnel_running=false
+    local tunnel_url=""
+
+    # Check MCP health on port 8463
+    if curl -sf "http://localhost:8463/health" --max-time 1 >/dev/null 2>&1; then
+        mcp_running=true
+    fi
+
+    # Check Tailscale Funnel first
+    if command -v tailscale &>/dev/null && tailscale status &>/dev/null 2>&1; then
+        tunnel_url=$(tailscale funnel status --json 2>/dev/null | jq -r '.Web | keys[0] // empty' 2>/dev/null)
+        if [[ -n "$tunnel_url" ]]; then
+            tunnel_running=true
+        fi
+    fi
+
+    # Fall back to localtunnel PID file check
+    if [[ "$tunnel_running" == "false" ]]; then
+        local pid_file="${CLAUDE_DIR}/.tunnel.pid"
+        if [[ -f "$pid_file" ]]; then
+            local pid
+            pid=$(cat "$pid_file" 2>/dev/null)
+            if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+                tunnel_running=true
+                # Try to get URL from tunnel URL file
+                if [[ -f "${CLAUDE_DIR}/.tunnel-url" ]]; then
+                    tunnel_url=$(cat "${CLAUDE_DIR}/.tunnel-url" 2>/dev/null)
+                fi
+            fi
+        fi
+    fi
+
+    if [[ "$mcp_running" == "true" && "$tunnel_running" == "true" ]]; then
+        echo "running:${tunnel_url}"
+    elif [[ "$mcp_running" == "true" ]]; then
+        echo "mcp_only"
+    elif [[ "$tunnel_running" == "true" ]]; then
+        echo "tunnel_only:${tunnel_url}"
+    else
+        echo "stopped"
+    fi
+}
+
+# Check remote-tunnel status
+# Returns: "running:URL", "relay_only", "tunnel_only:URL", "stopped"
+check_remote_tunnel_status() {
+    local relay_running=false
+    local tunnel_running=false
+    local tunnel_url=""
+
+    # Check relay health on port 8464
+    if curl -sf "http://localhost:8464/health" --max-time 1 >/dev/null 2>&1; then
+        relay_running=true
+    fi
+
+    # Check Tailscale Funnel first
+    if command -v tailscale &>/dev/null && tailscale status &>/dev/null 2>&1; then
+        tunnel_url=$(tailscale funnel status --json 2>/dev/null | jq -r '.Web | keys[0] // empty' 2>/dev/null)
+        if [[ -n "$tunnel_url" ]]; then
+            tunnel_running=true
+        fi
+    fi
+
+    # Fall back to remote-tunnel PID file check
+    if [[ "$tunnel_running" == "false" ]]; then
+        local pid_file="${CLAUDE_DIR}/.remote-tunnel.pid"
+        if [[ -f "$pid_file" ]]; then
+            local pid
+            pid=$(cat "$pid_file" 2>/dev/null)
+            if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+                tunnel_running=true
+                # Try to get URL from tunnel URL file
+                if [[ -f "${CLAUDE_DIR}/.remote-tunnel-url" ]]; then
+                    tunnel_url=$(cat "${CLAUDE_DIR}/.remote-tunnel-url" 2>/dev/null)
+                fi
+            fi
+        fi
+    fi
+
+    if [[ "$relay_running" == "true" && "$tunnel_running" == "true" ]]; then
+        echo "running:${tunnel_url}"
+    elif [[ "$relay_running" == "true" ]]; then
+        echo "relay_only"
+    elif [[ "$tunnel_running" == "true" ]]; then
+        echo "tunnel_only:${tunnel_url}"
+    else
+        echo "stopped"
+    fi
+}
+
+# Wait for tunnel to become healthy
+# Args: $1 = status function name, $2 = timeout in seconds (default 30)
+# Returns: 0 on success (prints URL), 1 on timeout
+wait_for_tunnel() {
+    local status_func="$1"
+    local timeout="${2:-30}"
+    local elapsed=0
+
+    while [[ $elapsed -lt $timeout ]]; do
+        local status
+        status=$($status_func)
+
+        if [[ "$status" == running:* ]]; then
+            # Extract URL after "running:"
+            echo "${status#running:}"
+            return 0
+        fi
+
+        sleep 1
+        ((elapsed++))
+    done
+
+    return 1
+}
+
 # -----------------------------------------------------------------------------
 # Link command - creates a link for SSH or JupyterLab sessions
 # Run this on LOCAL machine before SSH to create a reference to the local terminal
@@ -384,6 +503,202 @@ if [[ "$1" == "links" ]]; then
             echo "$LINK_ID  ($TERM_TYPE)  created: $CREATED"
         done
     fi
+    exit 0
+fi
+
+# -----------------------------------------------------------------------------
+# Local command - check/start local-tunnel (macOS), then register session
+# Usage: claude-slack-notify local [optional-name]
+# -----------------------------------------------------------------------------
+if [[ "$1" == "local" ]]; then
+    # Platform check - macOS only
+    if [[ "$(uname)" != "Darwin" ]]; then
+        echo "Error: 'local' command is for macOS only. Use 'remote' on Linux." >&2
+        exit 1
+    fi
+
+    # Check local-tunnel exists
+    LOCAL_TUNNEL="${CLAUDE_DIR}/bin/local-tunnel"
+    if [[ ! -x "$LOCAL_TUNNEL" ]]; then
+        echo "Error: local-tunnel not found. Run install.sh first." >&2
+        exit 1
+    fi
+
+    # Check current status
+    STATUS=$(check_local_tunnel_status)
+
+    case "$STATUS" in
+        running:*)
+            TUNNEL_URL="${STATUS#running:}"
+            echo "local-tunnel already running: $TUNNEL_URL"
+            ;;
+        mcp_only)
+            echo "MCP server running but tunnel not connected. Starting tunnel..."
+            "$LOCAL_TUNNEL" --background
+            if ! TUNNEL_URL=$(wait_for_tunnel check_local_tunnel_status 30); then
+                echo "Error: Tunnel failed to start within 30 seconds." >&2
+                exit 1
+            fi
+            echo "Tunnel started: $TUNNEL_URL"
+            ;;
+        tunnel_only:*)
+            echo "Tunnel running but MCP server not responding. Starting tunnel..."
+            "$LOCAL_TUNNEL" --background
+            if ! TUNNEL_URL=$(wait_for_tunnel check_local_tunnel_status 30); then
+                echo "Error: MCP server failed to start within 30 seconds." >&2
+                exit 1
+            fi
+            echo "Tunnel ready: $TUNNEL_URL"
+            ;;
+        stopped)
+            echo "Starting local-tunnel..."
+            "$LOCAL_TUNNEL" --background
+            if ! TUNNEL_URL=$(wait_for_tunnel check_local_tunnel_status 30); then
+                echo "Error: local-tunnel failed to start within 30 seconds." >&2
+                exit 1
+            fi
+            echo "Tunnel started: $TUNNEL_URL"
+            ;;
+    esac
+
+    # Now register the session (shift to get optional name argument)
+    shift
+    OPTIONAL_NAME="${1:-}"
+
+    # Re-execute as register command
+    exec "$0" register "$OPTIONAL_NAME"
+fi
+
+# -----------------------------------------------------------------------------
+# Remote command - check/start remote-tunnel (Linux), then register session
+# Usage: claude-slack-notify remote [optional-name]
+# -----------------------------------------------------------------------------
+if [[ "$1" == "remote" ]]; then
+    # Platform check - Linux only
+    if [[ "$(uname)" == "Darwin" ]]; then
+        echo "Error: 'remote' command is for Linux only. Use 'local' on macOS." >&2
+        exit 1
+    fi
+
+    # Check remote-tunnel exists
+    REMOTE_TUNNEL="${CLAUDE_DIR}/bin/remote-tunnel"
+    if [[ ! -x "$REMOTE_TUNNEL" ]]; then
+        echo "Error: remote-tunnel not found. Run install.sh first." >&2
+        exit 1
+    fi
+
+    # Check current status
+    STATUS=$(check_remote_tunnel_status)
+
+    case "$STATUS" in
+        running:*)
+            TUNNEL_URL="${STATUS#running:}"
+            echo "remote-tunnel already running: $TUNNEL_URL"
+            ;;
+        relay_only)
+            echo "Relay server running but tunnel not connected. Starting tunnel..."
+            "$REMOTE_TUNNEL" --background
+            if ! TUNNEL_URL=$(wait_for_tunnel check_remote_tunnel_status 30); then
+                echo "Error: Tunnel failed to start within 30 seconds." >&2
+                exit 1
+            fi
+            echo "Tunnel started: $TUNNEL_URL"
+            ;;
+        tunnel_only:*)
+            echo "Tunnel running but relay server not responding. Starting tunnel..."
+            "$REMOTE_TUNNEL" --background
+            if ! TUNNEL_URL=$(wait_for_tunnel check_remote_tunnel_status 30); then
+                echo "Error: Relay server failed to start within 30 seconds." >&2
+                exit 1
+            fi
+            echo "Tunnel ready: $TUNNEL_URL"
+            ;;
+        stopped)
+            echo "Starting remote-tunnel..."
+            "$REMOTE_TUNNEL" --background
+            if ! TUNNEL_URL=$(wait_for_tunnel check_remote_tunnel_status 30); then
+                echo "Error: remote-tunnel failed to start within 30 seconds." >&2
+                exit 1
+            fi
+            echo "Tunnel started: $TUNNEL_URL"
+            ;;
+    esac
+
+    echo "Note: Focus button won't switch windows (Mac not connected)"
+
+    # Now register the session (shift to get optional name argument)
+    shift
+    OPTIONAL_NAME="${1:-}"
+
+    # Re-execute as register command
+    exec "$0" register "$OPTIONAL_NAME"
+fi
+
+# -----------------------------------------------------------------------------
+# Clean command - kill stale claude-* tmux sessions older than 1 day
+# Usage: claude-slack-notify clean
+# -----------------------------------------------------------------------------
+if [[ "$1" == "clean" ]]; then
+    if ! command -v tmux &>/dev/null; then
+        echo "Error: tmux not installed" >&2
+        exit 1
+    fi
+
+    # Get cutoff timestamp (1 day ago)
+    # Linux: date -d '1 day ago'
+    # macOS: date -v-1d
+    if date -d '1 day ago' +%s &>/dev/null 2>&1; then
+        CUTOFF=$(date -d '1 day ago' +%s)
+    else
+        CUTOFF=$(date -v-1d +%s)
+    fi
+
+    CLEANED=0
+    SKIPPED=0
+
+    # List tmux sessions
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+
+        # Parse: "claude-xyz: 1 windows (created Mon Jan 19 18:06:50 2026) (attached)"
+        SESSION=$(echo "$line" | cut -d: -f1)
+
+        # Only process claude-* sessions
+        [[ "$SESSION" != claude-* ]] && continue
+
+        # Skip attached sessions
+        if echo "$line" | grep -q "(attached)"; then
+            echo "Skipping attached: $SESSION"
+            ((SKIPPED++))
+            continue
+        fi
+
+        # Extract creation date from "(created ...)"
+        CREATED=$(echo "$line" | grep -oP '\(created \K[^)]+' 2>/dev/null || \
+                  echo "$line" | sed -n 's/.*created \([^)]*\)).*/\1/p')
+
+        if [[ -z "$CREATED" ]]; then
+            continue
+        fi
+
+        # Convert to epoch
+        # Linux: date -d "$CREATED"
+        # macOS: date -j -f format
+        if date -d "$CREATED" +%s &>/dev/null 2>&1; then
+            CREATED_EPOCH=$(date -d "$CREATED" +%s)
+        else
+            # macOS format: "Mon Jan 19 18:06:50 2026"
+            CREATED_EPOCH=$(date -j -f "%a %b %d %H:%M:%S %Y" "$CREATED" +%s 2>/dev/null || echo 0)
+        fi
+
+        if [[ $CREATED_EPOCH -lt $CUTOFF ]]; then
+            echo "Killing stale session: $SESSION (created $CREATED)"
+            tmux kill-session -t "$SESSION" 2>/dev/null && ((CLEANED++))
+        fi
+    done < <(tmux ls 2>/dev/null)
+
+    echo ""
+    echo "Cleaned $CLEANED stale sessions, skipped $SKIPPED attached"
     exit 0
 fi
 

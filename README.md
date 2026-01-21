@@ -41,6 +41,38 @@ And in Claude Code:
 
 > **Note**: The tunnel auto-terminates after 1 hour of inactivity. Run `local-tunnel --background` to restart it.
 
+## Tailscale Funnel Setup (Recommended)
+
+Tailscale Funnel provides stable URLs without third-party services. **It's free** - included in the Personal plan (up to 3 users, 100 devices).
+
+### Installation
+
+**macOS:**
+```bash
+brew install tailscale
+```
+
+**Linux:**
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+```
+
+### First-Time Setup
+
+1. **Connect Tailscale:** `tailscale up`
+2. **Run the tunnel:** `local-tunnel` (or `remote-tunnel` on Linux)
+   - Funnel is auto-enabled if needed
+   - If prompted for API key, go to https://login.tailscale.com/admin/settings/keys
+   - Generate key, paste when prompted
+   - Key is saved to `~/.claude/.env`
+
+### Verify
+
+```bash
+tailscale funnel status
+```
+
 ## Platform Support
 
 | Platform | Focus | Actions | Notes |
@@ -151,23 +183,34 @@ Format: `LABEL|ACTION` per line. Reconfigure with `./install.sh --configure`.
 
 ### Claude Code
 
-```
-/slack-notify           # Register session and start tunnel
-/slack-notify MyProject # Register with custom name
-/slack-notify stop      # Stop the tunnel and MCP server
-```
+| Command | Platform | Description |
+|---------|----------|-------------|
+| `/slack-notify` | Any | Register session (tunnel must be running) |
+| `/slack-notify local` | macOS | Start tunnel + register |
+| `/slack-notify remote` | Linux | Start tunnel + register |
+| `/slack-notify clean` | Any | Kill stale claude-* tmux sessions (>1 day) |
+| `/slack-notify stop` | Any | Unregister + stop tunnel |
 
 ### Terminal
 
 ```bash
+# Installation
 ./install.sh              # Install
 ./install.sh --uninstall  # Uninstall completely
 ./install.sh --configure  # Reconfigure buttons
 ./install.sh --link       # Install with symlinks (development)
+
+# Tunnel (macOS)
 local-tunnel              # Start tunnel (foreground)
 local-tunnel --background # Start tunnel (background)
 local-tunnel --stop       # Stop tunnel
 local-tunnel --status     # Check tunnel status
+
+# Tunnel (Linux)
+remote-tunnel              # Start tunnel (foreground)
+remote-tunnel --background # Start tunnel (background)
+remote-tunnel --stop       # Stop tunnel
+remote-tunnel --status     # Check tunnel status
 ```
 
 ## Debugging
@@ -179,6 +222,28 @@ tail -f ~/.claude/mcp-server.log  # MCP server logs
 ## macOS Permissions
 
 On first Focus button click, grant automation permission when prompted. If denied, enable in **System Settings > Privacy & Security > Automation** for ClaudeFocus.app.
+
+## Troubleshooting
+
+**Check tunnel status:**
+```bash
+local-tunnel --status   # macOS
+remote-tunnel --status  # Linux
+```
+
+**Common issues:**
+
+1. **"Funnel not enabled"** - Run tunnel interactively first time, it will prompt for API key
+2. **"MCP server failed"** - Check `~/.claude/mcp-server.log` for errors
+3. **Buttons not working** - Verify tunnel URL matches Slack Request URL in app settings
+4. **Focus not switching** - On macOS, check Automation permissions for ClaudeFocus.app
+
+**View logs:**
+```bash
+tail -f ~/.claude/mcp-server.log        # MCP server
+tail -f ~/.claude/tunnel.log            # Tunnel (macOS)
+tail -f ~/.claude/remote-tunnel.log     # Tunnel (Linux)
+```
 
 ## License
 

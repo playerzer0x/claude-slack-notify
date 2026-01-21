@@ -276,6 +276,54 @@ if ! command -v lt &>/dev/null; then
     fi
 fi
 
+# Check Tailscale status and provide setup info
+print_section "Tunnel Backend Information"
+echo ""
+echo -e "  ${BOLD}Tailscale Funnel (Recommended)${NC} - FREE"
+echo -e "  ${DIM}Stable URL, no third-party service, works behind firewalls${NC}"
+echo -e "  ${DIM}Included in Tailscale Personal plan (free, up to 3 users)${NC}"
+echo ""
+
+if command -v tailscale &>/dev/null; then
+    if tailscale status &>/dev/null 2>&1; then
+        TS_DNS=$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
+        if [[ -n "$TS_DNS" ]]; then
+            echo -e "  ${GREEN}✓${NC} Tailscale connected: ${BOLD}$TS_DNS${NC}"
+        else
+            echo -e "  ${GREEN}✓${NC} Tailscale connected"
+        fi
+
+        if tailscale funnel status --json 2>/dev/null | jq -e '.Web' &>/dev/null; then
+            echo -e "  ${GREEN}✓${NC} Tailscale Funnel available"
+        else
+            echo -e "  ${YELLOW}!${NC} Tailscale Funnel not enabled (auto-enabled on first tunnel run)"
+        fi
+    else
+        echo -e "  ${YELLOW}!${NC} Tailscale installed but not connected"
+        echo -e "    ${DIM}Run: ${BOLD}tailscale up${NC}"
+    fi
+else
+    echo -e "  ${YELLOW}!${NC} Tailscale not installed"
+    echo ""
+    echo -e "  ${DIM}To install Tailscale:${NC}"
+    if [[ "$(uname)" == "Darwin" ]]; then
+        echo -e "    ${CYAN}brew install tailscale${NC}"
+    else
+        echo -e "    ${CYAN}curl -fsSL https://tailscale.com/install.sh | sh${NC}"
+        echo -e "    ${CYAN}sudo tailscale up${NC}"
+    fi
+fi
+
+echo ""
+echo -e "  ${BOLD}Localtunnel (Fallback)${NC}"
+echo -e "  ${DIM}Free but may have subdomain conflicts${NC}"
+if command -v lt &>/dev/null; then
+    echo -e "  ${GREEN}✓${NC} Localtunnel installed"
+else
+    echo -e "  ${YELLOW}!${NC} Localtunnel not installed"
+fi
+echo ""
+
 # Create directories
 mkdir -p "$BIN_DIR" "$COMMANDS_DIR" "$APP_DIR" "$HOME/Library/LaunchAgents"
 

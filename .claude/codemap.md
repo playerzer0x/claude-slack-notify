@@ -184,8 +184,12 @@ bun run dev:relay
 
 ### Local Mac Development
 ```bash
-local-tunnel              # Start tunnel (interactive)
+local-tunnel              # Start tunnel (uses Tailscale Funnel if available)
 # In Claude: /slack-notify
+
+# Force specific backend:
+local-tunnel --use-tailscale    # Force Tailscale Funnel
+local-tunnel --use-localtunnel  # Force Localtunnel
 ```
 
 ### SSH to Linux Server
@@ -208,6 +212,11 @@ remote-tunnel --background
 > Last updated: 2026-01-21
 
 ### Recent Changes
+- **Tailscale Funnel as default**: `local-tunnel` now uses Tailscale Funnel by default when Tailscale is available
+  - Auto-detects Tailscale availability and uses it without any configuration needed
+  - Falls back to Localtunnel if Tailscale isn't available
+  - New flags: `--use-tailscale` (force Tailscale), `--use-localtunnel` (force Localtunnel)
+  - `--status` shows both Tailscale and Localtunnel availability
 - **Orphan process cleanup**: Both `local-tunnel` and `remote-tunnel` now detect and clean up orphan processes on their ports
   - `kill_orphan_mcp_server()` / `kill_orphan_relay()` - finds processes on port not tracked by PID file
   - `start_mcp_server()` / `start_relay()` - calls orphan cleanup before starting

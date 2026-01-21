@@ -2,16 +2,19 @@
 # =============================================================================
 # local-tunnel - Start tunnel for Slack button actions
 #
-# Uses Localtunnel for stable URLs that don't change between restarts.
-# Falls back to Cloudflare Quick Tunnels if Localtunnel isn't available.
+# Supports multiple tunnel backends (in order of preference):
+#   1. Tailscale Funnel (recommended) - stable URL, no third-party service
+#   2. Localtunnel - free, but can be flaky with subdomain conflicts
 #
 # Commands:
-#   local-tunnel               - Start tunnel (prompts to configure stable URL if needed)
+#   local-tunnel               - Start tunnel (auto-detects best backend)
 #   local-tunnel --setup       - Configure Slack tokens (for auto-URL updates)
 #   local-tunnel --update-token - Quick Slack token refresh when expired
 #   local-tunnel --background  - Start tunnel in background
 #   local-tunnel --stop        - Stop background tunnel
 #   local-tunnel --status      - Check tunnel status
+#   local-tunnel --use-tailscale - Force Tailscale Funnel
+#   local-tunnel --use-localtunnel - Force Localtunnel
 # =============================================================================
 
 set -uo pipefail
@@ -23,11 +26,15 @@ SLACK_CONFIG_FILE="$CLAUDE_DIR/.slack-config"
 WEBHOOK_FILE="$CLAUDE_DIR/slack-webhook-url"
 TUNNEL_PID_FILE="$CLAUDE_DIR/.tunnel.pid"
 TUNNEL_URL_FILE="$CLAUDE_DIR/.tunnel-url"
+TUNNEL_TYPE_FILE="$CLAUDE_DIR/.tunnel-type"
 WATCHDOG_PID_FILE="$CLAUDE_DIR/.tunnel-watchdog.pid"
 ACTIVITY_FILE="$CLAUDE_DIR/.tunnel-last-activity"
 TUNNEL_LOG="$CLAUDE_DIR/tunnel.log"
 IDLE_TIMEOUT=3600  # 1 hour in seconds
 LOCALTUNNEL_SUBDOMAIN_FILE="$CLAUDE_DIR/.localtunnel-subdomain"
+
+# Tunnel type: "tailscale" or "localtunnel"
+TUNNEL_TYPE=""
 
 # Colors
 RED='\033[0;31m'
@@ -70,11 +77,114 @@ EOF
 }
 
 # =============================================================================
+# Tailscale Funnel helpers
+# =============================================================================
+
+# Check if Tailscale is available and Funnel can be used
+has_tailscale() {
+    command -v tailscale &>/dev/null
+}
+
+# Check if Tailscale is connected
+is_tailscale_connected() {
+    tailscale status &>/dev/null
+}
+
+# Get Tailscale DNS name (e.g., macbook.tailnet-name.ts.net)
+get_tailscale_dns_name() {
+    tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' 2>/dev/null | sed 's/\.$//'
+}
+
+# Get the Tailscale Funnel URL for our port
+get_tailscale_funnel_url() {
+    local dns_name
+    dns_name=$(get_tailscale_dns_name)
+    if [[ -n "$dns_name" ]]; then
+        echo "https://${dns_name}"
+    fi
+}
+
+# Check if Funnel is currently serving our port
+is_tailscale_funnel_active() {
+    local status
+    status=$(tailscale funnel status --json 2>/dev/null)
+    if [[ -n "$status" && "$status" != "{}" ]]; then
+        # Check if our port is being funneled
+        echo "$status" | jq -e ".\"https://*:443\".Handlers | keys[] | select(. == \"/\")" &>/dev/null
+    else
+        return 1
+    fi
+}
+
+# Start Tailscale Funnel for MCP port
+start_tailscale_funnel() {
+    local background="${1:-false}"
+
+    if ! has_tailscale; then
+        echo_error "Tailscale not installed"
+        return 1
+    fi
+
+    if ! is_tailscale_connected; then
+        echo_error "Tailscale not connected. Run: tailscale up"
+        return 1
+    fi
+
+    local dns_name
+    dns_name=$(get_tailscale_dns_name)
+    if [[ -z "$dns_name" ]]; then
+        echo_error "Could not get Tailscale DNS name"
+        return 1
+    fi
+
+    TUNNEL_URL="https://${dns_name}"
+    echo "$TUNNEL_URL" > "$TUNNEL_URL_FILE"
+    echo "tailscale" > "$TUNNEL_TYPE_FILE"
+
+    echo_info "Starting Tailscale Funnel..."
+
+    if [[ "$background" == "true" ]]; then
+        # Background mode - use --bg flag
+        tailscale funnel --bg "$MCP_PORT" >/dev/null 2>&1
+    else
+        # Foreground mode - start in background but we'll wait on MCP server
+        tailscale funnel --bg "$MCP_PORT" >/dev/null 2>&1
+    fi
+
+    # Verify funnel started
+    sleep 1
+    if is_tailscale_funnel_active; then
+        echo_info "Tailscale Funnel started: $TUNNEL_URL"
+        return 0
+    else
+        echo_error "Tailscale Funnel failed to start"
+        echo_error "Make sure Funnel is enabled in your Tailscale admin console:"
+        echo_error "  https://login.tailscale.com/admin/dns"
+        return 1
+    fi
+}
+
+# Stop Tailscale Funnel
+stop_tailscale_funnel() {
+    if has_tailscale && is_tailscale_funnel_active; then
+        tailscale funnel off >/dev/null 2>&1 || true
+        echo_info "Tailscale Funnel stopped"
+        return 0
+    fi
+    return 1
+}
+
+# =============================================================================
 # Localtunnel config (stable URL)
 # =============================================================================
 
-has_stable_tunnel() {
+has_localtunnel_subdomain() {
     [[ -f "$LOCALTUNNEL_SUBDOMAIN_FILE" ]]
+}
+
+has_stable_tunnel() {
+    # For backward compatibility - checks if any tunnel type is configured
+    [[ -f "$LOCALTUNNEL_SUBDOMAIN_FILE" ]] || (has_tailscale && is_tailscale_connected)
 }
 
 get_localtunnel_subdomain() {
@@ -1042,21 +1152,19 @@ cmd_background() {
         exit 1
     fi
 
-    # Require stable URL for background mode (no interactive prompts)
-    if ! has_stable_tunnel; then
-        echo_error "Stable URL not configured."
-        echo ""
-        echo -e "  Background mode requires a stable URL to avoid changing URLs on restart."
-        echo ""
-        echo -e "  Run this first to configure:"
-        echo -e "    ${BOLD}local-tunnel --stable${NC}"
-        echo ""
-        echo -e "  Or run interactively (will prompt for subdomain):"
-        echo -e "    ${BOLD}local-tunnel${NC}"
-        exit 1
+    # Check if Tailscale Funnel is already running
+    if is_tailscale_funnel_active; then
+        echo_info "Tailscale Funnel already running"
+        TUNNEL_URL=$(get_tailscale_funnel_url)
+        # Make sure MCP server is running
+        if ! check_mcp_server; then
+            rebuild_if_needed
+            start_mcp_server
+        fi
+        return 0
     fi
 
-    # Check if already running (and there's only ONE tunnel)
+    # Check if localtunnel is already running
     local tunnel_count
     tunnel_count=$(pgrep -f "lt --port.*${MCP_PORT}" 2>/dev/null | wc -l | tr -d ' ')
 
@@ -1064,12 +1172,12 @@ cmd_background() {
         local existing_pid
         existing_pid=$(cat "$TUNNEL_PID_FILE")
         if kill -0 "$existing_pid" 2>/dev/null; then
-            echo_info "Tunnel already running (PID: $existing_pid)"
+            echo_info "Localtunnel already running (PID: $existing_pid)"
             return 0
         fi
     fi
 
-    # Clean up stale state (multiple tunnels or orphaned PID file)
+    # Clean up stale localtunnel state
     if [[ "$tunnel_count" -gt 0 ]]; then
         echo_info "Cleaning up stale tunnel processes..."
     fi
@@ -1105,8 +1213,28 @@ cmd_background() {
         start_mcp_server
     fi
 
-    # Start tunnel
-    start_tunnel_and_get_url "true"
+    # Try Tailscale Funnel first (if available and not forced to use localtunnel)
+    local tunnel_started=false
+    if [[ "$TUNNEL_TYPE" != "localtunnel" ]] && has_tailscale && is_tailscale_connected; then
+        if start_tailscale_funnel "true"; then
+            tunnel_started=true
+        else
+            echo_warn "Tailscale Funnel failed, falling back to Localtunnel..."
+        fi
+    fi
+
+    # Fall back to localtunnel
+    if [[ "$tunnel_started" == "false" ]]; then
+        if ! has_localtunnel_subdomain; then
+            echo_error "No tunnel backend available."
+            echo ""
+            echo -e "  Either:"
+            echo -e "    1. Enable Tailscale Funnel: ${BOLD}tailscale funnel ${MCP_PORT}${NC}"
+            echo -e "    2. Configure Localtunnel: ${BOLD}local-tunnel --stable${NC}"
+            exit 1
+        fi
+        start_tunnel_and_get_url "true"
+    fi
 
     # Update Slack Request URLs (actions + events)
     if ! update_slack_request_url "${TUNNEL_URL}/slack/actions" "${TUNNEL_URL}/slack/events"; then
@@ -1137,12 +1265,18 @@ cmd_stop() {
         stopped=true
     fi
 
-    # Kill the tunnel from PID file
+    # Stop Tailscale Funnel if active
+    if stop_tailscale_funnel; then
+        stopped=true
+    fi
+
+    # Kill the localtunnel from PID file
     if [[ -f "$TUNNEL_PID_FILE" ]]; then
         local pid
         pid=$(cat "$TUNNEL_PID_FILE")
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
             kill "$pid" 2>/dev/null || true
+            echo_info "Localtunnel stopped"
             stopped=true
         fi
         rm -f "$TUNNEL_PID_FILE"
@@ -1157,13 +1291,13 @@ cmd_stop() {
         fi
     done < <(pgrep -f "lt --port.*${MCP_PORT:-8463}" 2>/dev/null || true)
 
-    if [[ "$stale_count" -gt 0 || "$stopped" == "true" ]]; then
-        echo_info "Tunnel stopped"
+    if [[ "$stale_count" -gt 0 ]]; then
+        echo_info "Cleaned up $stale_count stale localtunnel process(es)"
         stopped=true
     fi
 
-    # Remove tunnel URL file
-    rm -f "$TUNNEL_URL_FILE"
+    # Remove tunnel URL and type files
+    rm -f "$TUNNEL_URL_FILE" "$TUNNEL_TYPE_FILE"
 
     if [[ -f "$CLAUDE_DIR/.mcp-server.pid" ]]; then
         stop_mcp_server
@@ -1188,43 +1322,55 @@ cmd_status() {
     echo -e "${BOLD}Tunnel Status${NC}"
     echo ""
 
-    # Check stable tunnel config
-    if has_stable_tunnel; then
-        local subdomain
-        subdomain=$(get_localtunnel_subdomain)
-        echo -e "  Mode:       ${GREEN}Localtunnel (stable URL)${NC}"
-        echo -e "  URL:        ${CYAN}https://${subdomain}.loca.lt${NC}"
-        echo ""
-    else
-        echo -e "  Mode:       ${YELLOW}Quick Tunnel${NC} (random URL each restart)"
-        echo -e "              ${DIM}Run --stable for permanent URL${NC}"
-        echo ""
-
-        # Check Slack config (only needed for quick tunnels)
-        if [[ -f "$SLACK_CONFIG_FILE" ]]; then
-            load_slack_config
-            echo -e "  Slack App:  ${CYAN}$SLACK_APP_ID${NC}"
-            if is_token_expired; then
-                echo -e "  Token:      ${YELLOW}Expired (will refresh on next use)${NC}"
-            else
-                echo -e "  Token:      ${GREEN}Valid${NC}"
-            fi
-        else
-            echo -e "  Slack:      ${YELLOW}Not configured${NC} (run: local-tunnel --setup)"
-        fi
-        echo ""
+    # Determine active tunnel type
+    local active_type=""
+    if [[ -f "$TUNNEL_TYPE_FILE" ]]; then
+        active_type=$(cat "$TUNNEL_TYPE_FILE" 2>/dev/null)
     fi
 
-    # Check tunnel process
-    if [[ -f "$TUNNEL_PID_FILE" ]]; then
+    # Check Tailscale availability and status
+    if has_tailscale && is_tailscale_connected; then
+        local ts_dns
+        ts_dns=$(get_tailscale_dns_name)
+        if is_tailscale_funnel_active; then
+            echo -e "  Backend:    ${GREEN}Tailscale Funnel${NC} (active)"
+            echo -e "  URL:        ${CYAN}https://${ts_dns}${NC}"
+        else
+            echo -e "  Tailscale:  ${CYAN}Available${NC} (${ts_dns})"
+            if has_localtunnel_subdomain; then
+                local subdomain
+                subdomain=$(get_localtunnel_subdomain)
+                echo -e "  Localtunnel: ${CYAN}Configured${NC} (${subdomain}.loca.lt)"
+            fi
+        fi
+    elif has_localtunnel_subdomain; then
+        local subdomain
+        subdomain=$(get_localtunnel_subdomain)
+        echo -e "  Backend:    ${GREEN}Localtunnel${NC}"
+        echo -e "  URL:        ${CYAN}https://${subdomain}.loca.lt${NC}"
+    else
+        echo -e "  Backend:    ${YELLOW}Not configured${NC}"
+        echo -e "              ${DIM}Tailscale recommended, or run --stable for Localtunnel${NC}"
+    fi
+    echo ""
+
+    # Check tunnel process (for localtunnel - Tailscale doesn't use a PID file)
+    if is_tailscale_funnel_active; then
+        echo -e "  Tunnel:     ${GREEN}Running${NC} (Tailscale Funnel)"
+        if [[ -f "$TUNNEL_URL_FILE" ]]; then
+            local url
+            url=$(cat "$TUNNEL_URL_FILE")
+            echo -e "  Actions:    ${CYAN}$url/slack/actions${NC}"
+        fi
+    elif [[ -f "$TUNNEL_PID_FILE" ]]; then
         local pid
         pid=$(cat "$TUNNEL_PID_FILE")
         if kill -0 "$pid" 2>/dev/null; then
-            echo -e "  Tunnel:     ${GREEN}Running${NC} (PID: $pid)"
+            echo -e "  Tunnel:     ${GREEN}Running${NC} (Localtunnel PID: $pid)"
             if [[ -f "$TUNNEL_URL_FILE" ]]; then
                 local url
                 url=$(cat "$TUNNEL_URL_FILE")
-                echo -e "  URL:        ${CYAN}$url/slack/actions${NC}"
+                echo -e "  Actions:    ${CYAN}$url/slack/actions${NC}"
             fi
         else
             echo -e "  Tunnel:     ${YELLOW}Stopped${NC} (stale PID file)"
@@ -1300,32 +1446,8 @@ cmd_interactive() {
     echo -e "${DIM}Creates a public URL for Slack button actions${NC}"
     echo ""
 
-    local using_stable_tunnel=false
-
-    # Check if stable tunnel is configured
-    if has_stable_tunnel; then
-        using_stable_tunnel=true
-        local subdomain
-        subdomain=$(get_localtunnel_subdomain)
-        echo_info "Using stable URL: https://${subdomain}.loca.lt"
-    else
-        # Quick tunnel mode - need Slack config for auto-URL updates
-        if ! load_slack_config; then
-            echo_warn "Slack not configured yet."
-            echo ""
-            echo -e "  ${BOLD}Options:${NC}"
-            echo -e "  ${CYAN}1.${NC} Run ${BOLD}--stable${NC} to setup permanent URL (recommended)"
-            echo -e "  ${CYAN}2.${NC} Run ${BOLD}--setup${NC} to configure auto-URL updates"
-            echo ""
-            echo -ne "  ${YELLOW}?${NC} Run setup now? [Y/n] "
-            read -r response
-            if [[ "$response" =~ ^[Nn]$ ]]; then
-                exit 0
-            fi
-            cmd_setup
-            load_slack_config
-        fi
-    fi
+    local using_tailscale=false
+    local using_localtunnel=false
 
     # Rebuild MCP server if needed
     rebuild_if_needed
@@ -1346,65 +1468,102 @@ cmd_interactive() {
     cleanup() {
         echo ""
         echo_info "Shutting down..."
+        # Stop Tailscale Funnel if active
+        stop_tailscale_funnel 2>/dev/null || true
+        # Stop Localtunnel if running
         if [[ -n "${TUNNEL_PID:-}" ]]; then
             kill "$TUNNEL_PID" 2>/dev/null || true
         fi
         stop_mcp_server
-        rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE"
+        rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE" "$TUNNEL_TYPE_FILE"
     }
     trap cleanup EXIT INT TERM
 
-    # Start tunnel
-    start_tunnel_and_get_url "false"
+    # Try Tailscale Funnel first (if available and not forced to use localtunnel)
+    if [[ "$TUNNEL_TYPE" != "localtunnel" ]] && has_tailscale && is_tailscale_connected; then
+        if start_tailscale_funnel "false"; then
+            using_tailscale=true
+        else
+            echo_warn "Tailscale Funnel failed, falling back to Localtunnel..."
+        fi
+    fi
 
-    if [[ "$using_stable_tunnel" == "true" ]]; then
-        # Stable tunnel - no URL updates needed
+    # Fall back to Localtunnel if Tailscale not available
+    if [[ "$using_tailscale" == "false" ]]; then
+        # Check if stable tunnel is configured
+        if has_stable_tunnel; then
+            using_localtunnel=true
+            local subdomain
+            subdomain=$(get_localtunnel_subdomain)
+            echo_info "Using stable URL: https://${subdomain}.loca.lt"
+            start_tunnel_and_get_url "false"
+        else
+            # No Tailscale, no stable Localtunnel - need setup
+            if ! load_slack_config; then
+                echo_warn "No tunnel backend available."
+                echo ""
+                echo -e "  ${BOLD}Options:${NC}"
+                echo -e "  ${CYAN}1.${NC} Install and connect Tailscale (recommended)"
+                echo -e "  ${CYAN}2.${NC} Run ${BOLD}local-tunnel --stable${NC} to setup Localtunnel"
+                echo ""
+                exit 1
+            fi
+            # Has Slack config but no stable tunnel - prompt for setup
+            echo_warn "No tunnel configured."
+            echo ""
+            echo -e "  Run ${BOLD}local-tunnel --stable${NC} to configure Localtunnel."
+            echo ""
+            exit 1
+        fi
+    fi
+
+    # Update Slack Request URLs
+    if update_slack_request_url "${TUNNEL_URL}/slack/actions" "${TUNNEL_URL}/slack/events"; then
         echo ""
-        echo -e "${GREEN}╭──────────────────────────────────────────────────────────────╮${NC}"
-        echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Stable tunnel connected!${NC}                                  ${GREEN}│${NC}"
-        echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
+        if [[ "$using_tailscale" == "true" ]]; then
+            echo -e "${GREEN}╭──────────────────────────────────────────────────────────────╮${NC}"
+            echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Tailscale Funnel connected!${NC}                               ${GREEN}│${NC}"
+            echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
+        else
+            echo -e "${GREEN}╭──────────────────────────────────────────────────────────────╮${NC}"
+            echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Localtunnel connected!${NC}                                    ${GREEN}│${NC}"
+            echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
+        fi
         echo ""
         echo -e "  URL: ${CYAN}${TUNNEL_URL}${NC}"
         echo ""
+        echo -e "  ${DIM}Slack URLs updated automatically.${NC}"
         echo -e "  ${DIM}Buttons and thread replies will work on both desktop and mobile.${NC}"
         echo -e "  ${DIM}Keep this running. Press Ctrl+C to stop.${NC}"
     else
-        # Quick tunnel - try to update Slack URLs
-        if update_slack_request_url "${TUNNEL_URL}/slack/actions" "${TUNNEL_URL}/slack/events"; then
-            echo ""
-            echo -e "${GREEN}╭──────────────────────────────────────────────────────────────╮${NC}"
-            echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Slack URLs updated automatically!${NC}                         ${GREEN}│${NC}"
-            echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
-            echo ""
-            echo -e "  Actions URL: ${CYAN}${TUNNEL_URL}/slack/actions${NC}"
-            echo -e "  Events URL:  ${CYAN}${TUNNEL_URL}/slack/events${NC}"
-            echo ""
-            echo -e "  ${DIM}Buttons and thread replies will work on both desktop and mobile.${NC}"
-            echo -e "  ${DIM}Keep this running. Press Ctrl+C to stop.${NC}"
-        else
-            echo ""
-            echo -e "${YELLOW}╭──────────────────────────────────────────────────────────────╮${NC}"
-            echo -e "${YELLOW}│${NC}  ${YELLOW}!${NC} ${BOLD}Could not auto-update Slack${NC}                               ${YELLOW}│${NC}"
-            echo -e "${YELLOW}╰──────────────────────────────────────────────────────────────╯${NC}"
-            echo ""
-            echo -e "  Actions URL: ${CYAN}${TUNNEL_URL}/slack/actions${NC}"
-            echo -e "  Events URL:  ${CYAN}${TUNNEL_URL}/slack/events${NC}"
-            echo ""
-            echo -e "  ${BOLD}Manually update in Slack:${NC}"
-            echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps/${SLACK_APP_ID:-your-app}${NC}"
-            echo -e "  ${CYAN}2.${NC} ${BOLD}Interactivity & Shortcuts${NC} → Set Request URL"
-            echo -e "  ${CYAN}3.${NC} ${BOLD}Event Subscriptions${NC} → Set Request URL"
-            echo -e "  ${CYAN}4.${NC} Click ${BOLD}Save Changes${NC} on each page"
-            echo ""
-            echo -e "  ${DIM}Tip: Run ${BOLD}local-tunnel --stable${NC} for a permanent URL.${NC}"
-            echo ""
-            echo -e "  ${DIM}Keep this running. Press Ctrl+C to stop.${NC}"
-        fi
+        echo ""
+        echo -e "${YELLOW}╭──────────────────────────────────────────────────────────────╮${NC}"
+        echo -e "${YELLOW}│${NC}  ${YELLOW}!${NC} ${BOLD}Could not auto-update Slack${NC}                               ${YELLOW}│${NC}"
+        echo -e "${YELLOW}╰──────────────────────────────────────────────────────────────╯${NC}"
+        echo ""
+        echo -e "  Actions URL: ${CYAN}${TUNNEL_URL}/slack/actions${NC}"
+        echo -e "  Events URL:  ${CYAN}${TUNNEL_URL}/slack/events${NC}"
+        echo ""
+        echo -e "  ${BOLD}Manually update in Slack:${NC}"
+        echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps/${SLACK_APP_ID:-your-app}${NC}"
+        echo -e "  ${CYAN}2.${NC} ${BOLD}Interactivity & Shortcuts${NC} → Set Request URL"
+        echo -e "  ${CYAN}3.${NC} ${BOLD}Event Subscriptions${NC} → Set Request URL"
+        echo -e "  ${CYAN}4.${NC} Click ${BOLD}Save Changes${NC} on each page"
+        echo ""
+        echo -e "  ${DIM}Keep this running. Press Ctrl+C to stop.${NC}"
     fi
     echo ""
 
-    # Keep running until interrupted
-    wait "$TUNNEL_PID" 2>/dev/null || true
+    # Keep running - wait on tunnel process (Localtunnel) or just sleep (Tailscale)
+    if [[ "$using_tailscale" == "true" ]]; then
+        # Tailscale Funnel runs with --bg, so just sleep forever
+        while true; do
+            sleep 3600
+        done
+    else
+        # Wait for Localtunnel process
+        wait "$TUNNEL_PID" 2>/dev/null || true
+    fi
 }
 
 # =============================================================================
@@ -1427,20 +1586,50 @@ case "${1:-}" in
     --status)
         cmd_status
         ;;
+    --use-tailscale)
+        TUNNEL_TYPE="tailscale"
+        shift
+        case "${1:-}" in
+            --background) cmd_background ;;
+            "") cmd_interactive ;;
+            *) echo_error "Unknown command after --use-tailscale: $1"; exit 1 ;;
+        esac
+        ;;
+    --use-localtunnel)
+        TUNNEL_TYPE="localtunnel"
+        shift
+        case "${1:-}" in
+            --background) cmd_background ;;
+            --stable|"") cmd_stable ;;
+            *) echo_error "Unknown command after --use-localtunnel: $1"; exit 1 ;;
+        esac
+        ;;
     --help|-h)
         echo "Usage: local-tunnel [command]"
         echo ""
         echo "Commands:"
-        echo "  (none)         Start tunnel (uses stable URL, prompts to configure if needed)"
+        echo "  (none)         Start tunnel (Tailscale if available, else Localtunnel)"
         echo "  --setup        Configure Slack tokens (for auto-URL updates)"
         echo "  --update-token Quick Slack token refresh when expired"
         echo "  --background   Start tunnel in background"
         echo "  --stop         Stop background tunnel"
         echo "  --status       Check tunnel status"
         echo ""
+        echo "Backend options:"
+        echo "  --use-tailscale    Force Tailscale Funnel"
+        echo "  --use-localtunnel  Force Localtunnel"
+        echo ""
         ;;
-    --stable|"")
+    --stable)
         cmd_stable
+        ;;
+    "")
+        # Default: try Tailscale, fall back to Localtunnel setup
+        if has_tailscale && is_tailscale_connected; then
+            cmd_interactive
+        else
+            cmd_stable
+        fi
         ;;
     *)
         echo_error "Unknown command: $1"

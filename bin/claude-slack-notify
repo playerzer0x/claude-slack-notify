@@ -1162,30 +1162,167 @@ fi
 # -----------------------------------------------------------------------------
 # Check elapsed time and notify if needed
 # Usage: claude-slack-notify check [context]
-# Stop hook passes transcript_path in stdin JSON
+# Hook events pass JSON via stdin with tool_name, tool_input, transcript_path, etc.
 # -----------------------------------------------------------------------------
+
+# Comprehensive tool formatter - converts tool_name + tool_input to readable text
+# Usage: echo '{"name":"Bash","input":{...}}' | jq -r "$TOOL_FORMATTER"
+# The jq filter expects an object with .name and .input fields
+TOOL_FORMATTER='
+def format_tool:
+    if .name == "Bash" then
+        "● Bash: " + ((.input.command // "") | split("\n")[0] | .[0:80]) +
+        (if (.input.description // "") != "" then " (" + .input.description + ")" else "" end)
+    elif .name == "Edit" then
+        "● Edit: " + (.input.file_path // "") +
+        (if (.input.old_string // "") != "" then " (replacing " + ((.input.old_string // "") | .[0:30]) + "...)" else "" end)
+    elif .name == "Write" then
+        "● Write: " + (.input.file_path // "")
+    elif .name == "Read" then
+        "● Read: " + (.input.file_path // "") +
+        (if (.input.offset // 0) > 0 then " (from line " + ((.input.offset // 0) | tostring) + ")" else "" end)
+    elif .name == "Glob" then
+        "● Glob: " + (.input.pattern // "") +
+        (if (.input.path // "") != "" then " in " + .input.path else "" end)
+    elif .name == "Grep" then
+        "● Grep: " + (.input.pattern // "") +
+        (if (.input.path // "") != "" then " in " + .input.path else "" end)
+    elif .name == "AskUserQuestion" then
+        [.input.questions[] |
+            "● " + .question + "\n" +
+            ([.options // [] | to_entries[] |
+                "  " + ((.key + 1) | tostring) + ". " + .value.label
+            ] | join("\n"))
+        ] | join("\n\n")
+    elif .name == "Task" then
+        "● Task (" + (.input.subagent_type // "agent") + "): " +
+        (if (.input.description // "") != "" then .input.description
+         elif (.input.prompt // "") != "" then ((.input.prompt // "") | .[0:100])
+         else "running subagent" end)
+    elif .name == "WebFetch" then
+        "● WebFetch: " + (.input.url // "") +
+        (if (.input.prompt // "") != "" then "\n  Prompt: " + ((.input.prompt // "") | .[0:80]) else "" end)
+    elif .name == "WebSearch" then
+        "● WebSearch: " + (.input.query // "")
+    elif .name == "TodoWrite" then
+        "● TodoWrite: " + (
+            [.input.todos[]? | select(.status == "in_progress") | .content] |
+            if length > 0 then "Working on: " + (.[0] // "")
+            else ([.input.todos[]?.content] | length | tostring) + " tasks"
+            end
+        )
+    elif .name == "NotebookEdit" then
+        "● NotebookEdit: " + (.input.notebook_path // "") +
+        (if (.input.edit_mode // "") != "" then " (" + .input.edit_mode + ")" else "" end)
+    elif .name == "Skill" then
+        "● Skill: /" + (.input.skill // "") +
+        (if (.input.args // "") != "" then " " + .input.args else "" end)
+    elif .name == "EnterPlanMode" then
+        "● Entering plan mode"
+    elif .name == "ExitPlanMode" then
+        "● Exiting plan mode"
+    elif (.name | startswith("mcp__")) then
+        # MCP tools: mcp__server__tool format
+        "● MCP: " + ((.name | split("__") | .[1:] | join("/")) // .name) +
+        (if (.input | keys | length) > 0 then
+            " (" + ([.input | to_entries[] | select(.value != null and .value != "") | .key + "=" + (.value | tostring | .[0:20])] | .[0:3] | join(", ")) + ")"
+         else "" end)
+    else
+        "● " + .name +
+        (if (.input.description // "") != "" then ": " + .input.description
+         elif (.input.file_path // "") != "" then ": " + .input.file_path
+         elif (.input.prompt // "") != "" then ": " + ((.input.prompt // "") | .[0:80])
+         else "" end)
+    end;
+format_tool
+'
+
+# Waiting variant of tool formatter (with ⏳ prefix for pending permissions)
+TOOL_FORMATTER_WAITING='
+def format_tool_waiting:
+    if .name == "Bash" then
+        "⏳ Bash: " + ((.input.command // "") | split("\n")[0] | .[0:80]) +
+        (if (.input.description // "") != "" then " (" + .input.description + ")" else "" end)
+    elif .name == "Edit" then
+        "⏳ Edit: " + (.input.file_path // "") +
+        (if (.input.old_string // "") != "" then " (replacing " + ((.input.old_string // "") | .[0:30]) + "...)" else "" end)
+    elif .name == "Write" then
+        "⏳ Write: " + (.input.file_path // "")
+    elif .name == "Read" then
+        "⏳ Read: " + (.input.file_path // "")
+    elif .name == "Glob" then
+        "⏳ Glob: " + (.input.pattern // "")
+    elif .name == "Grep" then
+        "⏳ Grep: " + (.input.pattern // "")
+    elif .name == "AskUserQuestion" then
+        [.input.questions[] |
+            "⏳ " + .question + "\n" +
+            ([.options // [] | to_entries[] |
+                "  " + ((.key + 1) | tostring) + ". " + .value.label
+            ] | join("\n"))
+        ] | join("\n\n")
+    elif .name == "Task" then
+        "⏳ Task (" + (.input.subagent_type // "agent") + "): " +
+        (if (.input.description // "") != "" then .input.description else "running subagent" end)
+    elif .name == "WebFetch" then
+        "⏳ WebFetch: " + (.input.url // "")
+    elif .name == "WebSearch" then
+        "⏳ WebSearch: " + (.input.query // "")
+    elif .name == "Skill" then
+        "⏳ Skill: /" + (.input.skill // "")
+    elif (.name | startswith("mcp__")) then
+        "⏳ MCP: " + ((.name | split("__") | .[1:] | join("/")) // .name)
+    else
+        "⏳ " + .name +
+        (if (.input.description // "") != "" then ": " + .input.description
+         elif (.input.file_path // "") != "" then ": " + .input.file_path
+         else "" end)
+    end;
+format_tool_waiting
+'
+
 if [[ "$1" == "check" ]]; then
     # Only work for registered instances (prevents sub-agents from notifying)
     if [[ ! -f "$INSTANCE_FILE" ]]; then
         exit 0
     fi
 
-    # First, read stdin to check hook event type
+    # Read stdin to get hook event data
     STDIN_DATA=""
     HOOK_EVENT=""
     NOTIF_MSG=""
+    NOTIF_TYPE=""
+    DIRECT_TOOL_MSG=""
     TRANSCRIPT_MSG=""
+
     if [[ ! -t 0 ]]; then
         STDIN_DATA=$(timeout 1 cat 2>/dev/null || true)
         if [[ -n "$STDIN_DATA" ]] && command -v jq &>/dev/null; then
             HOOK_EVENT=$(echo "$STDIN_DATA" | jq -r '.hook_event_name // empty' 2>/dev/null)
 
-            # Get notification message if this is a Notification event
-            if [[ "$HOOK_EVENT" == "Notification" ]]; then
-                NOTIF_MSG=$(echo "$STDIN_DATA" | jq -r '.message // empty' 2>/dev/null)
+            # For PermissionRequest: extract tool info directly from stdin (most reliable)
+            if [[ "$HOOK_EVENT" == "PermissionRequest" ]]; then
+                TOOL_NAME=$(echo "$STDIN_DATA" | jq -r '.tool_name // empty' 2>/dev/null)
+                if [[ -n "$TOOL_NAME" ]]; then
+                    DIRECT_TOOL_MSG=$(echo "$STDIN_DATA" | jq -r --argjson fmt "$TOOL_FORMATTER_WAITING" '
+                        {name: .tool_name, input: .tool_input} | '"$TOOL_FORMATTER_WAITING" 2>/dev/null)
+                fi
             fi
 
-            # Get last assistant message from transcript (full content including tools)
+            # For Notification: extract message and notification_type
+            if [[ "$HOOK_EVENT" == "Notification" ]]; then
+                NOTIF_MSG=$(echo "$STDIN_DATA" | jq -r '.message // empty' 2>/dev/null)
+                NOTIF_TYPE=$(echo "$STDIN_DATA" | jq -r '.notification_type // empty' 2>/dev/null)
+
+                # Also check if tool info is available in stdin (some Notification events include it)
+                TOOL_NAME=$(echo "$STDIN_DATA" | jq -r '.tool_name // empty' 2>/dev/null)
+                if [[ -n "$TOOL_NAME" ]]; then
+                    DIRECT_TOOL_MSG=$(echo "$STDIN_DATA" | jq -r '
+                        {name: .tool_name, input: .tool_input} | '"$TOOL_FORMATTER_WAITING" 2>/dev/null)
+                fi
+            fi
+
+            # Get last assistant message from transcript for additional context
             TRANSCRIPT_PATH=$(echo "$STDIN_DATA" | jq -r '.transcript_path // empty' 2>/dev/null)
             if [[ -n "$TRANSCRIPT_PATH" && -f "$TRANSCRIPT_PATH" ]]; then
                 # Extract full assistant message content (text + tool calls)
@@ -1199,17 +1336,7 @@ if [[ "$1" == "check" ]]; then
                                     if .type == "text" then
                                         .text
                                     elif .type == "tool_use" then
-                                        if .name == "Bash" then
-                                            # Show bash command preview
-                                            "● Bash: " + ((.input.command // "") | split("\n")[0] | .[0:80]) +
-                                            (if (.input.description // "") != "" then " (" + .input.description + ")" else "" end)
-                                        elif .name == "Edit" or .name == "Write" then
-                                            "● " + .name + ": " + (.input.file_path // "")
-                                        elif .name == "Read" then
-                                            "● Read: " + (.input.file_path // "")
-                                        else
-                                            "● " + .name + (if (.input.description // "") != "" then ": " + .input.description else "" end)
-                                        end
+                                        {name: .name, input: .input} | '"$TOOL_FORMATTER"'
                                     else
                                         empty
                                     end
@@ -1225,22 +1352,16 @@ if [[ "$1" == "check" ]]; then
                     fi
                 done)
 
-                # For Notification events, extract the pending tool request
-                if [[ "$HOOK_EVENT" == "Notification" ]]; then
+                # For Notification events without direct tool info, extract from transcript
+                if [[ "$HOOK_EVENT" == "Notification" && -z "$DIRECT_TOOL_MSG" ]]; then
                     TOOL_REQUEST=$(tac "$TRANSCRIPT_PATH" 2>/dev/null | while read -r line; do
                         MSG_TYPE=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
                         if [[ "$MSG_TYPE" == "assistant" ]]; then
-                            # Look for tool_use blocks in the message content
                             TOOL_INFO=$(echo "$line" | jq -r '
                                 if .message.content then
-                                    [.message.content[] | select(.type == "tool_use") |
-                                        {name: .name, desc: .input.description}] | last |
+                                    [.message.content[] | select(.type == "tool_use")] | last |
                                         if . then
-                                            if .desc and .desc != "" then
-                                                "⏳ Waiting: " + .desc
-                                            else
-                                                "⏳ Waiting: " + .name + " permission"
-                                            end
+                                            {name: .name, input: .input} | '"$TOOL_FORMATTER_WAITING"'
                                         else
                                             empty
                                         end
@@ -1255,9 +1376,8 @@ if [[ "$1" == "check" ]]; then
                         fi
                     done)
 
-                    # Replace generic notification with detailed tool request if available
                     if [[ -n "$TOOL_REQUEST" ]]; then
-                        NOTIF_MSG="$TOOL_REQUEST"
+                        DIRECT_TOOL_MSG="$TOOL_REQUEST"
                     fi
                 fi
             fi
@@ -1285,18 +1405,70 @@ if [[ "$1" == "check" ]]; then
         rm -f "$TIMESTAMP_FILE"
     fi
 
-    # Build context: show both transcript and notification message
+    # Build context: use direct tool info when available (most accurate for user-facing prompts)
+    # For user-input events (PermissionRequest, Notification), always use waiting format (⏳)
     CONTEXT=""
-    if [[ -n "$TRANSCRIPT_MSG" && -n "$NOTIF_MSG" ]]; then
-        CONTEXT="${TRANSCRIPT_MSG}
+    if [[ -n "$DIRECT_TOOL_MSG" ]]; then
+        # Direct tool info from stdin - use this for the waiting prompt
+        CONTEXT="$DIRECT_TOOL_MSG"
+    elif [[ -n "$TRANSCRIPT_MSG" ]]; then
+        # For permission/notification events, convert bullet (●) to hourglass (⏳) to show waiting
+        if [[ "$HOOK_EVENT" == "Notification" || "$HOOK_EVENT" == "PermissionRequest" ]]; then
+            CONTEXT=$(echo "$TRANSCRIPT_MSG" | sed 's/^● /⏳ /; s/\n● /\n⏳ /g')
+        else
+            CONTEXT="$TRANSCRIPT_MSG"
+        fi
+        if [[ -n "$NOTIF_MSG" ]]; then
+            CONTEXT="${CONTEXT}
 
 ---
 *${NOTIF_MSG}*"
+        fi
     elif [[ -n "$NOTIF_MSG" ]]; then
         CONTEXT="$NOTIF_MSG"
-    elif [[ -n "$TRANSCRIPT_MSG" ]]; then
-        CONTEXT="$TRANSCRIPT_MSG"
     fi
+
+    # Deduplication: skip if we already notified for this tool_use_id
+    # This prevents double notifications when multiple hooks fire for the same event
+    DEDUP_DIR="/tmp/claude-slack-dedup"
+    DEDUP_WINDOW=10
+    NOW_TS=$(date +%s)
+
+    # Use tool_use_id if available (unique per tool call), otherwise use content hash
+    TOOL_USE_ID=""
+    if [[ -n "$STDIN_DATA" ]] && command -v jq &>/dev/null; then
+        TOOL_USE_ID=$(echo "$STDIN_DATA" | jq -r '.tool_use_id // empty' 2>/dev/null)
+    fi
+
+    if [[ -n "$TOOL_USE_ID" ]]; then
+        DEDUP_KEY="$TOOL_USE_ID"
+    else
+        # Fallback to content hash with normalization
+        NORMALIZED_CONTEXT=$(echo "$CONTEXT" | LC_ALL=C sed 's/^[^a-zA-Z0-9]*//g')
+        DEDUP_KEY=$(echo "${INSTANCE_ID}:${NORMALIZED_CONTEXT}" | md5sum | cut -d' ' -f1)
+    fi
+
+    # Create dedup directory
+    mkdir -p "$DEDUP_DIR"
+    DEDUP_FILE="${DEDUP_DIR}/${DEDUP_KEY}"
+
+    # Check if we recently sent this notification (with file locking to handle race condition)
+    if [[ -f "$DEDUP_FILE" ]]; then
+        LAST_TS=$(cat "$DEDUP_FILE" 2>/dev/null)
+        if [[ -n "$LAST_TS" ]]; then
+            AGE=$((NOW_TS - LAST_TS))
+            if [[ $AGE -lt $DEDUP_WINDOW ]]; then
+                # Same notification sent recently, skip
+                exit 0
+            fi
+        fi
+    fi
+
+    # Mark this notification as sent (atomic write to handle race)
+    echo "$NOW_TS" > "${DEDUP_FILE}.tmp.$$" && mv "${DEDUP_FILE}.tmp.$$" "$DEDUP_FILE"
+
+    # Clean up old dedup files (older than 1 minute)
+    find "$DEDUP_DIR" -type f -mmin +1 -delete 2>/dev/null || true
 
     # Truncate if too long for Slack (max ~2800 chars to leave room for header)
     MAX_CONTEXT_LEN=2800

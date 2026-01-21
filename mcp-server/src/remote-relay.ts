@@ -503,9 +503,12 @@ app.post('/slack/actions', verifySlackSignature, async (req: Request, res: Respo
 
     console.log(`Received action: ${actionType} for value: ${firstPart}`);
 
-    // Always try to proxy to Mac first (handles both session_id and url: formats)
+    // FIRST: Check if Mac is reachable - Mac can handle ALL button formats
     const macUrl = await checkMacReachable();
+
     if (macUrl) {
+      // Proxy to Mac for full experience (Focus + input)
+      // Mac's MCP server handles both session_id and url: formats
       console.log('Mac is reachable, proxying request...');
       const rawBody = (req as Request & { rawBody?: string }).rawBody || '';
       const headers = {
@@ -522,9 +525,10 @@ app.post('/slack/actions', verifySlackSignature, async (req: Request, res: Respo
       console.log('Proxy failed, falling back to local handling');
     }
 
-    // Local handling requires url: format (for tmux target extraction)
+    // Mac not reachable or proxy failed - try to handle locally
+    // Local handling only supports url: format (SSH-linked/jupyter-tmux sessions)
     if (!firstPart.startsWith('url:')) {
-      // This is a Mac session (session_id format) but Mac is not reachable
+      // This is a Mac session (session_id format) and Mac is not reachable
       console.log('Mac session button clicked but Mac not reachable - cannot handle locally');
       ack();
       return;

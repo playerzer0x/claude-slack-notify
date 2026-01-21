@@ -21,20 +21,16 @@ When the user runs `/slack-notify` (with no arguments or a custom name):
 
 1. **Check webhook configuration**: If ~/.claude/slack-webhook-url doesn't exist, ask for their Slack webhook URL and save it. (Usually already set by installer)
 
-2. **Register this instance**: Run the command to register this Claude session:
+2. **Register and send test notification** (MUST be a single bash command to ensure consistent session ID):
    ```bash
-   SESSION_ID=$(~/.claude/bin/get-session-id) && CLAUDE_INSTANCE_ID="$SESSION_ID" ~/.claude/bin/claude-slack-notify register [optional-name]
+   SESSION_ID=$(~/.claude/bin/get-session-id) && CLAUDE_INSTANCE_ID="$SESSION_ID" ~/.claude/bin/claude-slack-notify register [optional-name] && CLAUDE_INSTANCE_ID="$SESSION_ID" ~/.claude/bin/claude-slack-notify "Instance registered and ready" "started"
    ```
+   - **IMPORTANT**: Both register and notify MUST use the same SESSION_ID from a single get-session-id call
    - If the user provides a name argument to /slack-notify (e.g., `/slack-notify MyProject`), use that name
    - Otherwise, a random 4-word name like "cosmic-phoenix-scarlet-breeze" will be generated
    - The script auto-detects terminal type (tmux window/pane, iTerm2 tab, Terminal.app tab)
 
-3. **Show the registered info**: Display the instance name and terminal location that was registered.
-
-4. **Test the notification**: Send a test notification using:
-   ```bash
-   SESSION_ID=$(~/.claude/bin/get-session-id) && CLAUDE_INSTANCE_ID="$SESSION_ID" ~/.claude/bin/claude-slack-notify "Instance registered and ready" "started"
-   ```
+3. **Show the registered info**: Display the instance name and terminal location that was registered (printed by the register command).
 
 5. **Confirm setup**: Tell the user their instance is registered and they'll receive notifications for tasks taking >30 seconds.
 

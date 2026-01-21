@@ -216,6 +216,7 @@ remote-tunnel --use-localtunnel  # Force Localtunnel
 > Last updated: 2026-01-21
 
 ### Recent Changes
+- **Single get-session-id call**: The `/slack-notify` command now uses a single `get-session-id` call for both register and notify. Previously, calling it twice could return different IDs if another session's transcript was modified between calls, causing the notification to show "Claude" instead of the session name.
 - **Auto-enable Tailscale Funnel**: When Funnel fails due to missing ACL permissions, scripts now:
   - Prompt for Tailscale API key (opens browser to key creation page)
   - Call Tailscale API to add `funnel` attribute to ACL policy

@@ -687,16 +687,10 @@ cmd_setup() {
             echo -e "  ${CYAN}9.${NC} Save Changes"
             echo ""
             echo -e "  ${DIM}The Request URL will be set automatically when you start the tunnel.${NC}"
-            echo ""
-            echo -e "  ${CYAN}10.${NC} What channel should notifications go to?"
-            echo -e "       ${DIM}(Right-click channel → View channel details → scroll to Channel ID)${NC}"
-            echo ""
-            echo -ne "  ${YELLOW}?${NC} Channel ID (e.g., C01234ABCDE): "
-            read -r SLACK_CHANNEL_ID
 
             save_slack_config
             echo ""
-            echo_info "Thread replies enabled!"
+            echo_info "Bot token saved!"
         fi
     fi
 

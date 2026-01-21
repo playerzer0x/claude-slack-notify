@@ -430,17 +430,23 @@ app.post('/slack/events', async (req: Request, res: Response) => {
         if (macUrl) {
           console.log('Mac is reachable, proxying event...');
           try {
-            await fetch(`${macUrl}/slack/events`, {
+            const proxyResponse = await fetch(`${macUrl}/slack/events`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(body),
             });
-          } catch {
-            // Fall through to local handling
+            if (proxyResponse.ok) {
+              console.log('Successfully proxied event to Mac');
+              res.status(200).send();
+              return;
+            }
+            console.log('Proxy response not ok, falling back to local handling');
+          } catch (proxyError) {
+            console.log('Proxy failed, falling back to local handling:', proxyError);
           }
         }
 
-        // Send text to tmux
+        // Send text to tmux (only if Mac proxy failed or Mac not reachable)
         const result = await sendTmuxInput(tmuxTarget, messageText);
         console.log('Thread reply sent to tmux:', result);
       }

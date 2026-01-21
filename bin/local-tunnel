@@ -157,6 +157,8 @@ start_tailscale_funnel() {
     sleep 1
     if is_tailscale_funnel_active; then
         echo_info "Tailscale Funnel started: $TUNNEL_URL"
+        # Save to .mac-tunnel-url for remote-relay auto-detect
+        echo "$TUNNEL_URL" > "$CLAUDE_DIR/.mac-tunnel-url"
         return 0
     else
         # Funnel failed - try to auto-enable it
@@ -1411,6 +1413,8 @@ cmd_background() {
     if [[ "$TUNNEL_TYPE" != "localtunnel" ]] && has_tailscale && is_tailscale_connected; then
         if start_tailscale_funnel "true"; then
             tunnel_started=true
+            # Sync tunnel URL to remote servers (if links exist)
+            sync_tunnel_url_to_remotes
         else
             echo_warn "Tailscale Funnel failed, falling back to Localtunnel..."
         fi
@@ -1679,6 +1683,8 @@ cmd_interactive() {
     if [[ "$TUNNEL_TYPE" != "localtunnel" ]] && has_tailscale && is_tailscale_connected; then
         if start_tailscale_funnel "false"; then
             using_tailscale=true
+            # Sync tunnel URL to remote servers (if links exist)
+            sync_tunnel_url_to_remotes
         else
             echo_warn "Tailscale Funnel failed, falling back to Localtunnel..."
         fi

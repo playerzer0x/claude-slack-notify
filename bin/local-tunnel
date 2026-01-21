@@ -892,6 +892,7 @@ cmd_stable() {
     done
 
     kill "$test_pid" 2>/dev/null || true
+    wait "$test_pid" 2>/dev/null || true
 
     if [[ -z "$connected" ]]; then
         echo_warn "Could not verify tunnel. The subdomain might be taken."

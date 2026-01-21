@@ -776,19 +776,30 @@ if [[ -d "$SCRIPT_DIR/mcp-server/dist" && -t 0 && "${1:-}" != "--link" ]]; then
     # =============================================================================
     # Step 3: Channel ID (for thread replies)
     # =============================================================================
+    # Check if channel ID is already configured
+    CHANNEL_ID_CONFIGURED=false
     if [[ -f "$SLACK_CONFIG_FILE" ]]; then
         source "$SLACK_CONFIG_FILE"
-        if [[ -z "${SLACK_CHANNEL_ID:-}" ]]; then
-            print_section "Notification Channel"
-            echo ""
-            echo -e "  ${DIM}What channel should notifications go to?${NC}"
-            echo -e "  ${DIM}(Right-click channel → View channel details → scroll to Channel ID)${NC}"
-            echo ""
-            echo -ne "  ${YELLOW}?${NC} Channel ID (e.g., C01234ABCDE): "
-            read -r channel_id
+        if [[ -n "${SLACK_CHANNEL_ID:-}" ]]; then
+            CHANNEL_ID_CONFIGURED=true
+        fi
+    fi
 
-            if [[ -n "$channel_id" ]]; then
-                cat > "$SLACK_CONFIG_FILE" << EOF
+    if [[ "$CHANNEL_ID_CONFIGURED" != "true" ]]; then
+        print_section "Notification Channel"
+        echo ""
+        echo -e "  ${DIM}What channel should notifications go to?${NC}"
+        echo -e "  ${DIM}(Right-click channel → View channel details → scroll to Channel ID)${NC}"
+        echo ""
+        echo -ne "  ${YELLOW}?${NC} Channel ID (e.g., C01234ABCDE): "
+        read -r channel_id
+
+        if [[ -n "$channel_id" ]]; then
+            # Source existing config if present to preserve other values
+            if [[ -f "$SLACK_CONFIG_FILE" ]]; then
+                source "$SLACK_CONFIG_FILE"
+            fi
+            cat > "$SLACK_CONFIG_FILE" << EOF
 SLACK_APP_ID="${SLACK_APP_ID:-}"
 SLACK_ACCESS_TOKEN="${SLACK_ACCESS_TOKEN:-}"
 SLACK_REFRESH_TOKEN="${SLACK_REFRESH_TOKEN:-}"
@@ -796,16 +807,15 @@ SLACK_TOKEN_EXPIRES="${SLACK_TOKEN_EXPIRES:-}"
 SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN:-}"
 SLACK_CHANNEL_ID="$channel_id"
 EOF
-                chmod 600 "$SLACK_CONFIG_FILE"
-                echo_info "Channel ID saved"
-            else
-                echo -e "  ${DIM}Skipped - can set later in ~/.claude/.slack-config${NC}"
-            fi
-            echo ""
+            chmod 600 "$SLACK_CONFIG_FILE"
+            echo_info "Channel ID saved"
         else
-            echo -e "  ${GREEN}✓${NC} Channel ID already configured"
-            echo ""
+            echo -e "  ${DIM}Skipped - can set later in ~/.claude/.slack-config${NC}"
         fi
+        echo ""
+    else
+        echo -e "  ${GREEN}✓${NC} Channel ID already configured"
+        echo ""
     fi
 fi
 

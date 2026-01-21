@@ -7,7 +7,9 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
+    "start:relay": "node dist/remote-relay.js",
     "dev": "tsx src/index.ts",
+    "dev:relay": "tsx src/remote-relay.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },

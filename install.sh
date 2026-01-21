@@ -114,6 +114,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     rm -f "$BIN_DIR/focus-helper"
     rm -f "$BIN_DIR/mcp-server"
     rm -f "$BIN_DIR/slack-tunnel"
+    rm -f "$BIN_DIR/remote-tunnel"
     rm -f "$COMMANDS_DIR/slack-notify.md"
     echo_info "Removed scripts from ~/.claude/bin/"
 
@@ -139,6 +140,17 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     rm -f "$CLAUDE_DIR/.tunnel.pid"
     rm -f "$CLAUDE_DIR/.tunnel-watchdog.pid"
     rm -f "$CLAUDE_DIR/.tunnel-last-activity"
+    rm -f "$CLAUDE_DIR/.mac-tunnel-url"
+    # Remote-tunnel files
+    rm -f "$CLAUDE_DIR/.remote-relay.pid"
+    rm -f "$CLAUDE_DIR/.remote-relay.port"
+    rm -f "$CLAUDE_DIR/.remote-tunnel.pid"
+    rm -f "$CLAUDE_DIR/.remote-tunnel-url"
+    rm -f "$CLAUDE_DIR/.remote-tunnel-watchdog.pid"
+    rm -f "$CLAUDE_DIR/.relay-last-activity"
+    rm -f "$CLAUDE_DIR/.remote-cloudflared.log"
+    rm -f "$CLAUDE_DIR/remote-tunnel.log"
+    rm -f "$CLAUDE_DIR/remote-relay.log"
     echo_info "Removed tunnel files"
 
     # Remove MCP server and hooks from settings.json
@@ -287,10 +299,11 @@ if [[ "${1:-}" == "--link" ]]; then
     ln -sf "$SCRIPT_DIR/bin/focus-helper" "$BIN_DIR/"
     ln -sf "$SCRIPT_DIR/bin/mcp-server" "$BIN_DIR/"
     ln -sf "$SCRIPT_DIR/bin/slack-tunnel" "$BIN_DIR/"
+    ln -sf "$SCRIPT_DIR/bin/remote-tunnel" "$BIN_DIR/"
     echo_info "Installed scripts to $BIN_DIR/ (symlinked to repo)"
 else
     # Remove existing files/symlinks first, then copy fresh
-    rm -f "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/get-session-id" "$BIN_DIR/focus-helper" "$BIN_DIR/mcp-server" "$BIN_DIR/slack-tunnel"
+    rm -f "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/get-session-id" "$BIN_DIR/focus-helper" "$BIN_DIR/mcp-server" "$BIN_DIR/slack-tunnel" "$BIN_DIR/remote-tunnel"
     cp "$SCRIPT_DIR/bin/claude-slack-notify" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/slack-notify-start" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/slack-notify-check" "$BIN_DIR/"
@@ -298,7 +311,8 @@ else
     cp "$SCRIPT_DIR/bin/focus-helper" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/mcp-server" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/slack-tunnel" "$BIN_DIR/"
-    chmod +x "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/get-session-id" "$BIN_DIR/focus-helper" "$BIN_DIR/mcp-server" "$BIN_DIR/slack-tunnel"
+    cp "$SCRIPT_DIR/bin/remote-tunnel" "$BIN_DIR/"
+    chmod +x "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/get-session-id" "$BIN_DIR/focus-helper" "$BIN_DIR/mcp-server" "$BIN_DIR/slack-tunnel" "$BIN_DIR/remote-tunnel"
     echo_info "Installed scripts to $BIN_DIR/"
 fi
 
@@ -413,6 +427,24 @@ end open location'
 else
     echo_warn "Not macOS - skipping ClaudeFocus.app installation"
     echo_warn "Slack notifications will work but without clickable focus buttons"
+
+    # Linux-specific: Install remote-tunnel for Slack button support
+    print_section "Linux Remote Relay Setup"
+    echo ""
+    echo -e "  ${DIM}For Slack buttons to work when your Mac is closed,${NC}"
+    echo -e "  ${DIM}run remote-tunnel on this Linux server.${NC}"
+    echo ""
+    echo -e "  ${BOLD}Quick start:${NC}"
+    echo -e "    ${CYAN}1.${NC} Copy Slack config from Mac:"
+    echo -e "       ${BOLD}scp mac:~/.claude/.slack-config ~/.claude/${NC}"
+    echo -e "    ${CYAN}2.${NC} Start tunnel:"
+    echo -e "       ${BOLD}remote-tunnel${NC}"
+    echo -e "    ${CYAN}3.${NC} In Claude:"
+    echo -e "       ${BOLD}/slack-notify${NC}"
+    echo ""
+    echo -e "  ${DIM}This enables 1/2/Continue/Push buttons from your phone.${NC}"
+    echo -e "  ${DIM}Focus button requires Mac to be open (use slack-tunnel on Mac).${NC}"
+    echo ""
 fi
 
 # Add ~/.claude/bin to PATH if not already there

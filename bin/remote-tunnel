@@ -1,29 +1,29 @@
 #!/bin/bash
 # =============================================================================
-# slack-tunnel - Start tunnel for Slack button actions
+# remote-tunnel - Remote relay for Slack button actions (Linux only)
 #
-# Uses Cloudflare Quick Tunnels (random URL, no account needed) and
-# automatically updates Slack's Request URL via API.
+# Runs on a Linux server (in tmux) to receive Slack button clicks when your
+# Mac is closed. Auto-detects if Mac is reachable and proxies to it when possible.
 #
 # Commands:
-#   slack-tunnel          - Start tunnel (interactive)
-#   slack-tunnel --setup  - One-time setup: configure Slack API tokens
-#   slack-tunnel --background - Start tunnel in background
-#   slack-tunnel --stop   - Stop background tunnel
-#   slack-tunnel --status - Check tunnel status
+#   remote-tunnel           - Start tunnel (interactive)
+#   remote-tunnel --setup   - Copy config from Mac or configure manually
+#   remote-tunnel --background - Start tunnel in background
+#   remote-tunnel --stop    - Stop background tunnel
+#   remote-tunnel --status  - Check tunnel status
 # =============================================================================
 
 set -uo pipefail
 
-MCP_PORT=8463
+RELAY_PORT=8464
 CLAUDE_DIR="$HOME/.claude"
-MCP_SERVER="$CLAUDE_DIR/bin/mcp-server"
 SLACK_CONFIG_FILE="$CLAUDE_DIR/.slack-config"
-TUNNEL_PID_FILE="$CLAUDE_DIR/.tunnel.pid"
-TUNNEL_URL_FILE="$CLAUDE_DIR/.tunnel-url"
-WATCHDOG_PID_FILE="$CLAUDE_DIR/.tunnel-watchdog.pid"
-ACTIVITY_FILE="$CLAUDE_DIR/.tunnel-last-activity"
-TUNNEL_LOG="$CLAUDE_DIR/tunnel.log"
+RELAY_PID_FILE="$CLAUDE_DIR/.remote-relay.pid"
+TUNNEL_PID_FILE="$CLAUDE_DIR/.remote-tunnel.pid"
+TUNNEL_URL_FILE="$CLAUDE_DIR/.remote-tunnel-url"
+WATCHDOG_PID_FILE="$CLAUDE_DIR/.remote-tunnel-watchdog.pid"
+ACTIVITY_FILE="$CLAUDE_DIR/.relay-last-activity"
+TUNNEL_LOG="$CLAUDE_DIR/remote-tunnel.log"
 IDLE_TIMEOUT=3600  # 1 hour in seconds
 
 # Colors
@@ -40,20 +40,26 @@ echo_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 echo_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # =============================================================================
-# Slack API helpers
+# Platform check - Linux only
+# =============================================================================
+if [[ "$(uname)" == "Darwin" ]]; then
+    echo_error "remote-tunnel is for Linux servers only."
+    echo_info "On macOS, use: slack-tunnel"
+    exit 1
+fi
+
+# =============================================================================
+# Slack API helpers (reused from slack-tunnel)
 # =============================================================================
 
-# Load Slack config
 load_slack_config() {
     if [[ ! -f "$SLACK_CONFIG_FILE" ]]; then
         return 1
     fi
-    # Source the config file (sets SLACK_APP_ID, SLACK_ACCESS_TOKEN, SLACK_REFRESH_TOKEN, SLACK_TOKEN_EXPIRES)
     source "$SLACK_CONFIG_FILE"
     return 0
 }
 
-# Save Slack config
 save_slack_config() {
     cat > "$SLACK_CONFIG_FILE" << EOF
 SLACK_APP_ID="$SLACK_APP_ID"
@@ -64,7 +70,6 @@ EOF
     chmod 600 "$SLACK_CONFIG_FILE"
 }
 
-# Check if token is expired (with 5 minute buffer)
 is_token_expired() {
     local now
     now=$(date +%s)
@@ -75,7 +80,6 @@ is_token_expired() {
     return 1  # not expired
 }
 
-# Rotate the Slack token using refresh token
 rotate_slack_token() {
     echo_info "Refreshing Slack configuration token..."
 
@@ -91,7 +95,7 @@ rotate_slack_token() {
         local error
         error=$(echo "$response" | jq -r '.error // "unknown error"')
         echo_error "Failed to refresh token: $error"
-        echo_error "Run 'slack-tunnel --setup' to reconfigure"
+        echo_error "Run 'remote-tunnel --setup' to reconfigure"
         return 1
     fi
 
@@ -106,7 +110,6 @@ rotate_slack_token() {
     return 0
 }
 
-# Update Slack app's Request URL
 update_slack_request_url() {
     local new_url="$1"
 
@@ -119,7 +122,6 @@ update_slack_request_url() {
 
     echo_info "Updating Slack Request URL..."
 
-    # Export current manifest
     local manifest_response
     manifest_response=$(curl -s -X POST "https://slack.com/api/apps.manifest.export" \
         -H "Authorization: Bearer ${SLACK_ACCESS_TOKEN}" \
@@ -136,7 +138,6 @@ update_slack_request_url() {
         return 1
     fi
 
-    # Update the request_url in the manifest
     local updated_manifest
     updated_manifest=$(echo "$manifest_response" | jq --arg url "$new_url" '
         .manifest.settings.interactivity.is_enabled = true |
@@ -144,7 +145,6 @@ update_slack_request_url() {
         .manifest
     ')
 
-    # Update the manifest
     local update_response
     update_response=$(curl -s -X POST "https://slack.com/api/apps.manifest.update" \
         -H "Authorization: Bearer ${SLACK_ACCESS_TOKEN}" \
@@ -157,8 +157,6 @@ update_slack_request_url() {
         local error
         error=$(echo "$update_response" | jq -r '.error // "unknown error"')
         echo_error "Failed to update manifest: $error"
-
-        # Show more details if available
         local errors
         errors=$(echo "$update_response" | jq -r '.errors // empty')
         if [[ -n "$errors" ]]; then
@@ -172,157 +170,70 @@ update_slack_request_url() {
 }
 
 # =============================================================================
-# MCP server helpers
+# Remote relay helpers
 # =============================================================================
 
-check_mcp_server() {
-    if curl -s "http://localhost:$MCP_PORT/health" &>/dev/null; then
-        return 0
-    fi
-    return 1
-}
-
-find_mcp_source_dir() {
+find_relay_dist() {
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-    if [[ -L "$CLAUDE_DIR/bin/mcp-server" ]]; then
-        local target
-        target="$(readlink "$CLAUDE_DIR/bin/mcp-server")"
-        local repo_dir
-        repo_dir="$(dirname "$target")/.."
-        if [[ -d "$repo_dir/mcp-server/src" ]]; then
-            echo "$repo_dir/mcp-server"
-            return 0
-        fi
+    # Check installed location first
+    if [[ -f "$CLAUDE_DIR/mcp-server-dist/dist/remote-relay.js" ]]; then
+        echo "$CLAUDE_DIR/mcp-server-dist/dist/remote-relay.js"
+        return 0
     fi
 
-    if [[ -d "$script_dir/../mcp-server/src" ]]; then
-        echo "$script_dir/../mcp-server"
+    # Check development location
+    if [[ -f "$script_dir/../mcp-server/dist/remote-relay.js" ]]; then
+        echo "$script_dir/../mcp-server/dist/remote-relay.js"
         return 0
     fi
 
     return 1
 }
 
-rebuild_if_needed() {
-    local mcp_source_dir
-    if ! mcp_source_dir=$(find_mcp_source_dir); then
+check_relay_running() {
+    if curl -s "http://localhost:$RELAY_PORT/health" &>/dev/null; then
         return 0
     fi
-
-    local src_dir="$mcp_source_dir/src"
-    local dist_dir="$mcp_source_dir/dist"
-    local installed_dist="$CLAUDE_DIR/mcp-server-dist/dist"
-
-    local newest_src
-    newest_src=$(find "$src_dir" -name "*.ts" -type f -exec stat -f "%m %N" {} \; 2>/dev/null | sort -rn | head -1 | cut -d' ' -f1)
-
-    local oldest_dist=0
-    if [[ -d "$dist_dir" ]]; then
-        oldest_dist=$(find "$dist_dir" -name "*.js" -type f -exec stat -f "%m %N" {} \; 2>/dev/null | sort -n | head -1 | cut -d' ' -f1)
-    fi
-
-    if [[ -n "$newest_src" ]] && [[ "$newest_src" -gt "$oldest_dist" ]]; then
-        echo_info "Source files changed, rebuilding MCP server..."
-        (
-            cd "$mcp_source_dir"
-            if command -v bun &>/dev/null; then
-                bun run build
-            elif command -v npm &>/dev/null; then
-                npm run build
-            else
-                echo_warn "No build tool found (bun/npm), skipping rebuild"
-                return 0
-            fi
-        )
-
-        if [[ -d "$installed_dist" ]]; then
-            cp -r "$dist_dir"/* "$installed_dist"/
-            echo_info "Updated installed MCP server"
-        fi
-    fi
+    return 1
 }
 
-start_mcp_server() {
-    if [[ ! -x "$MCP_SERVER" ]]; then
-        echo_error "MCP server not found at $MCP_SERVER"
-        echo_error "Run install.sh first to build the MCP server"
+start_relay() {
+    local relay_path
+    if ! relay_path=$(find_relay_dist); then
+        echo_error "Remote relay not found."
+        echo_error "Build the MCP server first: cd mcp-server && bun run build"
         exit 1
     fi
 
-    echo_info "Starting MCP server..."
-    nohup "$MCP_SERVER" > "$CLAUDE_DIR/mcp-server.log" 2>&1 &
-    MCP_PID=$!
-    echo "$MCP_PID" > "$CLAUDE_DIR/.mcp-server.pid"
+    echo_info "Starting remote relay..."
+    nohup node "$relay_path" > "$CLAUDE_DIR/remote-relay.log" 2>&1 &
+    local relay_pid=$!
+    echo "$relay_pid" > "$RELAY_PID_FILE"
 
+    # Wait for relay to start
     for i in {1..10}; do
-        if check_mcp_server; then
-            echo_info "MCP server started (PID: $MCP_PID)"
+        if check_relay_running; then
+            echo_info "Remote relay started (PID: $relay_pid)"
             return 0
         fi
         sleep 0.5
     done
 
-    echo_error "MCP server failed to start. Check $CLAUDE_DIR/mcp-server.log"
+    echo_error "Remote relay failed to start. Check $CLAUDE_DIR/remote-relay.log"
     exit 1
 }
 
-stop_mcp_server() {
-    local pid_file="$CLAUDE_DIR/.mcp-server.pid"
-    if [[ -f "$pid_file" ]]; then
+stop_relay() {
+    if [[ -f "$RELAY_PID_FILE" ]]; then
         local pid
-        pid=$(cat "$pid_file")
+        pid=$(cat "$RELAY_PID_FILE")
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
             kill "$pid" 2>/dev/null || true
-            rm -f "$pid_file"
-            echo_info "MCP server stopped"
+            rm -f "$RELAY_PID_FILE"
+            echo_info "Remote relay stopped"
         fi
-    fi
-}
-
-# =============================================================================
-# Sync tunnel URL to remote servers
-# =============================================================================
-
-sync_tunnel_url_to_remotes() {
-    local links_dir="$CLAUDE_DIR/links"
-    if [[ ! -d "$links_dir" ]]; then
-        return 0
-    fi
-
-    local mac_url_file="$CLAUDE_DIR/.mac-tunnel-url"
-    if [[ ! -f "$mac_url_file" ]]; then
-        return 0
-    fi
-
-    # Find unique remote hosts from link files
-    local hosts_synced=0
-    local seen_hosts=""
-
-    for link_file in "$links_dir"/*.json; do
-        [[ -f "$link_file" ]] || continue
-
-        local ssh_host ssh_user ssh_port
-        ssh_host=$(grep -o '"ssh_host": *"[^"]*"' "$link_file" 2>/dev/null | cut -d'"' -f4)
-        ssh_user=$(grep -o '"ssh_user": *"[^"]*"' "$link_file" 2>/dev/null | cut -d'"' -f4)
-        ssh_port=$(grep -o '"ssh_port": *"[^"]*"' "$link_file" 2>/dev/null | cut -d'"' -f4)
-
-        # Skip if no SSH info or already synced to this host
-        [[ -z "$ssh_host" ]] && continue
-        [[ "$seen_hosts" == *"$ssh_user@$ssh_host:$ssh_port"* ]] && continue
-
-        seen_hosts="$seen_hosts $ssh_user@$ssh_host:$ssh_port"
-
-        # Try to sync (non-blocking, best effort)
-        if scp -o BatchMode=yes -o ConnectTimeout=2 -P "${ssh_port:-22}" \
-            "$mac_url_file" "${ssh_user}@${ssh_host}:~/.claude/.mac-tunnel-url" 2>/dev/null; then
-            ((hosts_synced++)) || true
-        fi
-    done
-
-    if [[ $hosts_synced -gt 0 ]]; then
-        echo_info "Synced tunnel URL to $hosts_synced remote host(s)"
     fi
 }
 
@@ -342,11 +253,7 @@ start_watchdog() {
             fi
 
             local last now
-            if [[ "$(uname)" == "Darwin" ]]; then
-                last=$(stat -f %m "$ACTIVITY_FILE" 2>/dev/null || echo 0)
-            else
-                last=$(stat -c %Y "$ACTIVITY_FILE" 2>/dev/null || echo 0)
-            fi
+            last=$(stat -c %Y "$ACTIVITY_FILE" 2>/dev/null || echo 0)
             now=$(date +%s)
 
             if [[ $((now - last)) -gt $IDLE_TIMEOUT ]]; then
@@ -359,7 +266,7 @@ start_watchdog() {
                     rm -f "$TUNNEL_PID_FILE"
                 fi
 
-                stop_mcp_server
+                stop_relay
                 rm -f "$ACTIVITY_FILE"
                 rm -f "$WATCHDOG_PID_FILE"
                 exit 0
@@ -394,38 +301,33 @@ start_tunnel_and_get_url() {
         echo_error "cloudflared not installed."
         echo ""
         echo -e "  Install with:"
-        echo -e "    macOS:  ${BOLD}brew install cloudflared${NC}"
-        echo -e "    Linux:  See https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+        echo -e "    Debian/Ubuntu: See https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+        echo -e "    Or use: curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb && sudo dpkg -i cloudflared.deb"
         exit 1
     fi
 
-    # Kill any existing cloudflared tunnels to prevent accumulation
-    pkill -f "cloudflared tunnel.*localhost:${MCP_PORT}" 2>/dev/null || true
+    # Kill any existing cloudflared tunnels on our port
+    pkill -f "cloudflared tunnel.*localhost:${RELAY_PORT}" 2>/dev/null || true
     rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE"
     sleep 0.5
 
     echo_info "Starting Cloudflare Quick Tunnel..."
 
-    # Start cloudflared and capture output to get URL
-    local log_file="$CLAUDE_DIR/.cloudflared.log"
-
-    # Delete log file to ensure we get THIS tunnel's URL, not an old one
+    local log_file="$CLAUDE_DIR/.remote-cloudflared.log"
     rm -f "$log_file"
 
     if [[ "$background" == "true" ]]; then
-        nohup cloudflared tunnel --url "http://localhost:$MCP_PORT" > "$log_file" 2>&1 &
+        nohup cloudflared tunnel --url "http://localhost:$RELAY_PORT" > "$log_file" 2>&1 &
     else
-        cloudflared tunnel --url "http://localhost:$MCP_PORT" > "$log_file" 2>&1 &
+        cloudflared tunnel --url "http://localhost:$RELAY_PORT" > "$log_file" 2>&1 &
     fi
     TUNNEL_PID=$!
     echo "$TUNNEL_PID" > "$TUNNEL_PID_FILE"
 
-    # Wait for URL to appear in logs (cloudflared outputs it to stderr)
-    # Use tail -1 to get the LATEST URL in case tunnel restarts
+    # Wait for URL to appear in logs
     local tunnel_url=""
     for i in {1..30}; do
         if [[ -f "$log_file" ]]; then
-            # Cloudflared outputs URL like: "https://xxx.trycloudflare.com"
             tunnel_url=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$log_file" 2>/dev/null | tail -1 || true)
             if [[ -n "$tunnel_url" ]]; then
                 break
@@ -445,72 +347,79 @@ start_tunnel_and_get_url() {
     echo "$tunnel_url" > "$TUNNEL_URL_FILE"
     TUNNEL_URL="$tunnel_url"
     echo_info "Tunnel started: $tunnel_url"
-
-    # Save to .mac-tunnel-url for remote-relay auto-detect
-    MAC_TUNNEL_URL_FILE="$CLAUDE_DIR/.mac-tunnel-url"
-    echo "$tunnel_url" > "$MAC_TUNNEL_URL_FILE"
-
-    # Optionally sync to remote Linux servers (if links exist)
-    sync_tunnel_url_to_remotes
 }
 
 # =============================================================================
-# --setup: Configure Slack API tokens
+# --setup: Configure Slack (copy from Mac or manual)
 # =============================================================================
 
 cmd_setup() {
     echo ""
-    echo -e "${BOLD}Slack Tunnel Setup${NC}"
-    echo -e "${DIM}Configure automatic Request URL updates${NC}"
+    echo -e "${BOLD}Remote Tunnel Setup${NC}"
+    echo -e "${DIM}Configure Slack API tokens for button support${NC}"
     echo ""
 
     # Check dependencies
     if ! command -v jq &>/dev/null; then
         echo_error "jq is required but not installed."
-        echo "  Install with: brew install jq (macOS) or apt install jq (Linux)"
+        echo "  Install with: sudo apt install jq"
         exit 1
     fi
 
     if ! command -v cloudflared &>/dev/null; then
         echo_error "cloudflared is required but not installed."
-        echo "  Install with: brew install cloudflared (macOS)"
+        echo "  See: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
         exit 1
     fi
 
+    # Check if config already exists
+    if [[ -f "$SLACK_CONFIG_FILE" ]]; then
+        echo_info "Slack config already exists at $SLACK_CONFIG_FILE"
+        echo ""
+        echo -ne "  ${YELLOW}?${NC} Replace existing config? [y/N] "
+        read -r response
+        if [[ ! "$response" =~ ^[Yy]$ ]]; then
+            echo_info "Keeping existing config"
+            return 0
+        fi
+    fi
+
+    echo ""
     echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC}  ${BOLD}Step 1: Get your Slack App ID${NC}                               ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${BOLD}Option 1: Copy config from Mac (recommended)${NC}              ${CYAN}│${NC}"
+    echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
+    echo ""
+    echo -e "  Run this on your Mac:"
+    echo -e "    ${BOLD}scp ~/.claude/.slack-config $(hostname):~/.claude/${NC}"
+    echo ""
+    echo -e "  Or run this here if you have SSH access to Mac:"
+    echo -e "    ${BOLD}scp mac:~/.claude/.slack-config ~/.claude/${NC}"
+    echo ""
+    echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
+    echo -e "${CYAN}│${NC}  ${BOLD}Option 2: Manual setup${NC}                                     ${CYAN}│${NC}"
     echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
     echo ""
     echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps${NC}"
-    echo -e "  ${CYAN}2.${NC} Click on your app (or create one)"
-    echo -e "  ${CYAN}3.${NC} Copy the ${BOLD}App ID${NC} from the top of the page"
-    echo -e "     ${DIM}(Format: A0XXXXXXXXX)${NC}"
+    echo -e "  ${CYAN}2.${NC} Copy the ${BOLD}App ID${NC} from your app"
     echo ""
-    echo -ne "  ${YELLOW}?${NC} Paste your App ID: "
+    echo -ne "  ${YELLOW}?${NC} Paste your App ID (or Enter to skip): "
     read -r SLACK_APP_ID
 
-    if [[ -z "$SLACK_APP_ID" || ! "$SLACK_APP_ID" =~ ^A[A-Z0-9]+$ ]]; then
+    if [[ -z "$SLACK_APP_ID" ]]; then
+        echo_warn "Setup skipped. Copy config from Mac or run setup again."
+        return 0
+    fi
+
+    if [[ ! "$SLACK_APP_ID" =~ ^A[A-Z0-9]+$ ]]; then
         echo_error "Invalid App ID format. Should start with 'A' followed by letters/numbers."
         exit 1
     fi
 
     echo ""
-    echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC}  ${BOLD}Step 2: Generate a Configuration Token${NC}                     ${CYAN}│${NC}"
-    echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
+    echo -e "  ${CYAN}3.${NC} Scroll to ${BOLD}Your App Configuration Tokens${NC} at bottom of page"
+    echo -e "  ${CYAN}4.${NC} Generate a token and paste the ${BOLD}Access Token${NC}:"
     echo ""
-    echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps${NC}"
-    echo -e "  ${CYAN}2.${NC} Scroll to the ${BOLD}bottom${NC} of the page (below your apps list)"
-    echo -e "  ${CYAN}3.${NC} Find ${BOLD}\"Your App Configuration Tokens\"${NC} section"
-    echo -e "  ${CYAN}4.${NC} Click ${BOLD}\"Generate Token\"${NC}"
-    echo -e "  ${CYAN}5.${NC} Select your ${BOLD}workspace${NC} from the dropdown"
-    echo -e "  ${CYAN}6.${NC} Click ${BOLD}\"Generate\"${NC}"
-    echo ""
-    echo -e "  ${DIM}(This adds \"Slack Tooling Tokens Vendor\" app to your workspace)${NC}"
-    echo ""
-    echo -e "  ${CYAN}7.${NC} Copy the ${BOLD}Access Token${NC} (starts with xoxe-...)"
-    echo ""
-    echo -ne "  ${YELLOW}?${NC} Paste the Access Token: "
+    echo -ne "  ${YELLOW}?${NC} Access Token: "
     read -r SLACK_ACCESS_TOKEN
 
     if [[ -z "$SLACK_ACCESS_TOKEN" ]]; then
@@ -519,9 +428,9 @@ cmd_setup() {
     fi
 
     echo ""
-    echo -e "  ${CYAN}8.${NC} Copy the ${BOLD}Refresh Token${NC} (shown below the access token)"
+    echo -e "  ${CYAN}5.${NC} Copy the ${BOLD}Refresh Token${NC}:"
     echo ""
-    echo -ne "  ${YELLOW}?${NC} Paste the Refresh Token: "
+    echo -ne "  ${YELLOW}?${NC} Refresh Token: "
     read -r SLACK_REFRESH_TOKEN
 
     if [[ -z "$SLACK_REFRESH_TOKEN" ]]; then
@@ -529,34 +438,24 @@ cmd_setup() {
         exit 1
     fi
 
-    # Set initial expiry (12 hours from now, but we'll refresh before using)
     SLACK_TOKEN_EXPIRES=$(($(date +%s) + 43200))
-
-    # Save config
     save_slack_config
+
     echo ""
     echo_info "Configuration saved to $SLACK_CONFIG_FILE"
 
-    # Verify by testing the token
+    # Also copy slack signing secret if provided
     echo ""
-    echo_info "Verifying configuration..."
+    echo -e "  ${CYAN}6.${NC} (Optional) Your Slack ${BOLD}Signing Secret${NC} for request verification:"
+    echo -e "     ${DIM}Found at: Your App → Basic Information → Signing Secret${NC}"
+    echo ""
+    echo -ne "  ${YELLOW}?${NC} Signing Secret (or Enter to skip): "
+    read -r SIGNING_SECRET
 
-    local test_response
-    test_response=$(curl -s -X POST "https://slack.com/api/apps.manifest.export" \
-        -H "Authorization: Bearer ${SLACK_ACCESS_TOKEN}" \
-        -H "Content-Type: application/x-www-form-urlencoded" \
-        -d "app_id=${SLACK_APP_ID}")
-
-    local ok
-    ok=$(echo "$test_response" | jq -r '.ok // false')
-
-    if [[ "$ok" != "true" ]]; then
-        local error
-        error=$(echo "$test_response" | jq -r '.error // "unknown error"')
-        echo_error "Configuration test failed: $error"
-        echo_error "Please check your tokens and try again."
-        rm -f "$SLACK_CONFIG_FILE"
-        exit 1
+    if [[ -n "$SIGNING_SECRET" ]]; then
+        echo "$SIGNING_SECRET" > "$CLAUDE_DIR/slack-signing-secret"
+        chmod 600 "$CLAUDE_DIR/slack-signing-secret"
+        echo_info "Signing secret saved"
     fi
 
     echo ""
@@ -564,14 +463,8 @@ cmd_setup() {
     echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Setup Complete!${NC}                                          ${GREEN}│${NC}"
     echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
     echo ""
-    echo -e "  The tunnel will now automatically update your Slack app's"
-    echo -e "  Request URL each time it starts."
-    echo ""
     echo -e "  ${BOLD}To start the tunnel:${NC}"
-    echo -e "    slack-tunnel"
-    echo ""
-    echo -e "  ${BOLD}Or for background mode:${NC}"
-    echo -e "    slack-tunnel --background"
+    echo -e "    remote-tunnel"
     echo ""
 }
 
@@ -580,37 +473,24 @@ cmd_setup() {
 # =============================================================================
 
 cmd_background() {
-    # Check Slack is configured
     if ! load_slack_config; then
-        echo_error "Slack not configured. Run: slack-tunnel --setup"
+        echo_error "Slack not configured. Run: remote-tunnel --setup"
         exit 1
     fi
 
-    # Check if already running (and there's only ONE tunnel)
-    local tunnel_count
-    tunnel_count=$(pgrep -f "cloudflared tunnel.*localhost:${MCP_PORT}" 2>/dev/null | wc -l | tr -d ' ')
-
-    if [[ -f "$TUNNEL_PID_FILE" ]] && [[ "$tunnel_count" -eq 1 ]]; then
+    # Check if already running
+    if [[ -f "$RELAY_PID_FILE" ]]; then
         local existing_pid
-        existing_pid=$(cat "$TUNNEL_PID_FILE")
+        existing_pid=$(cat "$RELAY_PID_FILE")
         if kill -0 "$existing_pid" 2>/dev/null; then
-            echo_info "Tunnel already running (PID: $existing_pid)"
+            echo_info "Remote relay already running (PID: $existing_pid)"
             return 0
         fi
     fi
 
-    # Clean up stale state (multiple tunnels or orphaned PID file)
-    if [[ "$tunnel_count" -gt 0 ]]; then
-        echo_info "Cleaning up stale tunnel processes..."
-    fi
-    rm -f "$TUNNEL_PID_FILE"
-
-    # Rebuild MCP server if needed
-    rebuild_if_needed
-
-    # Start MCP server if not running
-    if ! check_mcp_server; then
-        start_mcp_server
+    # Start relay
+    if ! check_relay_running; then
+        start_relay
     fi
 
     # Start tunnel
@@ -625,10 +505,9 @@ cmd_background() {
     # Start idle watchdog
     start_watchdog
 
-    # Touch activity file
     touch "$ACTIVITY_FILE"
 
-    echo_info "Tunnel running in background (PID: $TUNNEL_PID)"
+    echo_info "Remote tunnel running in background (PID: $TUNNEL_PID)"
 }
 
 # =============================================================================
@@ -638,12 +517,8 @@ cmd_background() {
 cmd_stop() {
     local stopped=false
 
-    if [[ -f "$WATCHDOG_PID_FILE" ]]; then
-        stop_watchdog
-        stopped=true
-    fi
+    stop_watchdog && stopped=true
 
-    # Kill the tunnel from PID file
     if [[ -f "$TUNNEL_PID_FILE" ]]; then
         local pid
         pid=$(cat "$TUNNEL_PID_FILE")
@@ -654,27 +529,23 @@ cmd_stop() {
         rm -f "$TUNNEL_PID_FILE"
     fi
 
-    # Kill ANY remaining cloudflared tunnel processes (cleanup stale tunnels)
+    # Kill any remaining cloudflared tunnels on our port
     local stale_count=0
     while IFS= read -r pid; do
         if [[ -n "$pid" ]]; then
             kill "$pid" 2>/dev/null || true
             ((stale_count++)) || true
         fi
-    done < <(pgrep -f "cloudflared tunnel.*localhost:${MCP_PORT:-8463}" 2>/dev/null || true)
+    done < <(pgrep -f "cloudflared tunnel.*localhost:${RELAY_PORT}" 2>/dev/null || true)
 
     if [[ "$stale_count" -gt 0 || "$stopped" == "true" ]]; then
         echo_info "Tunnel stopped"
         stopped=true
     fi
 
-    # Remove tunnel URL file
     rm -f "$TUNNEL_URL_FILE"
 
-    if [[ -f "$CLAUDE_DIR/.mcp-server.pid" ]]; then
-        stop_mcp_server
-        stopped=true
-    fi
+    stop_relay && stopped=true
 
     rm -f "$ACTIVITY_FILE"
 
@@ -691,7 +562,7 @@ cmd_stop() {
 
 cmd_status() {
     echo ""
-    echo -e "${BOLD}Tunnel Status${NC}"
+    echo -e "${BOLD}Remote Tunnel Status${NC}"
     echo ""
 
     # Check Slack config
@@ -704,11 +575,22 @@ cmd_status() {
             echo -e "  Token:      ${GREEN}Valid${NC}"
         fi
     else
-        echo -e "  Slack:      ${YELLOW}Not configured${NC} (run: slack-tunnel --setup)"
+        echo -e "  Slack:      ${YELLOW}Not configured${NC} (run: remote-tunnel --setup)"
     fi
     echo ""
 
-    # Check tunnel process
+    # Check relay
+    if check_relay_running; then
+        local relay_pid=""
+        if [[ -f "$RELAY_PID_FILE" ]]; then
+            relay_pid=$(cat "$RELAY_PID_FILE")
+        fi
+        echo -e "  Relay:      ${GREEN}Running${NC}${relay_pid:+ (PID: $relay_pid)}"
+    else
+        echo -e "  Relay:      ${YELLOW}Stopped${NC}"
+    fi
+
+    # Check tunnel
     if [[ -f "$TUNNEL_PID_FILE" ]]; then
         local pid
         pid=$(cat "$TUNNEL_PID_FILE")
@@ -726,17 +608,6 @@ cmd_status() {
         echo -e "  Tunnel:     ${YELLOW}Stopped${NC}"
     fi
 
-    # Check MCP server
-    if check_mcp_server; then
-        local mcp_pid=""
-        if [[ -f "$CLAUDE_DIR/.mcp-server.pid" ]]; then
-            mcp_pid=$(cat "$CLAUDE_DIR/.mcp-server.pid")
-        fi
-        echo -e "  MCP Server: ${GREEN}Running${NC}${mcp_pid:+ (PID: $mcp_pid)}"
-    else
-        echo -e "  MCP Server: ${YELLOW}Stopped${NC}"
-    fi
-
     # Check watchdog
     if [[ -f "$WATCHDOG_PID_FILE" ]]; then
         local pid
@@ -750,14 +621,17 @@ cmd_status() {
         echo -e "  Watchdog:   ${YELLOW}Stopped${NC}"
     fi
 
+    # Check Mac tunnel URL
+    if [[ -f "$CLAUDE_DIR/.mac-tunnel-url" ]]; then
+        local mac_url
+        mac_url=$(cat "$CLAUDE_DIR/.mac-tunnel-url")
+        echo -e "  Mac URL:    ${DIM}$mac_url${NC}"
+    fi
+
     # Check last activity
     if [[ -f "$ACTIVITY_FILE" ]]; then
         local last now elapsed
-        if [[ "$(uname)" == "Darwin" ]]; then
-            last=$(stat -f %m "$ACTIVITY_FILE" 2>/dev/null || echo 0)
-        else
-            last=$(stat -c %Y "$ACTIVITY_FILE" 2>/dev/null || echo 0)
-        fi
+        last=$(stat -c %Y "$ACTIVITY_FILE" 2>/dev/null || echo 0)
         now=$(date +%s)
         elapsed=$((now - last))
         local remaining=$((IDLE_TIMEOUT - elapsed))
@@ -775,11 +649,10 @@ cmd_status() {
 
 cmd_interactive() {
     echo ""
-    echo -e "${BOLD}Slack Tunnel for Claude Notifications${NC}"
-    echo -e "${DIM}Creates a public URL for Slack button actions${NC}"
+    echo -e "${BOLD}Remote Tunnel for Claude Slack Buttons${NC}"
+    echo -e "${DIM}Receive Slack button clicks when your Mac is closed${NC}"
     echo ""
 
-    # Check Slack is configured
     if ! load_slack_config; then
         echo_warn "Slack not configured yet."
         echo ""
@@ -792,20 +665,10 @@ cmd_interactive() {
         load_slack_config
     fi
 
-    # Rebuild MCP server if needed
-    rebuild_if_needed
-
-    # Kill existing MCP server and start fresh
-    if check_mcp_server; then
-        echo_info "Stopping existing MCP server..."
-        local old_pid
-        old_pid=$(cat "$CLAUDE_DIR/.mcp-server.pid" 2>/dev/null)
-        if [[ -n "$old_pid" ]]; then
-            kill "$old_pid" 2>/dev/null || true
-            sleep 1
-        fi
+    # Start relay if not running
+    if ! check_relay_running; then
+        start_relay
     fi
-    start_mcp_server
 
     # Cleanup on exit
     cleanup() {
@@ -814,7 +677,7 @@ cmd_interactive() {
         if [[ -n "${TUNNEL_PID:-}" ]]; then
             kill "$TUNNEL_PID" 2>/dev/null || true
         fi
-        stop_mcp_server
+        stop_relay
         rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE"
     }
     trap cleanup EXIT INT TERM
@@ -826,13 +689,16 @@ cmd_interactive() {
     if update_slack_request_url "${TUNNEL_URL}/slack/actions"; then
         echo ""
         echo -e "${GREEN}╭──────────────────────────────────────────────────────────────╮${NC}"
-        echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Slack Request URL updated automatically!${NC}                  ${GREEN}│${NC}"
+        echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Slack Request URL updated!${NC}                               ${GREEN}│${NC}"
         echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
         echo ""
         echo -e "  Tunnel URL: ${CYAN}${TUNNEL_URL}/slack/actions${NC}"
         echo ""
-        echo -e "  ${DIM}Buttons will work on both desktop and mobile Slack.${NC}"
+        echo -e "  ${DIM}Slack buttons will now send input to this Linux server.${NC}"
         echo -e "  ${DIM}Keep this running. Press Ctrl+C to stop.${NC}"
+        echo ""
+        echo -e "  ${BOLD}Note:${NC} Focus button won't switch windows (Mac not involved)."
+        echo -e "  ${DIM}Only 1/2/Continue/Push buttons work.${NC}"
     else
         echo ""
         echo -e "${YELLOW}╭──────────────────────────────────────────────────────────────╮${NC}"
@@ -846,8 +712,6 @@ cmd_interactive() {
         echo -e "  ${CYAN}2.${NC} Click ${BOLD}Interactivity & Shortcuts${NC}"
         echo -e "  ${CYAN}3.${NC} Update ${BOLD}Request URL${NC} to the URL above"
         echo -e "  ${CYAN}4.${NC} Click ${BOLD}Save Changes${NC}"
-        echo ""
-        echo -e "  ${DIM}Keep this running. Press Ctrl+C to stop.${NC}"
     fi
     echo ""
 
@@ -873,17 +737,22 @@ case "${1:-}" in
         cmd_status
         ;;
     --help|-h)
-        echo "Usage: slack-tunnel [command]"
+        echo "Usage: remote-tunnel [command]"
         echo ""
         echo "Commands:"
         echo "  (none)        Interactive mode - start tunnel in foreground"
-        echo "  --setup       One-time setup: configure Slack API tokens"
-        echo "  --background  Start tunnel in background (for auto-start)"
+        echo "  --setup       Configure Slack API tokens (copy from Mac or manual)"
+        echo "  --background  Start tunnel in background"
         echo "  --stop        Stop background tunnel"
         echo "  --status      Check tunnel status"
         echo ""
-        echo "The tunnel uses Cloudflare Quick Tunnels (free, no account needed)"
-        echo "and automatically updates your Slack app's Request URL."
+        echo "This runs on Linux servers to receive Slack button clicks when your"
+        echo "Mac is closed. Auto-detects if Mac is reachable and proxies when possible."
+        echo ""
+        echo "Workflow:"
+        echo "  1. Copy Slack config from Mac: scp mac:~/.claude/.slack-config ~/.claude/"
+        echo "  2. Start tunnel: remote-tunnel --background"
+        echo "  3. In Claude: /slack-notify"
         echo ""
         ;;
     "")
@@ -891,7 +760,7 @@ case "${1:-}" in
         ;;
     *)
         echo_error "Unknown command: $1"
-        echo "Run: slack-tunnel --help"
+        echo "Run: remote-tunnel --help"
         exit 1
         ;;
 esac

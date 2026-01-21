@@ -136,7 +136,9 @@ if [[ "${1:-}" == "--update" ]]; then
     # Save repo path for `claude-slack-notify update`
     echo "$SCRIPT_DIR" > "$CLAUDE_DIR/.repo-path"
 
-    echo_info "Update complete!"
+    echo ""
+    echo -e "${GREEN}✓ Update complete!${NC}"
+    echo ""
     exit 0
 fi
 

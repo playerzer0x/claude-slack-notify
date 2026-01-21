@@ -234,7 +234,12 @@ if [[ "$1" == "update" ]]; then
     # Optional: git pull
     if [[ -n "$DO_PULL" ]]; then
         echo "Pulling latest changes..."
-        (cd "$REPO_PATH" && git pull)
+        if (cd "$REPO_PATH" && git pull); then
+            echo "✓ Pulled latest changes"
+        else
+            echo "Warning: git pull failed, continuing with local version" >&2
+        fi
+        echo ""
     fi
 
     # Run install.sh --update

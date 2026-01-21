@@ -1551,10 +1551,10 @@ fi
 # Build notification
 # -----------------------------------------------------------------------------
 case "$STATUS" in
-    started)  COLOR="#36a64f" ;;
-    waiting)  COLOR="#ff9800" ;;
-    error)    COLOR="#ff0000" ;;
-    *)        COLOR="#3AA3E3" ;;
+    started)  COLOR="#8B9A6B" ;;  # warm olive-gold
+    waiting)  COLOR="#C9A66B" ;;  # warm amber sand
+    error)    COLOR="#C47070" ;;  # warm coral
+    *)        COLOR="#B8A99A" ;;  # sand/taupe
 esac
 
 # Build location string (keep it short for Slack display)

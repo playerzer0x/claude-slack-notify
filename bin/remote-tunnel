@@ -342,8 +342,13 @@ start_watchdog() {
             fi
 
             local last now
-            last=$(stat -c %Y "$ACTIVITY_FILE" 2>/dev/null || echo 0)
+            last=$(stat -c %Y "$ACTIVITY_FILE" 2>/dev/null)
             now=$(date +%s)
+
+            # If stat failed, skip this check (don't treat as idle)
+            if [[ -z "$last" || ! "$last" =~ ^[0-9]+$ ]]; then
+                continue
+            fi
 
             if [[ $((now - last)) -gt $IDLE_TIMEOUT ]]; then
                 echo "$(date): Idle timeout ($IDLE_TIMEOUT seconds), shutting down" >> "$TUNNEL_LOG"

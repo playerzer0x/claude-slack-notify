@@ -560,25 +560,7 @@ cmd_setup() {
     fi
 
     echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC}  ${BOLD}Step 1: Get your Slack App ID${NC}                               ${CYAN}│${NC}"
-    echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
-    echo ""
-    echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps${NC}"
-    echo -e "  ${CYAN}2.${NC} Click on your app (or create one)"
-    echo -e "  ${CYAN}3.${NC} Copy the ${BOLD}App ID${NC} from the top of the page"
-    echo -e "     ${DIM}(Format: A0XXXXXXXXX)${NC}"
-    echo ""
-    echo -ne "  ${YELLOW}?${NC} Paste your App ID: "
-    read -r SLACK_APP_ID
-
-    if [[ -z "$SLACK_APP_ID" || ! "$SLACK_APP_ID" =~ ^A[A-Z0-9]+$ ]]; then
-        echo_error "Invalid App ID format. Should start with 'A' followed by letters/numbers."
-        exit 1
-    fi
-
-    echo ""
-    echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC}  ${BOLD}Step 2: Generate a Configuration Token${NC}                     ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${BOLD}Step 1: Generate a Configuration Token${NC}                     ${CYAN}│${NC}"
     echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
     echo ""
     echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps${NC}"
@@ -613,6 +595,23 @@ cmd_setup() {
 
     # Set initial expiry (12 hours from now, but we'll refresh before using)
     SLACK_TOKEN_EXPIRES=$(($(date +%s) + 43200))
+
+    echo ""
+    echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
+    echo -e "${CYAN}│${NC}  ${BOLD}Step 2: Get your Slack App ID${NC}                               ${CYAN}│${NC}"
+    echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
+    echo ""
+    echo -e "  ${CYAN}1.${NC} Click on your app (or create one if you haven't)"
+    echo -e "  ${CYAN}2.${NC} Copy the ${BOLD}App ID${NC} from the top of the page"
+    echo -e "     ${DIM}(Format: A0XXXXXXXXX)${NC}"
+    echo ""
+    echo -ne "  ${YELLOW}?${NC} Paste your App ID: "
+    read -r SLACK_APP_ID
+
+    if [[ -z "$SLACK_APP_ID" || ! "$SLACK_APP_ID" =~ ^A[A-Z0-9]+$ ]]; then
+        echo_error "Invalid App ID format. Should start with 'A' followed by letters/numbers."
+        exit 1
+    fi
 
     # Save config
     save_slack_config

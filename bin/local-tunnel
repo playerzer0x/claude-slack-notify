@@ -422,110 +422,69 @@ start_tunnel_and_get_url() {
     local log_file="$CLAUDE_DIR/.tunnel.log"
 
     # Kill any existing tunnel processes
-    pkill -f "cloudflared tunnel" 2>/dev/null || true
     pkill -f "^lt --port" 2>/dev/null || true
     rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE" "$log_file"
     sleep 0.5
 
-    # Priority 1: Localtunnel with saved subdomain (simplest stable option)
-    if has_stable_tunnel; then
-        local subdomain
-        subdomain=$(get_localtunnel_subdomain)
-
-        if ! command -v lt &>/dev/null; then
-            echo_warn "Localtunnel not installed. Installing..."
-            if command -v bun &>/dev/null; then
-                bun add -g localtunnel
-            elif command -v npm &>/dev/null; then
-                npm install -g localtunnel
-            else
-                echo_error "Cannot install localtunnel. Falling back to cloudflared."
-                rm -f "$LOCALTUNNEL_SUBDOMAIN_FILE"
-                start_tunnel_and_get_url "$background"
-                return
-            fi
-        fi
-
-        echo_info "Starting Localtunnel (stable URL: ${subdomain}.loca.lt)..."
-
-        if [[ "$background" == "true" ]]; then
-            nohup lt --port "$MCP_PORT" --subdomain "$subdomain" > "$log_file" 2>&1 &
-        else
-            lt --port "$MCP_PORT" --subdomain "$subdomain" > "$log_file" 2>&1 &
-        fi
-        TUNNEL_PID=$!
-        echo "$TUNNEL_PID" > "$TUNNEL_PID_FILE"
-
-        # Wait for URL to appear
-        local tunnel_url=""
-        for i in {1..20}; do
-            if [[ -f "$log_file" ]]; then
-                tunnel_url=$(grep -oE 'https://[a-z0-9-]+\.loca\.lt' "$log_file" 2>/dev/null | head -1 || true)
-                if [[ -n "$tunnel_url" ]]; then
-                    break
-                fi
-            fi
-            sleep 0.5
-        done
-
-        if [[ -z "$tunnel_url" ]]; then
-            echo_error "Failed to start localtunnel"
-            cat "$log_file" 2>/dev/null | tail -5
-            kill "$TUNNEL_PID" 2>/dev/null || true
-            rm -f "$TUNNEL_PID_FILE"
-            exit 1
-        fi
-
-        echo "$tunnel_url" > "$TUNNEL_URL_FILE"
-        TUNNEL_URL="$tunnel_url"
-        echo_info "Tunnel started: $tunnel_url"
-
-    # Fallback: Cloudflare quick tunnel (random URL)
-    else
-        if ! command -v cloudflared &>/dev/null; then
-            echo_error "No tunnel provider available."
-            echo ""
-            echo -e "  Install one of:"
-            echo -e "    ${BOLD}bun add -g localtunnel${NC}  (recommended for stable URLs)"
-            echo -e "    ${BOLD}brew install cloudflared${NC}  (random URLs each restart)"
-            exit 1
-        fi
-
-        echo_info "Starting Cloudflare Quick Tunnel (random URL)..."
-        echo -e "  ${DIM}Tip: Run 'local-tunnel --stable' for a permanent URL${NC}"
-
-        if [[ "$background" == "true" ]]; then
-            nohup cloudflared tunnel --url "http://localhost:$MCP_PORT" > "$log_file" 2>&1 &
-        else
-            cloudflared tunnel --url "http://localhost:$MCP_PORT" > "$log_file" 2>&1 &
-        fi
-        TUNNEL_PID=$!
-        echo "$TUNNEL_PID" > "$TUNNEL_PID_FILE"
-
-        # Wait for URL to appear in logs
-        local tunnel_url=""
-        for i in {1..30}; do
-            if [[ -f "$log_file" ]]; then
-                tunnel_url=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$log_file" 2>/dev/null | tail -1 || true)
-                if [[ -n "$tunnel_url" ]]; then
-                    break
-                fi
-            fi
-            sleep 0.5
-        done
-
-        if [[ -z "$tunnel_url" ]]; then
-            echo_error "Failed to get tunnel URL"
-            cat "$log_file" 2>/dev/null | tail -10
-            kill "$TUNNEL_PID" 2>/dev/null || true
-            rm -f "$TUNNEL_PID_FILE"
-            exit 1
-        fi
-
-        echo "$tunnel_url" > "$TUNNEL_URL_FILE"
-        TUNNEL_URL="$tunnel_url"
-        echo_info "Tunnel started: $tunnel_url"
+    # Require stable tunnel configuration
+    if ! has_stable_tunnel; then
+        echo_error "Stable URL not configured."
+        echo ""
+        echo -e "  Run ${BOLD}local-tunnel${NC} interactively to configure your subdomain."
+        exit 1
     fi
+
+    local subdomain
+    subdomain=$(get_localtunnel_subdomain)
+
+    if ! command -v lt &>/dev/null; then
+        echo_warn "Localtunnel not installed. Installing..."
+        if command -v bun &>/dev/null; then
+            bun add -g localtunnel
+        elif command -v npm &>/dev/null; then
+            npm install -g localtunnel
+        else
+            echo_error "Cannot install localtunnel."
+            echo ""
+            echo -e "  Install with: ${BOLD}bun add -g localtunnel${NC}"
+            echo -e "            or: ${BOLD}npm install -g localtunnel${NC}"
+            exit 1
+        fi
+    fi
+
+    echo_info "Starting Localtunnel (stable URL: ${subdomain}.loca.lt)..."
+
+    if [[ "$background" == "true" ]]; then
+        nohup lt --port "$MCP_PORT" --subdomain "$subdomain" > "$log_file" 2>&1 &
+    else
+        lt --port "$MCP_PORT" --subdomain "$subdomain" > "$log_file" 2>&1 &
+    fi
+    TUNNEL_PID=$!
+    echo "$TUNNEL_PID" > "$TUNNEL_PID_FILE"
+
+    # Wait for URL to appear
+    local tunnel_url=""
+    for i in {1..20}; do
+        if [[ -f "$log_file" ]]; then
+            tunnel_url=$(grep -oE 'https://[a-z0-9-]+\.loca\.lt' "$log_file" 2>/dev/null | head -1 || true)
+            if [[ -n "$tunnel_url" ]]; then
+                break
+            fi
+        fi
+        sleep 0.5
+    done
+
+    if [[ -z "$tunnel_url" ]]; then
+        echo_error "Failed to start localtunnel"
+        cat "$log_file" 2>/dev/null | tail -5
+        kill "$TUNNEL_PID" 2>/dev/null || true
+        rm -f "$TUNNEL_PID_FILE"
+        exit 1
+    fi
+
+    echo "$tunnel_url" > "$TUNNEL_URL_FILE"
+    TUNNEL_URL="$tunnel_url"
+    echo_info "Tunnel started: $tunnel_url"
 
     # Save to .mac-tunnel-url for remote-relay auto-detect
     MAC_TUNNEL_URL_FILE="$CLAUDE_DIR/.mac-tunnel-url"
@@ -552,11 +511,11 @@ cmd_setup() {
         exit 1
     fi
 
-    if ! command -v lt &>/dev/null && ! command -v cloudflared &>/dev/null; then
-        echo_error "A tunnel provider is required but none installed."
-        echo "  Install one of:"
-        echo "    bun add -g localtunnel  (recommended)"
-        echo "    brew install cloudflared"
+    if ! command -v lt &>/dev/null; then
+        echo_error "Localtunnel is required but not installed."
+        echo "  Install with:"
+        echo "    bun add -g localtunnel"
+        echo "    npm install -g localtunnel"
         exit 1
     fi
 
@@ -1024,7 +983,7 @@ cmd_background() {
 
     # Check if already running (and there's only ONE tunnel)
     local tunnel_count
-    tunnel_count=$(pgrep -f "cloudflared tunnel.*localhost:${MCP_PORT}" 2>/dev/null | wc -l | tr -d ' ')
+    tunnel_count=$(pgrep -f "lt --port.*${MCP_PORT}" 2>/dev/null | wc -l | tr -d ' ')
 
     if [[ -f "$TUNNEL_PID_FILE" ]] && [[ "$tunnel_count" -eq 1 ]]; then
         local existing_pid
@@ -1092,14 +1051,14 @@ cmd_stop() {
         rm -f "$TUNNEL_PID_FILE"
     fi
 
-    # Kill ANY remaining cloudflared tunnel processes (cleanup stale tunnels)
+    # Kill ANY remaining localtunnel processes (cleanup stale tunnels)
     local stale_count=0
     while IFS= read -r pid; do
         if [[ -n "$pid" ]]; then
             kill "$pid" 2>/dev/null || true
             ((stale_count++)) || true
         fi
-    done < <(pgrep -f "cloudflared tunnel.*localhost:${MCP_PORT:-8463}" 2>/dev/null || true)
+    done < <(pgrep -f "lt --port.*${MCP_PORT:-8463}" 2>/dev/null || true)
 
     if [[ "$stale_count" -gt 0 || "$stopped" == "true" ]]; then
         echo_info "Tunnel stopped"

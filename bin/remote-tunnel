@@ -88,7 +88,8 @@ is_tailscale_funnel_active() {
     local status
     status=$(tailscale funnel status --json 2>/dev/null)
     if [[ -n "$status" && "$status" != "{}" ]]; then
-        echo "$status" | jq -e ".\"https://*:443\".Handlers | keys[] | select(. == \"/\")" &>/dev/null
+        # Check if any handler is proxying to our port (Web.<hostname>:443.Handlers./)
+        echo "$status" | jq -e '.Web | to_entries[].value.Handlers["/"]' &>/dev/null
     else
         return 1
     fi

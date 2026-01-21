@@ -1642,6 +1642,9 @@ cmd_interactive() {
     local using_tailscale=false
     local using_localtunnel=false
 
+    # Load Slack config for URL updates
+    load_slack_config || true
+
     # Rebuild MCP server if needed
     rebuild_if_needed
 

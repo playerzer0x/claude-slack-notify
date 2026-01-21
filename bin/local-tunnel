@@ -667,6 +667,8 @@ cmd_setup() {
         echo -e "  ${CYAN}1.${NC} Go to your app: ${BOLD}https://api.slack.com/apps/${SLACK_APP_ID}${NC}"
         echo -e "  ${CYAN}2.${NC} Click ${BOLD}OAuth & Permissions${NC}"
         echo -e "  ${CYAN}3.${NC} Under ${BOLD}Bot Token Scopes${NC}, add:"
+        echo -e "       ${BOLD}app_mentions:read${NC} - View messages that mention your bot"
+        echo -e "       ${BOLD}channels:history${NC} - View messages in channels the bot is in"
         echo -e "       ${BOLD}chat:write${NC} - Send messages"
         echo -e "       ${BOLD}files:read${NC} - Download images from replies"
         echo -e "  ${CYAN}4.${NC} Click ${BOLD}Install to Workspace${NC} (or Reinstall)"

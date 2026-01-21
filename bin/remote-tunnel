@@ -84,7 +84,7 @@ rotate_slack_token() {
     echo_info "Refreshing Slack configuration token..."
 
     local response
-    response=$(curl -s -X POST "https://slack.com/api/tooling.tokens.rotate" \
+    response=$(curl -s --max-time 30 -X POST "https://slack.com/api/tooling.tokens.rotate" \
         -H "Content-Type: application/x-www-form-urlencoded" \
         -d "refresh_token=${SLACK_REFRESH_TOKEN}")
 
@@ -123,7 +123,7 @@ update_slack_request_url() {
     echo_info "Updating Slack Request URL..."
 
     local manifest_response
-    manifest_response=$(curl -s -X POST "https://slack.com/api/apps.manifest.export" \
+    manifest_response=$(curl -s --max-time 30 -X POST "https://slack.com/api/apps.manifest.export" \
         -H "Authorization: Bearer ${SLACK_ACCESS_TOKEN}" \
         -H "Content-Type: application/x-www-form-urlencoded" \
         -d "app_id=${SLACK_APP_ID}")
@@ -146,7 +146,7 @@ update_slack_request_url() {
     ')
 
     local update_response
-    update_response=$(curl -s -X POST "https://slack.com/api/apps.manifest.update" \
+    update_response=$(curl -s --max-time 30 -X POST "https://slack.com/api/apps.manifest.update" \
         -H "Authorization: Bearer ${SLACK_ACCESS_TOKEN}" \
         -H "Content-Type: application/json" \
         -d "{\"app_id\": \"${SLACK_APP_ID}\", \"manifest\": ${updated_manifest}}")
@@ -472,37 +472,67 @@ cmd_setup() {
 # --background: Start tunnel in background
 # =============================================================================
 
+check_tunnel_running() {
+    if [[ -f "$TUNNEL_PID_FILE" ]]; then
+        local pid
+        pid=$(cat "$TUNNEL_PID_FILE")
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
 cmd_background() {
     if ! load_slack_config; then
         echo_error "Slack not configured. Run: remote-tunnel --setup"
         exit 1
     fi
 
-    # Check if already running
-    if [[ -f "$RELAY_PID_FILE" ]]; then
-        local existing_pid
-        existing_pid=$(cat "$RELAY_PID_FILE")
-        if kill -0 "$existing_pid" 2>/dev/null; then
-            echo_info "Remote relay already running (PID: $existing_pid)"
-            return 0
-        fi
+    local relay_was_running=false
+    local tunnel_was_running=false
+    local need_slack_update=false
+
+    # Check relay status
+    if check_relay_running; then
+        relay_was_running=true
+        echo_info "Remote relay already running"
     fi
 
-    # Start relay
-    if ! check_relay_running; then
+    # Check tunnel status
+    if check_tunnel_running; then
+        tunnel_was_running=true
+        echo_info "Tunnel already running"
+    fi
+
+    # If both running, nothing to do
+    if [[ "$relay_was_running" == "true" && "$tunnel_was_running" == "true" ]]; then
+        echo_info "All services already running"
+        cmd_status
+        return 0
+    fi
+
+    # Start relay if needed
+    if [[ "$relay_was_running" == "false" ]]; then
         start_relay
     fi
 
-    # Start tunnel
-    start_tunnel_and_get_url "true"
-
-    # Update Slack Request URL
-    if ! update_slack_request_url "${TUNNEL_URL}/slack/actions"; then
-        echo_warn "Failed to update Slack, but tunnel is running"
-        echo_warn "Manually set Request URL to: ${TUNNEL_URL}/slack/actions"
+    # Start tunnel if needed
+    if [[ "$tunnel_was_running" == "false" ]]; then
+        start_tunnel_and_get_url "true"
+        need_slack_update=true
     fi
 
-    # Start idle watchdog
+    # Update Slack Request URL if we started a new tunnel
+    if [[ "$need_slack_update" == "true" ]]; then
+        if ! update_slack_request_url "${TUNNEL_URL}/slack/actions"; then
+            echo_warn "Failed to update Slack, but tunnel is running"
+            echo_warn "Manually set Request URL to: ${TUNNEL_URL}/slack/actions"
+        fi
+    fi
+
+    # Start/restart idle watchdog
+    stop_watchdog 2>/dev/null || true
     start_watchdog
 
     touch "$ACTIVITY_FILE"

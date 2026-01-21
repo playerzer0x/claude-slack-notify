@@ -198,3 +198,11 @@ remote-tunnel --background
 
 # In Claude: /slack-notify
 ```
+
+## Current Focus
+> Last updated: 2026-01-21
+
+### Recent Changes
+- **remote-tunnel fixes**: Independent relay/tunnel checks - `--background` now properly restarts just the tunnel if relay is alive but tunnel died (was exiting early)
+- **Curl timeouts**: Added 30-second timeouts to all Slack API calls in remote-tunnel to prevent indefinite hangs
+- **Thread replies**: Slack thread reply routing to tmux sessions via Events API

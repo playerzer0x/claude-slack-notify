@@ -208,10 +208,13 @@ remote-tunnel --background
 > Last updated: 2026-01-21
 
 ### Recent Changes
-- **Renamed `slack-tunnel` → `local-tunnel`**: Consistent naming with `remote-tunnel`
-- **Stable URLs with Localtunnel**: `local-tunnel --stable` and `remote-tunnel --stable` use Localtunnel for permanent URLs (no more changing URLs on restart)
-- **Auto-update Slack URLs**: `--stable` setup auto-updates Slack Request URLs if tokens exist
-- **Token refresh**: `local-tunnel --update-token` for quick Slack token refresh
-- **Thread reply images**: Slack thread replies with images are downloaded to `~/.claude/slack-downloads/` and paths sent to Claude
-- **Enhanced notifications**: Full context extraction from transcript (text + tool calls), truncation handling for Slack limits
-- **Auto-update Events URL**: Both `local-tunnel` and `remote-tunnel` now auto-update the Events Request URL alongside Actions URL
+- **Orphan process cleanup**: Both `local-tunnel` and `remote-tunnel` now detect and clean up orphan processes on their ports
+  - `kill_orphan_mcp_server()` / `kill_orphan_relay()` - finds processes on port not tracked by PID file
+  - `start_mcp_server()` / `start_relay()` - calls orphan cleanup before starting
+  - `stop_*()` functions - also kill orphans after tracked process
+  - `--background` mode - verifies tracked PID matches port, cleans if mismatch
+  - `--status` - reports orphan/stale situations with fix commands
+  - Interactive mode - always restarts server/relay (cleans orphans)
+- **Stable URLs with Localtunnel**: `local-tunnel --stable` and `remote-tunnel --stable` use Localtunnel for permanent URLs
+- **Session persistence**: Sessions don't need to re-register after tunnel restart (instance files persist, MCP server is stateless)
+- **Auto-update Slack URLs**: Both tunnels auto-update Actions + Events Request URLs

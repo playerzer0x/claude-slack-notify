@@ -219,6 +219,59 @@ check_relay_running() {
     return 1
 }
 
+# Kill any orphan process on RELAY_PORT that's not tracked by our PID file
+# Returns 0 if orphans were killed, 1 if port was clear
+kill_orphan_relay() {
+    local pid_file="$RELAY_PID_FILE"
+    local tracked_pid=""
+    local killed_orphan=false
+
+    # Get tracked PID (if valid)
+    if [[ -f "$pid_file" ]]; then
+        tracked_pid=$(cat "$pid_file" 2>/dev/null)
+        # Verify it's actually running
+        if [[ -n "$tracked_pid" ]] && ! kill -0 "$tracked_pid" 2>/dev/null; then
+            # Stale PID file - remove it
+            rm -f "$pid_file"
+            tracked_pid=""
+        fi
+    fi
+
+    # Find any process listening on RELAY_PORT
+    # Use ss on Linux (lsof may not be available)
+    local port_pid=""
+    if command -v lsof &>/dev/null; then
+        port_pid=$(lsof -ti ":$RELAY_PORT" 2>/dev/null | head -1)
+    elif command -v ss &>/dev/null; then
+        # ss output format: find listening socket, extract PID
+        port_pid=$(ss -tlnp "sport = :$RELAY_PORT" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1)
+    elif command -v fuser &>/dev/null; then
+        port_pid=$(fuser "$RELAY_PORT/tcp" 2>/dev/null | awk '{print $1}')
+    fi
+
+    if [[ -n "$port_pid" ]]; then
+        if [[ "$port_pid" != "$tracked_pid" ]]; then
+            # Orphan process found - kill it
+            echo_warn "Killing orphan process on port $RELAY_PORT (PID: $port_pid)"
+            kill "$port_pid" 2>/dev/null || true
+            sleep 0.5
+            # Force kill if still running
+            if kill -0 "$port_pid" 2>/dev/null; then
+                kill -9 "$port_pid" 2>/dev/null || true
+                sleep 0.5
+            fi
+            killed_orphan=true
+        fi
+    fi
+
+    # Clean up stale PID file if process doesn't match port
+    if [[ -n "$tracked_pid" ]] && [[ "$tracked_pid" != "$port_pid" ]]; then
+        rm -f "$pid_file"
+    fi
+
+    $killed_orphan && return 0 || return 1
+}
+
 start_relay() {
     local relay_path
     if ! relay_path=$(find_relay_dist); then
@@ -226,6 +279,9 @@ start_relay() {
         echo_error "Build the MCP server first: cd mcp-server && bun run build"
         exit 1
     fi
+
+    # Kill any orphan process on the port first
+    kill_orphan_relay || true
 
     echo_info "Starting remote relay..."
     nohup node "$relay_path" > "$CLAUDE_DIR/remote-relay.log" 2>&1 &
@@ -246,14 +302,27 @@ start_relay() {
 }
 
 stop_relay() {
-    if [[ -f "$RELAY_PID_FILE" ]]; then
+    local pid_file="$RELAY_PID_FILE"
+    local stopped=false
+
+    # Kill tracked process from PID file
+    if [[ -f "$pid_file" ]]; then
         local pid
-        pid=$(cat "$RELAY_PID_FILE")
+        pid=$(cat "$pid_file")
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
             kill "$pid" 2>/dev/null || true
-            rm -f "$RELAY_PID_FILE"
-            echo_info "Remote relay stopped"
+            stopped=true
         fi
+        rm -f "$pid_file"
+    fi
+
+    # Also kill any orphan process on the port
+    if kill_orphan_relay; then
+        stopped=true
+    fi
+
+    if $stopped; then
+        echo_info "Remote relay stopped"
     fi
 }
 
@@ -678,14 +747,32 @@ cmd_background() {
         exit 1
     fi
 
-    local relay_was_running=false
+    local relay_needs_start=true
     local tunnel_was_running=false
     local need_slack_update=false
 
-    # Check relay status
+    # Check relay status - verify PID file matches what's actually running
     if check_relay_running; then
-        relay_was_running=true
-        echo_info "Remote relay already running"
+        local tracked_pid=""
+        local port_pid=""
+        if [[ -f "$RELAY_PID_FILE" ]]; then
+            tracked_pid=$(cat "$RELAY_PID_FILE" 2>/dev/null)
+        fi
+        # Find process on port
+        if command -v lsof &>/dev/null; then
+            port_pid=$(lsof -ti ":$RELAY_PORT" 2>/dev/null | head -1)
+        elif command -v ss &>/dev/null; then
+            port_pid=$(ss -tlnp "sport = :$RELAY_PORT" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1)
+        fi
+
+        if [[ -n "$tracked_pid" ]] && [[ "$tracked_pid" == "$port_pid" ]] && kill -0 "$tracked_pid" 2>/dev/null; then
+            # Our tracked process is running correctly
+            relay_needs_start=false
+            echo_info "Remote relay already running (PID: $tracked_pid)"
+        else
+            # Orphan or mismatched process - will be cleaned up by start_relay
+            echo_info "Cleaning up stale relay..."
+        fi
     fi
 
     # Check tunnel status
@@ -694,15 +781,15 @@ cmd_background() {
         echo_info "Tunnel already running"
     fi
 
-    # If both running, nothing to do
-    if [[ "$relay_was_running" == "true" && "$tunnel_was_running" == "true" ]]; then
+    # If both running correctly, nothing to do
+    if [[ "$relay_needs_start" == "false" && "$tunnel_was_running" == "true" ]]; then
         echo_info "All services already running"
         cmd_status
         return 0
     fi
 
     # Start relay if needed
-    if [[ "$relay_was_running" == "false" ]]; then
+    if $relay_needs_start; then
         start_relay
     fi
 
@@ -813,15 +900,34 @@ cmd_status() {
         echo ""
     fi
 
-    # Check relay
+    # Check relay - detect orphans
+    local relay_tracked_pid=""
+    local relay_port_pid=""
+    if [[ -f "$RELAY_PID_FILE" ]]; then
+        relay_tracked_pid=$(cat "$RELAY_PID_FILE" 2>/dev/null)
+    fi
+    # Find process on port
+    if command -v lsof &>/dev/null; then
+        relay_port_pid=$(lsof -ti ":$RELAY_PORT" 2>/dev/null | head -1)
+    elif command -v ss &>/dev/null; then
+        relay_port_pid=$(ss -tlnp "sport = :$RELAY_PORT" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1)
+    fi
+
     if check_relay_running; then
-        local relay_pid=""
-        if [[ -f "$RELAY_PID_FILE" ]]; then
-            relay_pid=$(cat "$RELAY_PID_FILE")
+        if [[ -n "$relay_tracked_pid" ]] && [[ "$relay_tracked_pid" == "$relay_port_pid" ]]; then
+            echo -e "  Relay:      ${GREEN}Running${NC} (PID: $relay_tracked_pid)"
+        elif [[ -n "$relay_port_pid" ]]; then
+            echo -e "  Relay:      ${YELLOW}Orphan process${NC} (PID: $relay_port_pid, not tracked)"
+            echo -e "              ${DIM}Run: remote-tunnel --stop && remote-tunnel --background${NC}"
+        else
+            echo -e "  Relay:      ${GREEN}Running${NC}"
         fi
-        echo -e "  Relay:      ${GREEN}Running${NC}${relay_pid:+ (PID: $relay_pid)}"
     else
-        echo -e "  Relay:      ${YELLOW}Stopped${NC}"
+        if [[ -n "$relay_tracked_pid" ]]; then
+            echo -e "  Relay:      ${YELLOW}Stopped${NC} (stale PID file: $relay_tracked_pid)"
+        else
+            echo -e "  Relay:      ${YELLOW}Stopped${NC}"
+        fi
     fi
 
     # Check tunnel
@@ -899,10 +1005,17 @@ cmd_interactive() {
         load_slack_config
     fi
 
-    # Start relay if not running
-    if ! check_relay_running; then
-        start_relay
+    # Kill existing relay and start fresh (handles orphans)
+    if check_relay_running; then
+        echo_info "Stopping existing relay..."
+        local old_pid
+        old_pid=$(cat "$RELAY_PID_FILE" 2>/dev/null)
+        if [[ -n "$old_pid" ]]; then
+            kill "$old_pid" 2>/dev/null || true
+            sleep 1
+        fi
     fi
+    start_relay
 
     # Cleanup on exit
     cleanup() {

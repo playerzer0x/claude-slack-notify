@@ -213,6 +213,51 @@ check_mcp_server() {
     return 1
 }
 
+# Kill any orphan process on MCP_PORT that's not tracked by our PID file
+# Returns 0 if orphans were killed, 1 if port was clear
+kill_orphan_mcp_server() {
+    local pid_file="$CLAUDE_DIR/.mcp-server.pid"
+    local tracked_pid=""
+    local killed_orphan=false
+
+    # Get tracked PID (if valid)
+    if [[ -f "$pid_file" ]]; then
+        tracked_pid=$(cat "$pid_file" 2>/dev/null)
+        # Verify it's actually running
+        if [[ -n "$tracked_pid" ]] && ! kill -0 "$tracked_pid" 2>/dev/null; then
+            # Stale PID file - remove it
+            rm -f "$pid_file"
+            tracked_pid=""
+        fi
+    fi
+
+    # Find any process listening on MCP_PORT
+    local port_pid
+    port_pid=$(lsof -ti ":$MCP_PORT" 2>/dev/null | head -1)
+
+    if [[ -n "$port_pid" ]]; then
+        if [[ "$port_pid" != "$tracked_pid" ]]; then
+            # Orphan process found - kill it
+            echo_warn "Killing orphan process on port $MCP_PORT (PID: $port_pid)"
+            kill "$port_pid" 2>/dev/null || true
+            sleep 0.5
+            # Force kill if still running
+            if kill -0 "$port_pid" 2>/dev/null; then
+                kill -9 "$port_pid" 2>/dev/null || true
+                sleep 0.5
+            fi
+            killed_orphan=true
+        fi
+    fi
+
+    # Clean up stale PID file if process doesn't match port
+    if [[ -n "$tracked_pid" ]] && [[ "$tracked_pid" != "$port_pid" ]]; then
+        rm -f "$pid_file"
+    fi
+
+    $killed_orphan && return 0 || return 1
+}
+
 find_mcp_source_dir() {
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -282,6 +327,9 @@ start_mcp_server() {
         exit 1
     fi
 
+    # Kill any orphan process on the port first
+    kill_orphan_mcp_server || true
+
     echo_info "Starting MCP server..."
     nohup "$MCP_SERVER" > "$CLAUDE_DIR/mcp-server.log" 2>&1 &
     MCP_PID=$!
@@ -301,14 +349,26 @@ start_mcp_server() {
 
 stop_mcp_server() {
     local pid_file="$CLAUDE_DIR/.mcp-server.pid"
+    local stopped=false
+
+    # Kill tracked process from PID file
     if [[ -f "$pid_file" ]]; then
         local pid
         pid=$(cat "$pid_file")
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
             kill "$pid" 2>/dev/null || true
-            rm -f "$pid_file"
-            echo_info "MCP server stopped"
+            stopped=true
         fi
+        rm -f "$pid_file"
+    fi
+
+    # Also kill any orphan process on the port
+    if kill_orphan_mcp_server; then
+        stopped=true
+    fi
+
+    if $stopped; then
+        echo_info "MCP server stopped"
     fi
 }
 
@@ -1003,8 +1063,30 @@ cmd_background() {
     # Rebuild MCP server if needed
     rebuild_if_needed
 
-    # Start MCP server if not running
-    if ! check_mcp_server; then
+    # Check MCP server state - verify PID file matches what's actually running
+    local mcp_pid_file="$CLAUDE_DIR/.mcp-server.pid"
+    local mcp_needs_start=true
+
+    if check_mcp_server; then
+        # Something is responding on the port - verify it's our tracked process
+        local tracked_pid=""
+        local port_pid=""
+        if [[ -f "$mcp_pid_file" ]]; then
+            tracked_pid=$(cat "$mcp_pid_file" 2>/dev/null)
+        fi
+        port_pid=$(lsof -ti ":$MCP_PORT" 2>/dev/null | head -1)
+
+        if [[ -n "$tracked_pid" ]] && [[ "$tracked_pid" == "$port_pid" ]] && kill -0 "$tracked_pid" 2>/dev/null; then
+            # Our tracked process is running correctly
+            mcp_needs_start=false
+            echo_info "MCP server already running (PID: $tracked_pid)"
+        else
+            # Orphan or mismatched process - will be cleaned up by start_mcp_server
+            echo_info "Cleaning up stale MCP server..."
+        fi
+    fi
+
+    if $mcp_needs_start; then
         start_mcp_server
     fi
 
@@ -1136,15 +1218,29 @@ cmd_status() {
         echo -e "  Tunnel:     ${YELLOW}Stopped${NC}"
     fi
 
-    # Check MCP server
+    # Check MCP server - detect orphans
+    local mcp_tracked_pid=""
+    local mcp_port_pid=""
+    if [[ -f "$CLAUDE_DIR/.mcp-server.pid" ]]; then
+        mcp_tracked_pid=$(cat "$CLAUDE_DIR/.mcp-server.pid" 2>/dev/null)
+    fi
+    mcp_port_pid=$(lsof -ti ":$MCP_PORT" 2>/dev/null | head -1)
+
     if check_mcp_server; then
-        local mcp_pid=""
-        if [[ -f "$CLAUDE_DIR/.mcp-server.pid" ]]; then
-            mcp_pid=$(cat "$CLAUDE_DIR/.mcp-server.pid")
+        if [[ -n "$mcp_tracked_pid" ]] && [[ "$mcp_tracked_pid" == "$mcp_port_pid" ]]; then
+            echo -e "  MCP Server: ${GREEN}Running${NC} (PID: $mcp_tracked_pid)"
+        elif [[ -n "$mcp_port_pid" ]]; then
+            echo -e "  MCP Server: ${YELLOW}Orphan process${NC} (PID: $mcp_port_pid, not tracked)"
+            echo -e "              ${DIM}Run: local-tunnel --stop && local-tunnel --background${NC}"
+        else
+            echo -e "  MCP Server: ${GREEN}Running${NC}"
         fi
-        echo -e "  MCP Server: ${GREEN}Running${NC}${mcp_pid:+ (PID: $mcp_pid)}"
     else
-        echo -e "  MCP Server: ${YELLOW}Stopped${NC}"
+        if [[ -n "$mcp_tracked_pid" ]]; then
+            echo -e "  MCP Server: ${YELLOW}Stopped${NC} (stale PID file: $mcp_tracked_pid)"
+        else
+            echo -e "  MCP Server: ${YELLOW}Stopped${NC}"
+        fi
     fi
 
     # Check watchdog

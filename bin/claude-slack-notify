@@ -295,18 +295,33 @@ EOF
         echo ""
         echo "  For buttons to work when Mac is closed:"
         echo ""
-        echo "    1. Copy Slack config to remote (one-time):"
-        echo "       scp ~/.claude/.slack-config $SSH_HOST:~/.claude/"
-        echo ""
-        echo "    2. On remote, start remote-tunnel:"
+        echo "    1. On remote, start remote-tunnel:"
         echo "       remote-tunnel --background"
         echo ""
-        echo "    3. Run Claude and register:"
+        echo "    2. Run Claude and register:"
         echo "       claude"
         echo "       /slack-notify"
         echo ""
         echo "  ✓ 1/2/Continue/Push buttons work from phone"
         echo "  ✗ Focus button won't switch windows (Mac is closed)"
+        echo ""
+
+        # Offer to sync Slack config to remote
+        SYNC_CONFIG=""
+        if [[ -f "$CLAUDE_DIR/.slack-config" ]]; then
+            echo -n "  Sync Slack config to remote for remote-tunnel? [Y/n] "
+            read -r SYNC_CONFIG
+            if [[ ! "$SYNC_CONFIG" =~ ^[Nn]$ ]]; then
+                echo ""
+                echo "  Syncing Slack config..."
+                scp -q "${SSH_ARGS[@]}" "$CLAUDE_DIR/.slack-config" "$SSH_HOST:~/.claude/" 2>/dev/null && \
+                    echo "  ✓ .slack-config synced"
+                if [[ -f "$CLAUDE_DIR/slack-signing-secret" ]]; then
+                    scp -q "${SSH_ARGS[@]}" "$CLAUDE_DIR/slack-signing-secret" "$SSH_HOST:~/.claude/" 2>/dev/null && \
+                        echo "  ✓ slack-signing-secret synced"
+                fi
+            fi
+        fi
         echo ""
         echo -n "  Press Enter to connect and start tmux..."
         read -r

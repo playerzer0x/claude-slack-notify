@@ -18,11 +18,3 @@ if [[ -n "$SESSION_ID" ]]; then
 else
     "$HOME/.claude/bin/claude-slack-notify" check
 fi
-
-# On Linux, stop remote-tunnel when session ends
-if [[ "$(uname)" == "Linux" ]]; then
-    REMOTE_TUNNEL="$HOME/.claude/bin/remote-tunnel"
-    if [[ -x "$REMOTE_TUNNEL" ]]; then
-        "$REMOTE_TUNNEL" --stop >/dev/null 2>&1 || true
-    fi
-fi

@@ -14,7 +14,15 @@ fi
 
 if [[ -n "$SESSION_ID" ]]; then
     # Pass stdin data through for transcript access (used to extract context message)
-    echo "$STDIN_DATA" | CLAUDE_INSTANCE_ID="$SESSION_ID" exec "$HOME/.claude/bin/claude-slack-notify" check
+    echo "$STDIN_DATA" | CLAUDE_INSTANCE_ID="$SESSION_ID" "$HOME/.claude/bin/claude-slack-notify" check
 else
-    exec "$HOME/.claude/bin/claude-slack-notify" check
+    "$HOME/.claude/bin/claude-slack-notify" check
+fi
+
+# On Linux, stop remote-tunnel when session ends
+if [[ "$(uname)" == "Linux" ]]; then
+    REMOTE_TUNNEL="$HOME/.claude/bin/remote-tunnel"
+    if [[ -x "$REMOTE_TUNNEL" ]]; then
+        "$REMOTE_TUNNEL" --stop >/dev/null 2>&1 || true
+    fi
 fi

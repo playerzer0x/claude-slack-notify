@@ -451,6 +451,16 @@ start_tunnel_and_get_url() {
 
     echo "$tunnel_url" > "$TUNNEL_URL_FILE"
     TUNNEL_URL="$tunnel_url"
+
+    # Check if we got the subdomain we requested
+    local expected_url="https://${subdomain}.loca.lt"
+    if [[ "$tunnel_url" != "$expected_url" ]]; then
+        echo_warn "Subdomain '$subdomain' unavailable - got random URL instead"
+        echo_warn "Your stable subdomain may be in use. Try again in a few minutes,"
+        echo_warn "or choose a new subdomain with: remote-tunnel --stable"
+        echo ""
+    fi
+
     echo_info "Tunnel started: $tunnel_url"
 }
 

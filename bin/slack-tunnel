@@ -108,9 +108,10 @@ rotate_slack_token() {
     return 0
 }
 
-# Update Slack app's Request URL
+# Update Slack app's Request URLs (actions + events)
 update_slack_request_url() {
-    local new_url="$1"
+    local actions_url="$1"
+    local events_url="${2:-}"  # Optional for backward compatibility
 
     # Ensure token is valid
     if is_token_expired; then
@@ -119,7 +120,7 @@ update_slack_request_url() {
         fi
     fi
 
-    echo_info "Updating Slack Request URL..."
+    echo_info "Updating Slack Request URLs..."
 
     # Export current manifest
     local manifest_response
@@ -138,13 +139,22 @@ update_slack_request_url() {
         return 1
     fi
 
-    # Update the request_url in the manifest
+    # Update interactivity URL (for buttons) and optionally event_subscriptions URL (for thread replies)
     local updated_manifest
-    updated_manifest=$(echo "$manifest_response" | jq --arg url "$new_url" '
-        .manifest.settings.interactivity.is_enabled = true |
-        .manifest.settings.interactivity.request_url = $url |
-        .manifest
-    ')
+    if [[ -n "$events_url" ]]; then
+        updated_manifest=$(echo "$manifest_response" | jq --arg actions_url "$actions_url" --arg events_url "$events_url" '
+            .manifest.settings.interactivity.is_enabled = true |
+            .manifest.settings.interactivity.request_url = $actions_url |
+            .manifest.settings.event_subscriptions.request_url = $events_url |
+            .manifest
+        ')
+    else
+        updated_manifest=$(echo "$manifest_response" | jq --arg url "$actions_url" '
+            .manifest.settings.interactivity.is_enabled = true |
+            .manifest.settings.interactivity.request_url = $url |
+            .manifest
+        ')
+    fi
 
     # Update the manifest
     local update_response
@@ -169,7 +179,11 @@ update_slack_request_url() {
         return 1
     fi
 
-    echo_info "Slack Request URL updated to: $new_url"
+    echo_info "Slack URLs updated:"
+    echo_info "  Actions: $actions_url"
+    if [[ -n "$events_url" ]]; then
+        echo_info "  Events:  $events_url"
+    fi
     return 0
 }
 
@@ -582,8 +596,8 @@ cmd_setup() {
         echo -e "  ${CYAN}1.${NC} Go to your app: ${BOLD}https://api.slack.com/apps/${SLACK_APP_ID}${NC}"
         echo -e "  ${CYAN}2.${NC} Click ${BOLD}OAuth & Permissions${NC}"
         echo -e "  ${CYAN}3.${NC} Under ${BOLD}Bot Token Scopes${NC}, add:"
-        echo -e "       ${BOLD}chat:write${NC}"
-        echo -e "       ${BOLD}app_mentions:read${NC} (optional, for @mentions)"
+        echo -e "       ${BOLD}chat:write${NC} - Send messages"
+        echo -e "       ${BOLD}files:read${NC} - Download images from replies"
         echo -e "  ${CYAN}4.${NC} Click ${BOLD}Install to Workspace${NC} (or Reinstall)"
         echo -e "  ${CYAN}5.${NC} Copy the ${BOLD}Bot User OAuth Token${NC} (starts with xoxb-)"
         echo ""
@@ -663,10 +677,12 @@ cmd_background() {
     # Start tunnel
     start_tunnel_and_get_url "true"
 
-    # Update Slack Request URL
-    if ! update_slack_request_url "${TUNNEL_URL}/slack/actions"; then
+    # Update Slack Request URLs (actions + events)
+    if ! update_slack_request_url "${TUNNEL_URL}/slack/actions" "${TUNNEL_URL}/slack/events"; then
         echo_warn "Failed to update Slack, but tunnel is running"
-        echo_warn "Manually set Request URL to: ${TUNNEL_URL}/slack/actions"
+        echo_warn "Manually set Request URLs:"
+        echo_warn "  Actions: ${TUNNEL_URL}/slack/actions"
+        echo_warn "  Events:  ${TUNNEL_URL}/slack/events"
     fi
 
     # Start idle watchdog
@@ -869,16 +885,17 @@ cmd_interactive() {
     # Start tunnel
     start_tunnel_and_get_url "false"
 
-    # Update Slack Request URL
-    if update_slack_request_url "${TUNNEL_URL}/slack/actions"; then
+    # Update Slack Request URLs (actions + events)
+    if update_slack_request_url "${TUNNEL_URL}/slack/actions" "${TUNNEL_URL}/slack/events"; then
         echo ""
         echo -e "${GREEN}╭──────────────────────────────────────────────────────────────╮${NC}"
-        echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Slack Request URL updated automatically!${NC}                  ${GREEN}│${NC}"
+        echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Slack URLs updated automatically!${NC}                         ${GREEN}│${NC}"
         echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
         echo ""
-        echo -e "  Tunnel URL: ${CYAN}${TUNNEL_URL}/slack/actions${NC}"
+        echo -e "  Actions URL: ${CYAN}${TUNNEL_URL}/slack/actions${NC}"
+        echo -e "  Events URL:  ${CYAN}${TUNNEL_URL}/slack/events${NC}"
         echo ""
-        echo -e "  ${DIM}Buttons will work on both desktop and mobile Slack.${NC}"
+        echo -e "  ${DIM}Buttons and thread replies will work on both desktop and mobile.${NC}"
         echo -e "  ${DIM}Keep this running. Press Ctrl+C to stop.${NC}"
     else
         echo ""
@@ -886,13 +903,14 @@ cmd_interactive() {
         echo -e "${YELLOW}│${NC}  ${YELLOW}!${NC} ${BOLD}Could not auto-update Slack${NC}                               ${YELLOW}│${NC}"
         echo -e "${YELLOW}╰──────────────────────────────────────────────────────────────╯${NC}"
         echo ""
-        echo -e "  Tunnel URL: ${CYAN}${TUNNEL_URL}/slack/actions${NC}"
+        echo -e "  Actions URL: ${CYAN}${TUNNEL_URL}/slack/actions${NC}"
+        echo -e "  Events URL:  ${CYAN}${TUNNEL_URL}/slack/events${NC}"
         echo ""
         echo -e "  ${BOLD}Manually update in Slack:${NC}"
         echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps/${SLACK_APP_ID}${NC}"
-        echo -e "  ${CYAN}2.${NC} Click ${BOLD}Interactivity & Shortcuts${NC}"
-        echo -e "  ${CYAN}3.${NC} Update ${BOLD}Request URL${NC} to the URL above"
-        echo -e "  ${CYAN}4.${NC} Click ${BOLD}Save Changes${NC}"
+        echo -e "  ${CYAN}2.${NC} ${BOLD}Interactivity & Shortcuts${NC} → Set Request URL"
+        echo -e "  ${CYAN}3.${NC} ${BOLD}Event Subscriptions${NC} → Set Request URL"
+        echo -e "  ${CYAN}4.${NC} Click ${BOLD}Save Changes${NC} on each page"
         echo ""
         echo -e "  ${DIM}Keep this running. Press Ctrl+C to stop.${NC}"
     fi

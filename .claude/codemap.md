@@ -105,6 +105,7 @@ claude-slack-notify/
 | `instances/*.json` | Registered Claude sessions (on machine running Claude) |
 | `links/*.json` | SSH link info (on local Mac only) |
 | `threads/*.json` | Thread mapping for reply routing (thread_ts → session) |
+| `slack-downloads/` | Downloaded images from Slack thread replies |
 | `.slack-config` | Slack App ID + tokens for API access |
 | `slack-signing-secret` | Slack signing secret for request verification |
 | `.mac-tunnel-url` | Mac's tunnel URL for remote-relay auto-detect |
@@ -134,7 +135,9 @@ When bot token is configured (`slack-tunnel --setup` → enable thread replies):
 1. Notifications are sent via `chat.postMessage` API (not webhook)
 2. The `thread_ts` is saved to `~/.claude/threads/{ts}.json`
 3. Slack Events API sends replies to `/slack/events`
-4. The reply text is routed to the correct tmux session
+4. The reply text (+ file paths for images) is routed to the correct tmux session
+
+**Image support:** Images in thread replies are downloaded to `~/.claude/slack-downloads/` and the file path is sent to Claude (requires `files:read` bot scope).
 
 **Focus URL query parameters:**
 - `?action=continue` - Send predefined action input
@@ -203,6 +206,8 @@ remote-tunnel --background
 > Last updated: 2026-01-21
 
 ### Recent Changes
-- **remote-tunnel fixes**: Independent relay/tunnel checks - `--background` now properly restarts just the tunnel if relay is alive but tunnel died (was exiting early)
-- **Curl timeouts**: Added 30-second timeouts to all Slack API calls in remote-tunnel to prevent indefinite hangs
-- **Thread replies**: Slack thread reply routing to tmux sessions via Events API
+- **Thread reply images**: Slack thread replies with images are downloaded to `~/.claude/slack-downloads/` and paths sent to Claude
+- **Enhanced notifications**: Full context extraction from transcript (text + tool calls), truncation handling for Slack limits
+- **Auto-update Events URL**: Both `slack-tunnel` and `remote-tunnel` now auto-update the Events Request URL alongside Actions URL
+- **Bot scopes documented**: `chat:write` + `files:read` required for thread replies with images
+- **Thread replies**: Slack thread reply routing to tmux sessions via Events API (text + images)

@@ -102,6 +102,30 @@ claude
 
 ## Configuration
 
+### Thread Replies
+
+Reply to notifications directly from Slack (even on mobile). Supports text and images.
+
+**Setup:**
+
+1. **Invite the bot** to your notification channel:
+   ```
+   /invite @YourBotName
+   ```
+
+2. **Add bot scopes** in your Slack app (OAuth & Permissions):
+   - `chat:write` - Send messages
+   - `files:read` - Download images from replies
+
+3. **Enable Events API** (Event Subscriptions):
+   - Enable Events → Set Request URL: `<tunnel-url>/slack/events`
+   - Subscribe to bot event: `message.channels`
+   - Save changes
+
+The Request URLs auto-update when you start the tunnel.
+
+**Image replies:** When you reply to a notification with an image, it's downloaded to `~/.claude/slack-downloads/` and Claude receives the file path.
+
 ### Slack Buttons
 
 Configure action buttons in `~/.claude/button-config`:

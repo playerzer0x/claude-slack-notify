@@ -27,6 +27,8 @@ const ACTIVITY_FILE = join(CLAUDE_DIR, '.relay-last-activity');
 const SIGNING_SECRET_PATH = join(CLAUDE_DIR, 'slack-signing-secret');
 
 const REPLAY_WINDOW_SECONDS = 300; // 5 minutes
+const SLACK_DOWNLOADS_DIR = join(CLAUDE_DIR, 'slack-downloads');
+const SLACK_CONFIG_PATH = join(CLAUDE_DIR, '.slack-config');
 
 // Valid focus actions
 type FocusAction = 'focus' | '1' | '2' | 'continue' | 'push';
@@ -290,6 +292,62 @@ function loadThreadInfo(threadTs: string): { focus_url: string; term_type: strin
   }
 }
 
+// Load bot token from slack config
+function loadBotToken(): string | null {
+  if (!existsSync(SLACK_CONFIG_PATH)) {
+    return null;
+  }
+  try {
+    const content = readFileSync(SLACK_CONFIG_PATH, 'utf-8');
+    const match = content.match(/SLACK_BOT_TOKEN="([^"]+)"/);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+// Download file from Slack and save locally
+interface SlackFile {
+  id: string;
+  name: string;
+  mimetype: string;
+  url_private: string;
+}
+
+async function downloadSlackFile(file: SlackFile, botToken: string): Promise<string | null> {
+  try {
+    // Create downloads directory if needed
+    if (!existsSync(SLACK_DOWNLOADS_DIR)) {
+      mkdirSync(SLACK_DOWNLOADS_DIR, { recursive: true });
+    }
+
+    // Download file using bot token
+    const response = await fetch(file.url_private, {
+      headers: { Authorization: `Bearer ${botToken}` },
+    });
+
+    if (!response.ok) {
+      console.error(`Failed to download file ${file.name}: ${response.status}`);
+      return null;
+    }
+
+    const buffer = await response.arrayBuffer();
+
+    // Generate unique filename with timestamp
+    const timestamp = Date.now();
+    const safeFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const filePath = join(SLACK_DOWNLOADS_DIR, `${timestamp}-${safeFileName}`);
+
+    writeFileSync(filePath, Buffer.from(buffer));
+    console.log(`Downloaded file: ${filePath}`);
+
+    return filePath;
+  } catch (error) {
+    console.error(`Error downloading file ${file.name}:`, error);
+    return null;
+  }
+}
+
 // Health endpoint
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', mode: 'remote-relay', timestamp: new Date().toISOString() });
@@ -315,9 +373,9 @@ app.post('/slack/events', async (req: Request, res: Response) => {
       // Only handle message events in threads (replies)
       if (event.type === 'message' && event.thread_ts && !event.bot_id) {
         const threadTs = event.thread_ts;
-        const text = event.text;
+        let messageText = event.text || '';
 
-        console.log(`Thread reply received: thread_ts=${threadTs}, text="${text}"`);
+        console.log(`Thread reply received: thread_ts=${threadTs}, text="${messageText}", files=${event.files?.length || 0}`);
 
         // Look up thread info
         const threadInfo = loadThreadInfo(threadTs);
@@ -331,6 +389,38 @@ app.post('/slack/events', async (req: Request, res: Response) => {
         const tmuxTarget = extractTmuxTarget(threadInfo.focus_url);
         if (!tmuxTarget) {
           console.log(`Could not extract tmux target from ${threadInfo.focus_url}`);
+          res.status(200).send();
+          return;
+        }
+
+        // Handle file attachments (images, etc.)
+        if (event.files && event.files.length > 0) {
+          const botToken = loadBotToken();
+          if (botToken) {
+            const filePaths: string[] = [];
+            for (const file of event.files as SlackFile[]) {
+              console.log(`Downloading file: ${file.name} (${file.mimetype})`);
+              const filePath = await downloadSlackFile(file, botToken);
+              if (filePath) {
+                filePaths.push(filePath);
+              }
+            }
+            // Append file paths to message
+            if (filePaths.length > 0) {
+              const fileList = filePaths.map((p) => `[File: ${p}]`).join('\n');
+              messageText = messageText ? `${messageText}\n${fileList}` : fileList;
+            }
+          } else {
+            console.log('No bot token available, cannot download files');
+            messageText = messageText
+              ? `${messageText}\n[Files attached but could not be downloaded - no bot token]`
+              : '[Files attached but could not be downloaded - no bot token]';
+          }
+        }
+
+        // Skip if no content to send
+        if (!messageText) {
+          console.log('No message content to send');
           res.status(200).send();
           return;
         }
@@ -351,7 +441,7 @@ app.post('/slack/events', async (req: Request, res: Response) => {
         }
 
         // Send text to tmux
-        const result = await sendTmuxInput(tmuxTarget, text);
+        const result = await sendTmuxInput(tmuxTarget, messageText);
         console.log('Thread reply sent to tmux:', result);
       }
 

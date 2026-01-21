@@ -3,6 +3,8 @@
 
 CLAUDE_DIR="${HOME}/.claude"
 WEBHOOK_FILE="${CLAUDE_DIR}/slack-webhook-url"
+SLACK_CONFIG="${CLAUDE_DIR}/.slack-config"
+THREADS_DIR="${CLAUDE_DIR}/threads"
 INSTANCES_DIR="${CLAUDE_DIR}/instances"
 LINKS_DIR="${CLAUDE_DIR}/links"
 MIN_DURATION="${CLAUDE_NOTIFY_MIN_SECONDS:-30}"
@@ -786,28 +788,47 @@ if [[ "$1" == "check" ]]; then
                 NOTIF_MSG=$(echo "$STDIN_DATA" | jq -r '.message // empty' 2>/dev/null)
             fi
 
-            # Get last assistant message from transcript
+            # Get last assistant message from transcript (full content including tools)
             TRANSCRIPT_PATH=$(echo "$STDIN_DATA" | jq -r '.transcript_path // empty' 2>/dev/null)
             if [[ -n "$TRANSCRIPT_PATH" && -f "$TRANSCRIPT_PATH" ]]; then
+                # Extract full assistant message content (text + tool calls)
                 TRANSCRIPT_MSG=$(tac "$TRANSCRIPT_PATH" 2>/dev/null | while read -r line; do
                     MSG_TYPE=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
                     if [[ "$MSG_TYPE" == "assistant" ]]; then
-                        TEXT=$(echo "$line" | jq -r '
+                        # Build full content: text blocks + tool descriptions
+                        FULL_CONTENT=$(echo "$line" | jq -r '
                             if .message.content then
-                                [.message.content[] | select(.type == "text") | .text] | join(" ")
+                                [.message.content[] |
+                                    if .type == "text" then
+                                        .text
+                                    elif .type == "tool_use" then
+                                        if .name == "Bash" then
+                                            # Show bash command preview
+                                            "● Bash: " + ((.input.command // "") | split("\n")[0] | .[0:80]) +
+                                            (if (.input.description // "") != "" then " (" + .input.description + ")" else "" end)
+                                        elif .name == "Edit" or .name == "Write" then
+                                            "● " + .name + ": " + (.input.file_path // "")
+                                        elif .name == "Read" then
+                                            "● Read: " + (.input.file_path // "")
+                                        else
+                                            "● " + .name + (if (.input.description // "") != "" then ": " + .input.description else "" end)
+                                        end
+                                    else
+                                        empty
+                                    end
+                                ] | map(select(. != null and . != "")) | join("\n")
                             else
                                 empty
                             end
                         ' 2>/dev/null)
-                        if [[ -n "$TEXT" ]]; then
-                            echo "$TEXT"
+                        if [[ -n "$FULL_CONTENT" ]]; then
+                            echo "$FULL_CONTENT"
                             break
                         fi
                     fi
                 done)
 
-                # For Notification events, extract tool request details from transcript
-                # This provides more context than the generic "needs permission" message
+                # For Notification events, extract the pending tool request
                 if [[ "$HOOK_EVENT" == "Notification" ]]; then
                     TOOL_REQUEST=$(tac "$TRANSCRIPT_PATH" 2>/dev/null | while read -r line; do
                         MSG_TYPE=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
@@ -816,12 +837,12 @@ if [[ "$1" == "check" ]]; then
                             TOOL_INFO=$(echo "$line" | jq -r '
                                 if .message.content then
                                     [.message.content[] | select(.type == "tool_use") |
-                                        {name: .name, desc: .input.description}] | first |
+                                        {name: .name, desc: .input.description}] | last |
                                         if . then
                                             if .desc and .desc != "" then
-                                                "Claude wants to \(.desc)"
+                                                "⏳ Waiting: " + .desc
                                             else
-                                                "Claude wants to use \(.name)"
+                                                "⏳ Waiting: " + .name + " permission"
                                             end
                                         else
                                             empty
@@ -878,6 +899,14 @@ if [[ "$1" == "check" ]]; then
         CONTEXT="$NOTIF_MSG"
     elif [[ -n "$TRANSCRIPT_MSG" ]]; then
         CONTEXT="$TRANSCRIPT_MSG"
+    fi
+
+    # Truncate if too long for Slack (max ~2800 chars to leave room for header)
+    MAX_CONTEXT_LEN=2800
+    if [[ ${#CONTEXT} -gt $MAX_CONTEXT_LEN ]]; then
+        CONTEXT="${CONTEXT:0:$MAX_CONTEXT_LEN}
+
+_…[truncated - see terminal for full output]_"
     fi
 
     # Build message
@@ -1078,53 +1107,58 @@ Push|push"
     }"
 fi
 
-# Check if we have bot token for API posting (enables thread replies)
-SLACK_CONFIG_FILE="${CLAUDE_DIR}/.slack-config"
-SLACK_BOT_TOKEN=""
-SLACK_CHANNEL_ID=""
-if [[ -f "$SLACK_CONFIG_FILE" ]]; then
-    source "$SLACK_CONFIG_FILE"
+# Build the message payload (used by both API and webhook)
+MESSAGE_PAYLOAD="{
+    \"attachments\": [
+      {
+        \"fallback\": \"${SAFE_INSTANCE_NAME}: ${SAFE_MESSAGE}\",
+        \"color\": \"${COLOR}\",
+        \"blocks\": [
+          {
+            \"type\": \"section\",
+            \"text\": {
+              \"type\": \"mrkdwn\",
+              \"text\": \"*${SAFE_INSTANCE_NAME}* on \`${SAFE_LOCATION}\`\n${SAFE_MESSAGE}\"
+            }
+          }${BUTTON_BLOCK}
+        ]
+      }
+    ]
+  }"
+
+# Try to use Slack API (enables thread replies) if bot token is configured
+USE_API=""
+if [[ -f "$SLACK_CONFIG" ]]; then
+    source "$SLACK_CONFIG"
+    if [[ -n "$SLACK_BOT_TOKEN" && -n "$SLACK_CHANNEL_ID" ]]; then
+        USE_API="1"
+    fi
 fi
 
-THREADS_DIR="${CLAUDE_DIR}/threads"
+if [[ -n "$USE_API" ]]; then
+    # Use chat.postMessage API - enables thread replies
+    API_PAYLOAD=$(echo "$MESSAGE_PAYLOAD" | jq --arg channel "$SLACK_CHANNEL_ID" '. + {channel: $channel}')
 
-if [[ -n "$SLACK_BOT_TOKEN" && -n "$SLACK_CHANNEL_ID" ]]; then
-    # Use chat.postMessage API (enables thread replies)
-    RESPONSE=$(curl -s -X POST "https://slack.com/api/chat.postMessage" \
-      -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
-      -H 'Content-type: application/json' \
-      --data "{
-        \"channel\": \"${SLACK_CHANNEL_ID}\",
-        \"attachments\": [
-          {
-            \"fallback\": \"${SAFE_INSTANCE_NAME}: ${SAFE_MESSAGE}\",
-            \"color\": \"${COLOR}\",
-            \"blocks\": [
-              {
-                \"type\": \"section\",
-                \"text\": {
-                  \"type\": \"mrkdwn\",
-                  \"text\": \"*${SAFE_INSTANCE_NAME}* on \\\`${SAFE_LOCATION}\\\`\n${SAFE_MESSAGE}\"
-                }
-              }${BUTTON_BLOCK}
-            ]
-          }
-        ]
-      }")
+    RESPONSE=$(curl -s -X POST \
+        -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+        -H "Content-type: application/json; charset=utf-8" \
+        --data "$API_PAYLOAD" \
+        "https://slack.com/api/chat.postMessage" \
+        --max-time 30)
 
-    # Save thread_ts for reply routing
-    if command -v jq &>/dev/null; then
-        THREAD_TS=$(echo "$RESPONSE" | jq -r '.ts // empty' 2>/dev/null)
-        if [[ -n "$THREAD_TS" && -n "$FOCUS_URL" ]]; then
+    # Save thread mapping if successful
+    if echo "$RESPONSE" | jq -e '.ok == true' > /dev/null 2>&1; then
+        THREAD_TS=$(echo "$RESPONSE" | jq -r '.ts')
+        if [[ -n "$THREAD_TS" && "$THREAD_TS" != "null" ]]; then
             mkdir -p "$THREADS_DIR"
-            # Store mapping: thread_ts -> session info
-            cat > "$THREADS_DIR/${THREAD_TS}.json" << EOF
+            # Save thread info for reply routing
+            cat > "${THREADS_DIR}/${THREAD_TS}.json" <<EOF
 {
-  "thread_ts": "${THREAD_TS}",
-  "instance_id": "${INSTANCE_ID}",
-  "focus_url": "${FOCUS_URL}",
-  "term_type": "${TERM_TYPE}",
-  "created_at": "$(date -Iseconds)"
+  "thread_ts": "$THREAD_TS",
+  "session_id": "$INSTANCE_ID",
+  "focus_url": "$FOCUS_URL",
+  "instance_name": "$INSTANCE_NAME",
+  "created": "$(date -Iseconds)"
 }
 EOF
         fi
@@ -1132,22 +1166,6 @@ EOF
 else
     # Fall back to webhook (no thread reply support)
     curl -s -X POST -H 'Content-type: application/json' \
-      --data "{
-        \"attachments\": [
-          {
-            \"fallback\": \"${SAFE_INSTANCE_NAME}: ${SAFE_MESSAGE}\",
-            \"color\": \"${COLOR}\",
-            \"blocks\": [
-              {
-                \"type\": \"section\",
-                \"text\": {
-                  \"type\": \"mrkdwn\",
-                  \"text\": \"*${SAFE_INSTANCE_NAME}* on \`${SAFE_LOCATION}\`\n${SAFE_MESSAGE}\"
-                }
-              }${BUTTON_BLOCK}
-            ]
-          }
-        ]
-      }" \
-      "$WEBHOOK_URL" > /dev/null 2>&1
+        --data "$MESSAGE_PAYLOAD" \
+        "$WEBHOOK_URL" --max-time 30 > /dev/null 2>&1
 fi

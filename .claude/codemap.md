@@ -203,7 +203,11 @@ claude-slack-notify link --host user@server
 ```bash
 # Config is auto-synced when you use `link --host` from Mac
 # Just start the remote tunnel:
-remote-tunnel --background
+remote-tunnel --background    # Uses Tailscale Funnel if available
+
+# Force specific backend:
+remote-tunnel --use-tailscale    # Force Tailscale Funnel
+remote-tunnel --use-localtunnel  # Force Localtunnel
 
 # In Claude: /slack-notify
 ```
@@ -212,7 +216,7 @@ remote-tunnel --background
 > Last updated: 2026-01-21
 
 ### Recent Changes
-- **Tailscale Funnel as default**: `local-tunnel` now uses Tailscale Funnel by default when Tailscale is available
+- **Tailscale Funnel as default**: Both `local-tunnel` and `remote-tunnel` now use Tailscale Funnel by default when Tailscale is available
   - Auto-detects Tailscale availability and uses it without any configuration needed
   - Falls back to Localtunnel if Tailscale isn't available
   - New flags: `--use-tailscale` (force Tailscale), `--use-localtunnel` (force Localtunnel)

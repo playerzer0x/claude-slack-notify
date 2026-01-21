@@ -646,6 +646,19 @@ detect_terminal() {
 if [[ "$1" == "register" ]]; then
     mkdir -p "$INSTANCES_DIR"
 
+    # Clean up old session files for this terminal (prevents stale session IDs)
+    # We detect terminal first to know what to clean up
+    detect_terminal
+    if [[ -n "$TERM_TARGET" ]]; then
+        for old_file in "$INSTANCES_DIR"/*.json; do
+            [[ -f "$old_file" ]] || continue
+            old_target=$(grep -o '"term_target": *"[^"]*"' "$old_file" 2>/dev/null | cut -d'"' -f4)
+            if [[ "$old_target" == "$TERM_TARGET" ]]; then
+                rm -f "$old_file"
+            fi
+        done
+    fi
+
     INSTANCE_NAME="$2"
     if [[ -z "$INSTANCE_NAME" ]]; then
         ADJECTIVES=("red" "blue" "green" "purple" "orange" "silver" "golden" "cosmic" "swift" "bright" "dark" "wild" "calm" "bold" "quick")
@@ -655,7 +668,7 @@ if [[ "$1" == "register" ]]; then
         INSTANCE_NAME="${ADJECTIVES[$RANDOM % ${#ADJECTIVES[@]}]}-${NOUNS[$RANDOM % ${#NOUNS[@]}]}-${COLORS[$RANDOM % ${#COLORS[@]}]}-${ITEMS[$RANDOM % ${#ITEMS[@]}]}"
     fi
 
-    detect_terminal
+    # detect_terminal already called above for cleanup
     HOSTNAME=$(hostname -s 2>/dev/null || echo "unknown")
 
     # Build instance JSON with optional SSH fields

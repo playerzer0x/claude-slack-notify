@@ -436,9 +436,11 @@ cmd_setup() {
         exit 1
     fi
 
-    if ! command -v cloudflared &>/dev/null; then
-        echo_error "cloudflared is required but not installed."
-        echo "  See: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+    if ! command -v lt &>/dev/null && ! command -v cloudflared &>/dev/null; then
+        echo_error "A tunnel provider is required but none installed."
+        echo "  Install one of:"
+        echo "    npm install -g localtunnel  (recommended)"
+        echo "    See: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
         exit 1
     fi
 

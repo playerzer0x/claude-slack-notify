@@ -428,7 +428,7 @@ start_tunnel_and_get_url() {
     sleep 0.5
 
     # Priority 1: Localtunnel with saved subdomain (simplest stable option)
-    if has_localtunnel_subdomain; then
+    if has_stable_tunnel; then
         local subdomain
         subdomain=$(get_localtunnel_subdomain)
 
@@ -552,9 +552,11 @@ cmd_setup() {
         exit 1
     fi
 
-    if ! command -v cloudflared &>/dev/null; then
-        echo_error "cloudflared is required but not installed."
-        echo "  Install with: brew install cloudflared (macOS)"
+    if ! command -v lt &>/dev/null && ! command -v cloudflared &>/dev/null; then
+        echo_error "A tunnel provider is required but none installed."
+        echo "  Install one of:"
+        echo "    bun add -g localtunnel  (recommended)"
+        echo "    brew install cloudflared"
         exit 1
     fi
 
@@ -1248,7 +1250,7 @@ cmd_interactive() {
             echo -e "  ${CYAN}3.${NC} ${BOLD}Event Subscriptions${NC} → Set Request URL"
             echo -e "  ${CYAN}4.${NC} Click ${BOLD}Save Changes${NC} on each page"
             echo ""
-            echo -e "  ${DIM}Tip: Run ${BOLD}local-tunnel --cloudflare${NC} to avoid this step forever.${NC}"
+            echo -e "  ${DIM}Tip: Run ${BOLD}local-tunnel --stable${NC} for a permanent URL.${NC}"
             echo ""
             echo -e "  ${DIM}Keep this running. Press Ctrl+C to stop.${NC}"
         fi

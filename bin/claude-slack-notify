@@ -318,6 +318,10 @@ EOF
                 echo "  Syncing Slack config..."
                 scp -q "${SSH_ARGS[@]}" "$CLAUDE_DIR/.slack-config" "$SSH_HOST:~/.claude/" 2>/dev/null && \
                     echo "  ✓ .slack-config synced"
+                if [[ -f "$CLAUDE_DIR/slack-webhook-url" ]]; then
+                    scp -q "${SSH_ARGS[@]}" "$CLAUDE_DIR/slack-webhook-url" "$SSH_HOST:~/.claude/" 2>/dev/null && \
+                        echo "  ✓ slack-webhook-url synced"
+                fi
                 if [[ -f "$CLAUDE_DIR/slack-signing-secret" ]]; then
                     scp -q "${SSH_ARGS[@]}" "$CLAUDE_DIR/slack-signing-secret" "$SSH_HOST:~/.claude/" 2>/dev/null && \
                         echo "  ✓ slack-signing-secret synced"

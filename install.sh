@@ -752,77 +752,35 @@ if [[ -d "$SCRIPT_DIR/mcp-server/dist" && -t 0 && "${1:-}" != "--link" ]]; then
             echo ""
         fi
     else
-        # Linux: Only webhook and channel ID (config synced from Mac or use remote-tunnel --setup)
-        if [[ ! -f "$WEBHOOK_FILE" ]]; then
-            print_section "Slack Webhook Setup"
-            echo ""
-            echo -e "  ${DIM}Webhooks enable basic notifications.${NC}"
-            echo -e "  ${DIM}(For button support, run: remote-tunnel --setup)${NC}"
-            echo ""
-            echo -e "  ${BOLD}In your Slack app:${NC}"
-            echo -e "    ${CYAN}1.${NC} Go to ${BOLD}Incoming Webhooks${NC}"
-            echo -e "    ${CYAN}2.${NC} Toggle ${BOLD}Activate Incoming Webhooks${NC} to On"
-            echo -e "    ${CYAN}3.${NC} Click ${BOLD}Add New Webhook to Workspace${NC}"
-            echo -e "    ${CYAN}4.${NC} Select your notification channel → Click ${BOLD}Allow${NC}"
-            echo -e "    ${CYAN}5.${NC} Copy the webhook URL"
-            echo ""
-            echo -ne "  ${YELLOW}?${NC} Paste webhook URL (or Enter to skip): "
-            read -r webhook_url
-
-            if [[ -n "$webhook_url" ]]; then
-                echo "$webhook_url" > "$WEBHOOK_FILE"
-                chmod 600 "$WEBHOOK_FILE"
-                echo_info "Webhook URL saved"
-            else
-                echo -e "  ${DIM}Skipped - set later with: echo 'URL' > ~/.claude/slack-webhook-url${NC}"
-            fi
-            echo ""
+        # Linux: Config is synced from Mac via `claude-slack-notify link --host`
+        # Or user can run `remote-tunnel --setup` for manual configuration
+        print_section "Slack Configuration"
+        echo ""
+        if [[ -f "$WEBHOOK_FILE" ]]; then
+            echo -e "  ${GREEN}✓${NC} Webhook URL configured"
         else
-            echo -e "  ${GREEN}✓${NC} Webhook URL already configured"
-            echo ""
+            echo -e "  ${YELLOW}!${NC} Webhook URL not configured"
         fi
-
-        # Channel ID for thread routing
-        CHANNEL_ID_CONFIGURED=false
         if [[ -f "$SLACK_CONFIG_FILE" ]]; then
             source "$SLACK_CONFIG_FILE"
             if [[ -n "${SLACK_CHANNEL_ID:-}" ]]; then
-                CHANNEL_ID_CONFIGURED=true
-            fi
-        fi
-
-        if [[ "$CHANNEL_ID_CONFIGURED" != "true" ]]; then
-            print_section "Notification Channel"
-            echo ""
-            echo -e "  ${DIM}What channel should notifications go to?${NC}"
-            echo -e "  ${DIM}(Right-click channel → View channel details → scroll to Channel ID)${NC}"
-            echo ""
-            echo -ne "  ${YELLOW}?${NC} Channel ID (e.g., C01234ABCDE): "
-            read -r channel_id
-
-            if [[ -n "$channel_id" ]]; then
-                # Source existing config if present to preserve other values
-                if [[ -f "$SLACK_CONFIG_FILE" ]]; then
-                    source "$SLACK_CONFIG_FILE"
-                fi
-                cat > "$SLACK_CONFIG_FILE" << EOF
-SLACK_APP_ID="${SLACK_APP_ID:-}"
-SLACK_ACCESS_TOKEN="${SLACK_ACCESS_TOKEN:-}"
-SLACK_REFRESH_TOKEN="${SLACK_REFRESH_TOKEN:-}"
-SLACK_TOKEN_EXPIRES="${SLACK_TOKEN_EXPIRES:-}"
-SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN:-}"
-SLACK_CHANNEL_ID="$channel_id"
-EOF
-                chmod 600 "$SLACK_CONFIG_FILE"
-                echo_info "Channel ID saved"
+                echo -e "  ${GREEN}✓${NC} Channel ID configured"
             else
-                echo -e "  ${DIM}Skipped - can set later in ~/.claude/.slack-config${NC}"
+                echo -e "  ${YELLOW}!${NC} Channel ID not configured"
             fi
-            echo ""
+            if [[ -n "${SLACK_APP_ID:-}" ]]; then
+                echo -e "  ${GREEN}✓${NC} Slack app configured"
+            fi
         else
-            echo -e "  ${GREEN}✓${NC} Channel ID already configured"
-            echo ""
+            echo -e "  ${YELLOW}!${NC} Slack config not found"
         fi
+        echo ""
+        echo -e "  ${DIM}Config is synced from Mac when you run:${NC}"
+        echo -e "    ${BOLD}claude-slack-notify link --host user@this-server${NC}"
+        echo ""
+        echo -e "  ${DIM}Or configure manually with:${NC}"
+        echo -e "    ${BOLD}remote-tunnel --setup${NC}"
+        echo ""
     fi
 fi
 

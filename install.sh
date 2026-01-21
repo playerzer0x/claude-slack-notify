@@ -134,21 +134,23 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     echo_info "Removed configuration files"
 
     # Remove tunnel-related files
-    rm -f "$CLAUDE_DIR/.ngrok.log"
-    rm -f "$CLAUDE_DIR/.cloudflared.log"
     rm -f "$CLAUDE_DIR/.tunnel-url"
     rm -f "$CLAUDE_DIR/.tunnel.pid"
+    rm -f "$CLAUDE_DIR/.tunnel.log"
     rm -f "$CLAUDE_DIR/.tunnel-watchdog.pid"
     rm -f "$CLAUDE_DIR/.tunnel-last-activity"
     rm -f "$CLAUDE_DIR/.mac-tunnel-url"
+    rm -f "$CLAUDE_DIR/.localtunnel-subdomain"
+    rm -f "$CLAUDE_DIR/tunnel.log"
     # Remote-tunnel files
     rm -f "$CLAUDE_DIR/.remote-relay.pid"
     rm -f "$CLAUDE_DIR/.remote-relay.port"
     rm -f "$CLAUDE_DIR/.remote-tunnel.pid"
     rm -f "$CLAUDE_DIR/.remote-tunnel-url"
+    rm -f "$CLAUDE_DIR/.remote-tunnel.log"
     rm -f "$CLAUDE_DIR/.remote-tunnel-watchdog.pid"
     rm -f "$CLAUDE_DIR/.relay-last-activity"
-    rm -f "$CLAUDE_DIR/.remote-cloudflared.log"
+    rm -f "$CLAUDE_DIR/.remote-localtunnel-subdomain"
     rm -f "$CLAUDE_DIR/remote-tunnel.log"
     rm -f "$CLAUDE_DIR/remote-relay.log"
     echo_info "Removed tunnel files"
@@ -241,48 +243,36 @@ if ! command -v jq &> /dev/null; then
     fi
 fi
 
-# Check for cloudflared dependency and install if possible (for Slack button support)
-if ! command -v cloudflared &>/dev/null; then
-    echo_info "cloudflared not found - attempting to install..."
-    CLOUDFLARED_INSTALLED=false
+# Check for localtunnel dependency and install if possible (for Slack button support)
+if ! command -v lt &>/dev/null; then
+    echo_info "localtunnel not found - attempting to install..."
+    LT_INSTALLED=false
 
-    if [[ "$(uname)" == "Darwin" ]]; then
-        # macOS - try Homebrew
-        if command -v brew &>/dev/null; then
-            if brew install cloudflared 2>/dev/null; then
-                CLOUDFLARED_INSTALLED=true
-                echo_info "cloudflared installed via Homebrew"
-            fi
+    if command -v bun &>/dev/null; then
+        if bun add -g localtunnel 2>/dev/null; then
+            LT_INSTALLED=true
+            echo_info "localtunnel installed via bun"
         fi
-    elif [[ "$(uname)" == "Linux" ]]; then
-        # Linux - try package manager or direct download
-        if command -v apt-get &>/dev/null; then
-            # Debian/Ubuntu - add Cloudflare repo
-            if curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null 2>&1; then
-                echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' | sudo tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
-                if sudo apt-get update -qq && sudo apt-get install -y cloudflared 2>/dev/null; then
-                    CLOUDFLARED_INSTALLED=true
-                    echo_info "cloudflared installed via apt"
-                fi
+    elif command -v npm &>/dev/null; then
+        if [[ "$(uname)" == "Darwin" ]]; then
+            # macOS - npm install without sudo usually works
+            if npm install -g localtunnel 2>/dev/null; then
+                LT_INSTALLED=true
+                echo_info "localtunnel installed via npm"
             fi
-        elif command -v dnf &>/dev/null; then
-            if sudo dnf install -y cloudflared 2>/dev/null; then
-                CLOUDFLARED_INSTALLED=true
-                echo_info "cloudflared installed via dnf"
-            fi
-        elif command -v yum &>/dev/null; then
-            if sudo yum install -y cloudflared 2>/dev/null; then
-                CLOUDFLARED_INSTALLED=true
-                echo_info "cloudflared installed via yum"
+        else
+            # Linux - may need sudo for global install
+            if sudo npm install -g localtunnel 2>/dev/null; then
+                LT_INSTALLED=true
+                echo_info "localtunnel installed via npm"
             fi
         fi
     fi
 
-    if [[ "$CLOUDFLARED_INSTALLED" != "true" ]]; then
-        echo_warn "Could not auto-install cloudflared. Install manually for Slack button support:"
-        echo_warn "  macOS:  brew install cloudflared"
-        echo_warn "  Linux:  https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
-        echo_warn "  (cloudflared is optional - notifications will still work without buttons)"
+    if [[ "$LT_INSTALLED" != "true" ]]; then
+        echo_warn "Could not auto-install localtunnel. Install manually for Slack button support:"
+        echo_warn "  bun add -g localtunnel"
+        echo_warn "  npm install -g localtunnel"
     fi
 fi
 

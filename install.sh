@@ -254,121 +254,66 @@ echo_info "Installing Claude Slack Notify..."
 
 # Check for jq dependency and install if possible
 if ! command -v jq &> /dev/null; then
-    echo_info "jq not found - attempting to install..."
     JQ_INSTALLED=false
 
     if [[ "$(uname)" == "Darwin" ]]; then
-        # macOS - try Homebrew
-        if command -v brew &>/dev/null; then
-            if brew install jq 2>/dev/null; then
-                JQ_INSTALLED=true
-                echo_info "jq installed via Homebrew"
-            fi
+        if command -v brew &>/dev/null && brew install jq 2>/dev/null; then
+            JQ_INSTALLED=true
         fi
     elif [[ "$(uname)" == "Linux" ]]; then
-        # Linux - try apt, dnf, or yum
         if command -v apt-get &>/dev/null; then
-            if sudo apt-get update -qq && sudo apt-get install -y jq 2>/dev/null; then
-                JQ_INSTALLED=true
-                echo_info "jq installed via apt"
-            fi
+            sudo apt-get update -qq && sudo apt-get install -y jq 2>/dev/null && JQ_INSTALLED=true
         elif command -v dnf &>/dev/null; then
-            if sudo dnf install -y jq 2>/dev/null; then
-                JQ_INSTALLED=true
-                echo_info "jq installed via dnf"
-            fi
+            sudo dnf install -y jq 2>/dev/null && JQ_INSTALLED=true
         elif command -v yum &>/dev/null; then
-            if sudo yum install -y jq 2>/dev/null; then
-                JQ_INSTALLED=true
-                echo_info "jq installed via yum"
-            fi
+            sudo yum install -y jq 2>/dev/null && JQ_INSTALLED=true
         fi
     fi
 
-    if [[ "$JQ_INSTALLED" != "true" ]]; then
-        echo_warn "Could not auto-install jq. Install manually for auto-configuration:"
-        echo_warn "  macOS:  brew install jq"
-        echo_warn "  Ubuntu: sudo apt install jq"
-        echo_warn "  Fedora: sudo dnf install jq"
+    if [[ "$JQ_INSTALLED" == "true" ]]; then
+        echo_info "Installed jq"
+    else
+        echo_warn "jq not found. Install manually: brew install jq (macOS) or apt install jq (Linux)"
     fi
 fi
 
 # Check for localtunnel dependency and install if possible (for Slack button support)
 if ! command -v lt &>/dev/null; then
-    echo_info "localtunnel not found - attempting to install..."
     LT_INSTALLED=false
 
     if command -v bun &>/dev/null; then
-        if bun add -g localtunnel 2>/dev/null; then
-            LT_INSTALLED=true
-            echo_info "localtunnel installed via bun"
-        fi
+        bun add -g localtunnel 2>/dev/null && LT_INSTALLED=true
     elif command -v npm &>/dev/null; then
         if [[ "$(uname)" == "Darwin" ]]; then
-            # macOS - npm install without sudo usually works
-            if npm install -g localtunnel 2>/dev/null; then
-                LT_INSTALLED=true
-                echo_info "localtunnel installed via npm"
-            fi
+            npm install -g localtunnel 2>/dev/null && LT_INSTALLED=true
         else
-            # Linux - may need sudo for global install
-            if sudo npm install -g localtunnel 2>/dev/null; then
-                LT_INSTALLED=true
-                echo_info "localtunnel installed via npm"
-            fi
+            sudo npm install -g localtunnel 2>/dev/null && LT_INSTALLED=true
         fi
     fi
 
-    if [[ "$LT_INSTALLED" != "true" ]]; then
-        echo_warn "Could not auto-install localtunnel. Install manually for Slack button support:"
-        echo_warn "  bun add -g localtunnel"
-        echo_warn "  npm install -g localtunnel"
+    if [[ "$LT_INSTALLED" == "true" ]]; then
+        echo_info "Installed localtunnel"
+    else
+        echo_warn "localtunnel not found. Install manually: bun add -g localtunnel"
     fi
 fi
 
 # Check Tailscale status and provide setup info
-print_section "Tunnel Backend Information"
-echo ""
-echo -e "  ${BOLD}Tailscale Funnel (Recommended)${NC} - FREE"
-echo -e "  ${DIM}Stable URL, no third-party service, works behind firewalls${NC}"
-echo -e "  ${DIM}Included in Tailscale Personal plan (free, up to 3 users)${NC}"
-echo ""
+print_section "Tunnel Backends"
 
 if command -v tailscale &>/dev/null; then
     if tailscale status &>/dev/null 2>&1; then
         TS_DNS=$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
-        if [[ -n "$TS_DNS" ]]; then
-            echo -e "  ${GREEN}✓${NC} Tailscale connected: ${BOLD}$TS_DNS${NC}"
-        else
-            echo -e "  ${GREEN}✓${NC} Tailscale connected"
-        fi
-
-        if tailscale funnel status --json 2>/dev/null | jq -e '.Web' &>/dev/null; then
-            echo -e "  ${GREEN}✓${NC} Tailscale Funnel available"
-        else
-            echo -e "  ${YELLOW}!${NC} Tailscale Funnel not enabled (auto-enabled on first tunnel run)"
-        fi
+        echo -e "  ${GREEN}✓${NC} Tailscale: ${BOLD}$TS_DNS${NC}"
     else
-        echo -e "  ${YELLOW}!${NC} Tailscale installed but not connected"
-        echo -e "    ${DIM}Run: ${BOLD}tailscale up${NC}"
+        echo -e "  ${YELLOW}!${NC} Tailscale installed but not connected (run: tailscale up)"
     fi
 else
-    echo -e "  ${YELLOW}!${NC} Tailscale not installed"
-    echo ""
-    echo -e "  ${DIM}To install Tailscale:${NC}"
-    if [[ "$(uname)" == "Darwin" ]]; then
-        echo -e "    ${CYAN}brew install tailscale${NC}"
-    else
-        echo -e "    ${CYAN}curl -fsSL https://tailscale.com/install.sh | sh${NC}"
-        echo -e "    ${CYAN}sudo tailscale up${NC}"
-    fi
+    echo -e "  ${YELLOW}!${NC} Tailscale not installed ${DIM}(recommended: brew install tailscale)${NC}"
 fi
 
-echo ""
-echo -e "  ${BOLD}Localtunnel (Fallback)${NC}"
-echo -e "  ${DIM}Free but may have subdomain conflicts${NC}"
 if command -v lt &>/dev/null; then
-    echo -e "  ${GREEN}✓${NC} Localtunnel installed"
+    echo -e "  ${GREEN}✓${NC} Localtunnel available"
 else
     echo -e "  ${YELLOW}!${NC} Localtunnel not installed"
 fi
@@ -379,82 +324,45 @@ mkdir -p "$BIN_DIR" "$COMMANDS_DIR" "$APP_DIR" "$HOME/Library/LaunchAgents"
 
 # Install scripts (copy for portability, especially in Docker containers)
 # Use --link flag for development to create symlinks instead
+SCRIPTS="claude-slack-notify slack-notify-start slack-notify-check get-session-id focus-helper mcp-server local-tunnel remote-tunnel"
 if [[ "${1:-}" == "--link" ]]; then
-    ln -sf "$SCRIPT_DIR/bin/claude-slack-notify" "$BIN_DIR/"
-    ln -sf "$SCRIPT_DIR/bin/slack-notify-start" "$BIN_DIR/"
-    ln -sf "$SCRIPT_DIR/bin/slack-notify-check" "$BIN_DIR/"
-    ln -sf "$SCRIPT_DIR/bin/get-session-id" "$BIN_DIR/"
-    ln -sf "$SCRIPT_DIR/bin/focus-helper" "$BIN_DIR/"
-    ln -sf "$SCRIPT_DIR/bin/mcp-server" "$BIN_DIR/"
-    ln -sf "$SCRIPT_DIR/bin/local-tunnel" "$BIN_DIR/"
-    ln -sf "$SCRIPT_DIR/bin/remote-tunnel" "$BIN_DIR/"
-    echo_info "Installed scripts to $BIN_DIR/ (symlinked to repo)"
+    for script in $SCRIPTS; do ln -sf "$SCRIPT_DIR/bin/$script" "$BIN_DIR/"; done
+    echo_info "Scripts symlinked to $BIN_DIR/"
 else
-    # Remove existing files/symlinks first, then copy fresh
-    rm -f "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/get-session-id" "$BIN_DIR/focus-helper" "$BIN_DIR/mcp-server" "$BIN_DIR/local-tunnel" "$BIN_DIR/remote-tunnel"
-    cp "$SCRIPT_DIR/bin/claude-slack-notify" "$BIN_DIR/"
-    cp "$SCRIPT_DIR/bin/slack-notify-start" "$BIN_DIR/"
-    cp "$SCRIPT_DIR/bin/slack-notify-check" "$BIN_DIR/"
-    cp "$SCRIPT_DIR/bin/get-session-id" "$BIN_DIR/"
-    cp "$SCRIPT_DIR/bin/focus-helper" "$BIN_DIR/"
-    cp "$SCRIPT_DIR/bin/mcp-server" "$BIN_DIR/"
-    cp "$SCRIPT_DIR/bin/local-tunnel" "$BIN_DIR/"
-    cp "$SCRIPT_DIR/bin/remote-tunnel" "$BIN_DIR/"
-    chmod +x "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/get-session-id" "$BIN_DIR/focus-helper" "$BIN_DIR/mcp-server" "$BIN_DIR/local-tunnel" "$BIN_DIR/remote-tunnel"
-    echo_info "Installed scripts to $BIN_DIR/"
+    for script in $SCRIPTS; do rm -f "$BIN_DIR/$script"; cp "$SCRIPT_DIR/bin/$script" "$BIN_DIR/"; chmod +x "$BIN_DIR/$script"; done
+    echo_info "Scripts installed to $BIN_DIR/"
 fi
 
-# Install Claude command
 cp "$SCRIPT_DIR/commands/slack-notify.md" "$COMMANDS_DIR/"
-echo_info "Installed Claude command to $COMMANDS_DIR/"
 
 # Build MCP server (optional - for Slack button actions)
 MCP_DIST_DIR="$CLAUDE_DIR/mcp-server-dist"
 if [[ -d "$SCRIPT_DIR/mcp-server" ]]; then
-    echo_info "Building MCP server..."
     cd "$SCRIPT_DIR/mcp-server"
     MCP_BUILD_SUCCESS=false
     if command -v bun &> /dev/null; then
-        bun install --silent
-        bun run build
-        MCP_BUILD_SUCCESS=true
-        echo_info "MCP server built successfully"
+        bun install --silent && bun run build && MCP_BUILD_SUCCESS=true
     elif command -v npm &> /dev/null; then
-        npm install --silent
-        npm run build
-        MCP_BUILD_SUCCESS=true
-        echo_info "MCP server built successfully"
+        npm install --silent && npm run build && MCP_BUILD_SUCCESS=true
     else
-        echo_warn "Neither bun nor npm found. MCP server not built."
-        echo_warn "To build later: cd $SCRIPT_DIR/mcp-server && bun install && bun run build"
+        echo_warn "bun/npm not found - MCP server not built"
     fi
 
-    # Copy MCP server files to ~/.claude/mcp-server-dist/ (unless using --link)
-    if [[ "$MCP_BUILD_SUCCESS" == "true" && "${1:-}" != "--link" ]]; then
-        rm -rf "$MCP_DIST_DIR"
-        mkdir -p "$MCP_DIST_DIR"
-        cp -r "$SCRIPT_DIR/mcp-server/dist" "$MCP_DIST_DIR/"
-        cp -r "$SCRIPT_DIR/mcp-server/node_modules" "$MCP_DIST_DIR/"
-        cp "$SCRIPT_DIR/mcp-server/package.json" "$MCP_DIST_DIR/"
-        echo_info "MCP server installed to $MCP_DIST_DIR"
+    if [[ "$MCP_BUILD_SUCCESS" == "true" ]]; then
+        echo_info "MCP server built"
+        if [[ "${1:-}" != "--link" ]]; then
+            rm -rf "$MCP_DIST_DIR"
+            mkdir -p "$MCP_DIST_DIR"
+            cp -r "$SCRIPT_DIR/mcp-server/dist" "$MCP_DIST_DIR/"
+            cp -r "$SCRIPT_DIR/mcp-server/node_modules" "$MCP_DIST_DIR/"
+            cp "$SCRIPT_DIR/mcp-server/package.json" "$MCP_DIST_DIR/"
+        fi
     fi
-
     cd "$SCRIPT_DIR"
 fi
 
 # macOS-specific: Install ClaudeFocus.app and LaunchAgent
 if [[ "$(uname)" == "Darwin" ]]; then
-    print_section "macOS Focus Button Setup"
-    echo ""
-    echo -e "  ${DIM}Installing ClaudeFocus.app to enable the 'Focus Terminal' button in Slack.${NC}"
-    echo -e "  ${DIM}This app handles claude-focus:// URLs to switch to your terminal.${NC}"
-    echo ""
-    echo -e "  ${YELLOW}Note:${NC} macOS may prompt you to grant permissions:"
-    echo -e "    ${CYAN}•${NC} ${BOLD}Accessibility${NC} - to focus terminal windows"
-    echo -e "    ${CYAN}•${NC} ${BOLD}Automation${NC} - to control iTerm2/Terminal.app"
-    echo ""
-    echo -e "  ${DIM}These are safe to approve - the app only switches window focus.${NC}"
-    echo ""
 
     # Create LaunchAgent that watches for focus requests
     # Uses ~/.claude/focus-request (user-owned, not world-writable /tmp)
@@ -482,12 +390,8 @@ EOF
     # Load the LaunchAgent
     launchctl unload "$LAUNCHAGENT_PATH" 2>/dev/null || true
     launchctl load "$LAUNCHAGENT_PATH"
-    echo_info "LaunchAgent installed and loaded"
 
     # Create minimal AppleScript app that writes URL to file
-    # Uses ~/.claude/focus-request (user-owned, not world-writable /tmp)
-    # File is created with 0600 permissions for security
-    # Note: Direct invocation doesn't work due to Apple event permissions
     SCRIPT_SOURCE='on open location theURL
     do shell script "umask 077 && echo " & quoted form of theURL & " > ~/.claude/focus-request"
 end open location'
@@ -511,29 +415,9 @@ end open location'
 
     # Register with Launch Services
     /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_PATH"
-    echo_info "ClaudeFocus.app installed to $APP_PATH"
+    echo_info "ClaudeFocus.app installed"
 else
-    echo_warn "Not macOS - skipping ClaudeFocus.app installation"
-    echo_warn "Slack notifications will work but without clickable focus buttons"
-
-    # Linux-specific: Install remote-tunnel for Slack button support
-    print_section "Linux Remote Relay Setup"
-    echo ""
-    echo -e "  ${DIM}For Slack buttons to work when your Mac is closed,${NC}"
-    echo -e "  ${DIM}run remote-tunnel on this Linux server.${NC}"
-    echo ""
-    echo -e "  ${BOLD}Quick start:${NC}"
-    echo -e "    ${CYAN}1.${NC} Start tunnel:"
-    echo -e "       ${BOLD}remote-tunnel${NC}"
-    echo -e "    ${CYAN}2.${NC} In Claude:"
-    echo -e "       ${BOLD}/slack-notify${NC}"
-    echo ""
-    echo -e "  ${DIM}Note: Slack config is auto-synced when you use${NC}"
-    echo -e "  ${DIM}${BOLD}claude-slack-notify link --host${NC}${DIM} from your Mac.${NC}"
-    echo ""
-    echo -e "  ${DIM}This enables 1/2/Continue/Push buttons from your phone.${NC}"
-    echo -e "  ${DIM}Focus button requires Mac to be open (use local-tunnel on Mac).${NC}"
-    echo ""
+    echo_info "Linux detected - run ${BOLD}remote-tunnel${NC} for Slack button support"
 fi
 
 # Add ~/.claude/bin to PATH if not already there
@@ -572,33 +456,18 @@ Continue|continue
 Push|push"
 
 configure_buttons() {
-    print_section "Slack Button Configuration"
-    echo ""
-    echo -e "  ${DIM}Configure the action buttons that appear in Slack notifications.${NC}"
-    echo -e "  ${DIM}The Focus button is always included as the primary button.${NC}"
-    echo ""
+    print_section "Slack Buttons"
 
     # Show current/default config
     if [[ -f "$BUTTON_CONFIG" ]]; then
-        echo -e "  ${BOLD}Current buttons:${NC}"
-        local i=1
-        while IFS='|' read -r label action || [[ -n "$label" ]]; do
-            [[ -z "$label" || "$label" == \#* ]] && continue
-            echo -e "    ${CYAN}$i.${NC} ${BOLD}$label${NC} ${DIM}(sends: $action)${NC}"
-            ((i++))
-        done < "$BUTTON_CONFIG"
+        echo -e "  Current: $(paste -sd', ' "$BUTTON_CONFIG" | cut -d'|' -f1 | tr '\n' ' ')"
     else
-        echo -e "  ${BOLD}Default buttons:${NC}"
-        echo -e "    ${CYAN}1.${NC} ${BOLD}1${NC} ${DIM}(sends: 1)${NC}"
-        echo -e "    ${CYAN}2.${NC} ${BOLD}2${NC} ${DIM}(sends: 2)${NC}"
-        echo -e "    ${CYAN}3.${NC} ${BOLD}Continue${NC} ${DIM}(sends: continue)${NC}"
-        echo -e "    ${CYAN}4.${NC} ${BOLD}Push${NC} ${DIM}(sends: push)${NC}"
+        echo -e "  Default: 1, 2, Continue, Push"
     fi
-    echo ""
 
     # Interactive mode only if not using --link or --uninstall and terminal is interactive
     if [[ -t 0 && "${1:-}" != "--link" ]]; then
-        echo -e "  ${YELLOW}?${NC} Configure buttons? [y/N] "
+        echo -ne "  ${YELLOW}?${NC} Configure buttons? [y/N] "
         read -r -n 1 response
         echo ""
 
@@ -611,50 +480,36 @@ configure_buttons() {
     # Use defaults if no config exists
     if [[ ! -f "$BUTTON_CONFIG" ]]; then
         echo "$DEFAULT_BUTTONS" > "$BUTTON_CONFIG"
-        echo_info "Using default button configuration"
     fi
 }
 
 configure_buttons_interactive() {
     echo ""
-    print_section "Button Editor"
-    echo ""
-    echo -e "  ${DIM}Format: LABEL|ACTION${NC}"
-    echo -e "  ${DIM}Example: Continue|continue (button says 'Continue', sends 'continue')${NC}"
-    echo -e "  ${DIM}Slack allows up to 4 action buttons (plus Focus = 5 total).${NC}"
+    echo -e "  Format: ${BOLD}LABEL|ACTION${NC} (max 4 buttons, Enter to finish)"
     echo ""
 
     local buttons=()
     local count=0
-    local max_buttons=4
 
-    while [[ $count -lt $max_buttons ]]; do
-        echo -e "  ${CYAN}Button $((count + 1))${NC} (or press Enter to finish):"
-        echo -ne "    Label: "
+    while [[ $count -lt 4 ]]; do
+        echo -ne "  Button $((count + 1)) label: "
         read -r label
-
         [[ -z "$label" ]] && break
 
-        echo -ne "    Action to send: "
+        echo -ne "  Action to send [${label}]: "
         read -r action
-
-        if [[ -z "$action" ]]; then
-            action="$label"
-        fi
+        [[ -z "$action" ]] && action="$label"
 
         buttons+=("$label|$action")
         ((count++))
-        echo -e "    ${GREEN}✓${NC} Added: ${BOLD}$label${NC} ${DIM}→ $action${NC}"
-        echo ""
     done
 
     if [[ ${#buttons[@]} -eq 0 ]]; then
-        echo -e "  ${DIM}No buttons configured, using defaults${NC}"
         echo "$DEFAULT_BUTTONS" > "$BUTTON_CONFIG"
+        echo_info "Using default buttons"
     else
         printf '%s\n' "${buttons[@]}" > "$BUTTON_CONFIG"
-        echo ""
-        echo_info "Saved ${#buttons[@]} button(s) to $BUTTON_CONFIG"
+        echo_info "Saved ${#buttons[@]} button(s)"
     fi
 }
 
@@ -712,10 +567,6 @@ if [[ -f "$SETTINGS_FILE" ]]; then
 
         # Add hooks if not already configured
         if [[ "$HOOKS_CONFIGURED" != "true" ]]; then
-            print_section "Claude Hooks"
-            echo -e "  ${DIM}Adding notification hooks to $SETTINGS_FILE${NC}"
-            echo ""
-
             # Deep merge: combine hooks arrays instead of replacing
             MERGED=$(jq -s '
               def merge_hooks:
@@ -734,19 +585,14 @@ if [[ -f "$SETTINGS_FILE" ]]; then
 
             if [[ -n "$MERGED" ]] && echo "$MERGED" | jq . > /dev/null 2>&1; then
                 echo "$MERGED" > "$SETTINGS_FILE"
-                echo_info "Hooks added to settings.json (backup at settings.json.backup)"
+                echo_info "Hooks added to settings.json"
             else
-                echo_warn "Failed to merge hooks - add manually (see below)"
+                echo_warn "Failed to merge hooks - add manually"
             fi
-            echo ""
         fi
 
         # Add permissions if not already configured
         if [[ "$PERMS_CONFIGURED" != "true" ]]; then
-            print_section "Bash Permissions"
-            echo -e "  ${DIM}Adding command permissions to $SETTINGS_FILE${NC}"
-            echo ""
-
             # Merge permissions: add our permissions to existing allow list
             MERGED=$(jq --argjson perms "$SLACK_PERMISSIONS" '
               .permissions.allow = ((.permissions.allow // []) + $perms | unique)
@@ -756,46 +602,14 @@ if [[ -f "$SETTINGS_FILE" ]]; then
                 echo "$MERGED" > "$SETTINGS_FILE"
                 echo_info "Bash permissions added to settings.json"
             else
-                echo_warn "Failed to add permissions - add manually:"
-                echo_warn '  "permissions": {"allow": ["Bash(SESSION_ID=:*)"]}'
+                echo_warn "Failed to add permissions - add manually"
             fi
-            echo ""
         fi
     else
         # No jq - show manual instructions
-        if [[ "$HOOKS_CONFIGURED" != "true" ]]; then
-            print_section "Claude Hooks"
-            echo -e "  ${DIM}Add these hooks to $SETTINGS_FILE for automatic notifications:${NC}"
-            echo ""
-            echo -e "  ${CYAN}\"hooks\": {"
-            echo -e "    \"UserPromptSubmit\": ["
-            echo -e "      {\"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-start\", \"timeout\": 5}]}"
-            echo -e "    ],"
-            echo -e "    \"Stop\": ["
-            echo -e "      {\"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-check\", \"timeout\": 10}]}"
-            echo -e "    ],"
-            echo -e "    \"Notification\": ["
-            echo -e "      {\"matcher\": \"idle_prompt\", \"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-check\", \"timeout\": 10}]},"
-            echo -e "      {\"matcher\": \"elicitation_dialog\", \"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-check\", \"timeout\": 10}]},"
-            echo -e "      {\"matcher\": \"permission_prompt\", \"hooks\": [{\"type\": \"command\", \"command\": \"\$HOME/.claude/bin/slack-notify-check\", \"timeout\": 10}]}"
-            echo -e "    ]"
-            echo -e "  }${NC}"
-            echo ""
-        fi
-        if [[ "$PERMS_CONFIGURED" != "true" ]]; then
-            print_section "Bash Permissions"
-            echo -e "  ${DIM}Add this permission to allow /slack-notify to run without prompts:${NC}"
-            echo ""
-            echo -e "  ${CYAN}\"permissions\": {"
-            echo -e "    \"allow\": ["
-            echo -e "      \"Bash(SESSION_ID=:*)\""
-            echo -e "    ]"
-            echo -e "  }${NC}"
-            echo ""
-        fi
         if [[ "$HOOKS_CONFIGURED" != "true" || "$PERMS_CONFIGURED" != "true" ]]; then
-            echo -e "  ${DIM}(Install jq for automatic configuration: brew install jq)${NC}"
-            echo ""
+            echo_warn "jq not found - manual settings.json configuration required"
+            echo_warn "Install jq for automatic configuration: brew install jq"
         fi
     fi
 fi
@@ -807,68 +621,22 @@ SLACK_CONFIG_FILE="$CLAUDE_DIR/.slack-config"
 WEBHOOK_FILE="$CLAUDE_DIR/slack-webhook-url"
 
 if [[ -d "$SCRIPT_DIR/mcp-server/dist" && -t 0 && "${1:-}" != "--link" ]]; then
-    # =============================================================================
-    # Slack Setup (platform-specific)
-    # =============================================================================
     if [[ "$(uname)" == "Darwin" ]]; then
         # macOS: Full setup via local-tunnel (handles app, webhook, channel)
         if [[ ! -f "$SLACK_CONFIG_FILE" ]]; then
-            print_section "Slack App Setup"
             echo ""
-            echo -e "  ${DIM}Configure your Slack app for button actions and notifications.${NC}"
-            echo -e "  ${DIM}This enables responding to Claude directly from Slack.${NC}"
-            echo ""
-            echo -ne "  ${YELLOW}?${NC} Set up Slack app now? [Y/n] "
+            echo -ne "${YELLOW}?${NC} Set up Slack app now? [Y/n] "
             read -r response
-            echo ""
 
             if [[ ! "$response" =~ ^[Nn]$ ]]; then
                 "$BIN_DIR/local-tunnel" --setup
-                echo ""
             fi
-        else
-            echo ""
-            echo -e "  ${GREEN}✓${NC} Slack app already configured"
-            if [[ -f "$WEBHOOK_FILE" ]]; then
-                echo -e "  ${GREEN}✓${NC} Webhook URL configured"
-            fi
-            # Check channel ID
-            source "$SLACK_CONFIG_FILE"
-            if [[ -n "${SLACK_CHANNEL_ID:-}" ]]; then
-                echo -e "  ${GREEN}✓${NC} Channel ID configured"
-            fi
-            echo ""
         fi
     else
         # Linux: Config is synced from Mac via `claude-slack-notify link --host`
-        # Or user can run `remote-tunnel --setup` for manual configuration
-        print_section "Slack Configuration"
-        echo ""
-        if [[ -f "$WEBHOOK_FILE" ]]; then
-            echo -e "  ${GREEN}✓${NC} Webhook URL configured"
-        else
-            echo -e "  ${YELLOW}!${NC} Webhook URL not configured"
+        if [[ ! -f "$SLACK_CONFIG_FILE" ]]; then
+            echo_info "Slack config synced from Mac via: claude-slack-notify link --host user@this-server"
         fi
-        if [[ -f "$SLACK_CONFIG_FILE" ]]; then
-            source "$SLACK_CONFIG_FILE"
-            if [[ -n "${SLACK_CHANNEL_ID:-}" ]]; then
-                echo -e "  ${GREEN}✓${NC} Channel ID configured"
-            else
-                echo -e "  ${YELLOW}!${NC} Channel ID not configured"
-            fi
-            if [[ -n "${SLACK_APP_ID:-}" ]]; then
-                echo -e "  ${GREEN}✓${NC} Slack app configured"
-            fi
-        else
-            echo -e "  ${YELLOW}!${NC} Slack config not found"
-        fi
-        echo ""
-        echo -e "  ${DIM}Config is synced from Mac when you run:${NC}"
-        echo -e "    ${BOLD}claude-slack-notify link --host user@this-server${NC}"
-        echo ""
-        echo -e "  ${DIM}Or configure manually with:${NC}"
-        echo -e "    ${BOLD}remote-tunnel --setup${NC}"
-        echo ""
     fi
 fi
 
@@ -885,44 +653,26 @@ fi
 # =============================================================================
 # Auto-configure MCP Server in settings.json
 # =============================================================================
-if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
+if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]] && command -v jq &> /dev/null; then
     MCP_CONFIGURED=false
 
     if [[ -f "$SETTINGS_FILE" ]]; then
         if jq -e '.mcpServers["slack-notify"]' "$SETTINGS_FILE" &>/dev/null 2>&1; then
             MCP_CONFIGURED=true
-        elif command -v jq &> /dev/null; then
-            print_section "MCP Server Configuration"
-            echo -e "  ${DIM}Adding MCP server to settings.json for Slack button actions...${NC}"
-            echo ""
-
-            if [[ ! -f "$SETTINGS_FILE.backup" ]]; then
-                cp "$SETTINGS_FILE" "$SETTINGS_FILE.backup"
-            fi
-
+        else
+            [[ ! -f "$SETTINGS_FILE.backup" ]] && cp "$SETTINGS_FILE" "$SETTINGS_FILE.backup"
             MCP_CONFIG="{\"mcpServers\": {\"slack-notify\": {\"type\": \"stdio\", \"command\": \"$HOME/.claude/bin/mcp-server\"}}}"
             MERGED=$(jq ". * $MCP_CONFIG" "$SETTINGS_FILE" 2>/dev/null)
-
             if [[ -n "$MERGED" ]] && echo "$MERGED" | jq . > /dev/null 2>&1; then
                 echo "$MERGED" > "$SETTINGS_FILE"
                 echo_info "MCP server added to settings.json"
                 MCP_CONFIGURED=true
-            else
-                echo_warn "Failed to add MCP config"
             fi
-            echo ""
         fi
     else
-        if command -v jq &> /dev/null; then
-            print_section "MCP Server Configuration"
-            echo -e "  ${DIM}Creating settings.json with MCP server config...${NC}"
-            echo ""
-
-            echo "{\"mcpServers\": {\"slack-notify\": {\"type\": \"stdio\", \"command\": \"$HOME/.claude/bin/mcp-server\"}}}" | jq . > "$SETTINGS_FILE"
-            echo_info "Created settings.json with MCP server config"
-            MCP_CONFIGURED=true
-            echo ""
-        fi
+        echo "{\"mcpServers\": {\"slack-notify\": {\"type\": \"stdio\", \"command\": \"$HOME/.claude/bin/mcp-server\"}}}" | jq . > "$SETTINGS_FILE"
+        echo_info "Created settings.json with MCP server"
+        MCP_CONFIGURED=true
     fi
 fi
 
@@ -934,40 +684,13 @@ echo "$SCRIPT_DIR" > "$CLAUDE_DIR/.repo-path"
 # =============================================================================
 print_header "Installation Complete" 50
 
-echo -e "  ${GREEN}✓${NC} Scripts installed to ${BOLD}~/.claude/bin/${NC}"
-if [[ "$(uname)" == "Darwin" ]]; then
-    echo -e "  ${GREEN}✓${NC} ClaudeFocus.app installed"
-    echo -e "  ${GREEN}✓${NC} LaunchAgent loaded"
-fi
-echo -e "  ${GREEN}✓${NC} Button config at ${BOLD}~/.claude/button-config${NC}"
-if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
-    echo -e "  ${GREEN}✓${NC} MCP server built"
-fi
-if [[ -f "$SLACK_CONFIG_FILE" ]]; then
-    echo -e "  ${GREEN}✓${NC} Slack app configured"
-fi
-if [[ -f "$WEBHOOK_FILE" ]]; then
-    echo -e "  ${GREEN}✓${NC} Webhook configured"
-fi
+echo -e "  ${GREEN}✓${NC} Scripts: ${BOLD}~/.claude/bin/${NC}"
+[[ "$(uname)" == "Darwin" ]] && echo -e "  ${GREEN}✓${NC} ClaudeFocus.app + LaunchAgent"
+[[ -d "$SCRIPT_DIR/mcp-server/dist" ]] && echo -e "  ${GREEN}✓${NC} MCP server"
+[[ -f "$SLACK_CONFIG_FILE" ]] && echo -e "  ${GREEN}✓${NC} Slack configured"
 echo ""
 
-print_section "Next Steps"
-echo ""
-echo -e "  ${BOLD}Start the tunnel:${NC}"
-echo -e "    ${CYAN}local-tunnel${NC}                    ${DIM}# Interactive (first time)${NC}"
-echo -e "    ${CYAN}local-tunnel --background${NC}       ${DIM}# Background mode${NC}"
-echo ""
-echo -e "  ${DIM}Uses stable URLs that don't change between restarts.${NC}"
-echo -e "  ${DIM}Prompts to configure subdomain on first run.${NC}"
-echo ""
-if [[ "$(uname)" == "Linux" ]]; then
-    echo -e "  ${BOLD}Remote server (when Mac is closed):${NC}"
-    echo -e "    ${CYAN}remote-tunnel${NC}                   ${DIM}# Start on Linux server${NC}"
-    echo ""
-fi
-echo -e "  ${BOLD}In Claude:${NC}"
-echo -e "    ${CYAN}/slack-notify${NC}                   ${DIM}# Register this session${NC}"
-echo ""
-echo -e "  ${DIM}The Focus button will switch to the correct terminal tab.${NC}"
-echo -e "  ${DIM}Run ${BOLD}./install.sh --configure${NC}${DIM} to change button layout.${NC}"
+echo -e "${BOLD}Next Steps${NC}"
+echo -e "  1. Start tunnel:  ${CYAN}local-tunnel${NC}"
+echo -e "  2. In Claude:     ${CYAN}/slack-notify${NC}"
 echo ""

@@ -216,20 +216,15 @@ remote-tunnel --use-localtunnel  # Force Localtunnel
 > Last updated: 2026-01-21
 
 ### Recent Changes
-- **New `/slack-notify` subcommands**: Added `local`, `remote`, and `clean` commands to simplify workflow:
-  - `/slack-notify local` (macOS): Auto-starts local-tunnel if needed, then registers session
-  - `/slack-notify remote` (Linux): Auto-starts remote-tunnel if needed, then registers session
-  - `/slack-notify clean`: Kills stale `claude-*` tmux sessions older than 1 day (skips attached)
-- **Tunnel status helper functions**: New `check_local_tunnel_status()`, `check_remote_tunnel_status()`, and `wait_for_tunnel()` functions for robust tunnel detection
-- **Tailscale section in install.sh**: Shows Tailscale Funnel status and installation instructions during install
-- **Updated documentation**: README.md now includes Tailscale setup guide, command table, and troubleshooting section
+- **Simplified setup output**: Streamlined `install.sh` and `local-tunnel --setup` output to reduce verbosity while keeping essential setup instructions
+- **`/slack-notify stop`**: New subcommand to unregister session and stop tunnel
+- **`update` command**: Quick script update from repo via `claude-slack-notify update`
 
 ### Previous Changes
+- `/slack-notify local|remote|clean` subcommands for simplified workflow
+- Tunnel status helper functions for robust detection
 - Remote-only tmux command support in `remote-relay.ts`
-- URL format support for `linux-tmux` and `tmux` schemes
-- Single get-session-id call for consistent session registration
 - Auto-enable Tailscale Funnel with API key prompt
-- Stale session cleanup on registration
 - Tailscale Funnel as default tunnel backend
 
 ### Runtime Files Added

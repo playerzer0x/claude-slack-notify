@@ -205,12 +205,8 @@ load_tailscale_api_key() {
 # Prompt user to add Tailscale API key to .env
 prompt_tailscale_api_key() {
     echo ""
-    echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC}  ${BOLD}Tailscale Funnel Setup Required${NC}                           ${CYAN}│${NC}"
-    echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
-    echo ""
-    echo -e "  Funnel needs to be enabled in your Tailscale ACL policy."
-    echo -e "  We can do this automatically with an API key."
+    echo -e "${BOLD}Tailscale Funnel Setup${NC}"
+    echo -e "  Funnel needs an API key to auto-enable."
     echo ""
     echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://login.tailscale.com/admin/settings/keys${NC}"
     echo -e "  ${CYAN}2.${NC} Click ${BOLD}Generate API key${NC}"
@@ -224,29 +220,27 @@ prompt_tailscale_api_key() {
         xdg-open "https://login.tailscale.com/admin/settings/keys" 2>/dev/null || true
     fi
 
-    echo -ne "  ${YELLOW}?${NC} Paste your API key: "
+    echo -ne "  ${YELLOW}?${NC} API key: "
     read -r TAILSCALE_API_KEY
 
     if [[ -z "$TAILSCALE_API_KEY" ]]; then
-        echo_error "API key is required to enable Funnel"
+        echo_error "API key is required"
         return 1
     fi
 
-    # Validate key format
     if [[ ! "$TAILSCALE_API_KEY" =~ ^tskey-api- ]]; then
-        echo_error "Invalid API key format. Should start with 'tskey-api-'"
+        echo_error "Invalid format - should start with 'tskey-api-'"
         return 1
     fi
 
     # Save to .env file
     if [[ -f "$ENV_FILE" ]]; then
-        # Remove existing TAILSCALE_API_KEY line if present
         grep -v '^TAILSCALE_API_KEY=' "$ENV_FILE" > "$ENV_FILE.tmp" 2>/dev/null || true
         mv "$ENV_FILE.tmp" "$ENV_FILE"
     fi
     echo "TAILSCALE_API_KEY=$TAILSCALE_API_KEY" >> "$ENV_FILE"
     chmod 600 "$ENV_FILE"
-    echo_info "API key saved to $ENV_FILE"
+    echo_info "API key saved"
     return 0
 }
 
@@ -881,40 +875,21 @@ start_tunnel_and_get_url() {
 cmd_setup() {
     echo ""
     echo -e "${BOLD}Slack Tunnel Setup${NC}"
-    echo -e "${DIM}Configure automatic Request URL updates${NC}"
     echo ""
 
     # Check dependencies
     if ! command -v jq &>/dev/null; then
-        echo_error "jq is required but not installed."
-        echo "  Install with: brew install jq (macOS) or apt install jq (Linux)"
+        echo_error "jq required. Install: brew install jq (macOS) or apt install jq (Linux)"
         exit 1
     fi
 
-    if ! command -v lt &>/dev/null; then
-        echo_error "Localtunnel is required but not installed."
-        echo "  Install with:"
-        echo "    bun add -g localtunnel"
-        echo "    npm install -g localtunnel"
-        exit 1
-    fi
-
-    echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC}  ${BOLD}Step 1: Generate a Configuration Token${NC}                     ${CYAN}│${NC}"
-    echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
-    echo ""
+    echo -e "${CYAN}Step 1: Configuration Token${NC}"
     echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps${NC}"
-    echo -e "  ${CYAN}2.${NC} Scroll to the ${BOLD}bottom${NC} of the page (below your apps list)"
-    echo -e "  ${CYAN}3.${NC} Find ${BOLD}\"Your App Configuration Tokens\"${NC} section"
-    echo -e "  ${CYAN}4.${NC} Click ${BOLD}\"Generate Token\"${NC}"
-    echo -e "  ${CYAN}5.${NC} Select your ${BOLD}workspace${NC} from the dropdown"
-    echo -e "  ${CYAN}6.${NC} Click ${BOLD}\"Generate\"${NC}"
+    echo -e "  ${CYAN}2.${NC} Scroll to bottom, find ${BOLD}\"Your App Configuration Tokens\"${NC}"
+    echo -e "  ${CYAN}3.${NC} Click ${BOLD}\"Generate Token\"${NC}, select workspace, click ${BOLD}\"Generate\"${NC}"
+    echo -e "  ${CYAN}4.${NC} Copy the ${BOLD}Access Token${NC} (xoxe-...)"
     echo ""
-    echo -e "  ${DIM}(This adds \"Slack Tooling Tokens Vendor\" app to your workspace)${NC}"
-    echo ""
-    echo -e "  ${CYAN}7.${NC} Copy the ${BOLD}Access Token${NC} (starts with xoxe-...)"
-    echo ""
-    echo -ne "  ${YELLOW}?${NC} Paste the Access Token: "
+    echo -ne "  ${YELLOW}?${NC} Access Token: "
     read -r SLACK_ACCESS_TOKEN
 
     if [[ -z "$SLACK_ACCESS_TOKEN" ]]; then
@@ -922,10 +897,8 @@ cmd_setup() {
         exit 1
     fi
 
-    echo ""
-    echo -e "  ${CYAN}8.${NC} Copy the ${BOLD}Refresh Token${NC} (shown below the access token)"
-    echo ""
-    echo -ne "  ${YELLOW}?${NC} Paste the Refresh Token: "
+    echo -e "  ${CYAN}5.${NC} Copy the ${BOLD}Refresh Token${NC}"
+    echo -ne "  ${YELLOW}?${NC} Refresh Token: "
     read -r SLACK_REFRESH_TOKEN
 
     if [[ -z "$SLACK_REFRESH_TOKEN" ]]; then
@@ -933,158 +906,90 @@ cmd_setup() {
         exit 1
     fi
 
-    # Set initial expiry (12 hours from now, but we'll refresh before using)
     SLACK_TOKEN_EXPIRES=$(($(date +%s) + 43200))
 
     echo ""
-    echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC}  ${BOLD}Step 2: Get your Slack App ID${NC}                               ${CYAN}│${NC}"
-    echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
+    echo -e "${CYAN}Step 2: Slack App ID${NC}"
+    echo -e "  Create app at ${BOLD}https://api.slack.com/apps${NC} if needed."
+    echo -e "  Copy ${BOLD}App ID${NC} from top of app page (format: A0XXXXXXXXX)"
     echo ""
-    echo -e "  ${BOLD}If you don't have an app yet:${NC}"
-    echo -e "    ${CYAN}1.${NC} Click ${BOLD}Create New App${NC}"
-    echo -e "    ${CYAN}2.${NC} Select ${BOLD}From scratch${NC}"
-    echo -e "    ${CYAN}3.${NC} Name it ${BOLD}Claude Code Notifier${NC} (or similar)"
-    echo -e "    ${CYAN}4.${NC} Select your workspace → Click ${BOLD}Create App${NC}"
-    echo ""
-    echo -e "  ${BOLD}Then:${NC}"
-    echo -e "    ${CYAN}5.${NC} Copy the ${BOLD}App ID${NC} from the top of the page"
-    echo -e "       ${DIM}(Format: A0XXXXXXXXX)${NC}"
-    echo ""
-    echo -ne "  ${YELLOW}?${NC} Paste your App ID: "
+    echo -ne "  ${YELLOW}?${NC} App ID: "
     read -r SLACK_APP_ID
 
     if [[ -z "$SLACK_APP_ID" || ! "$SLACK_APP_ID" =~ ^A[A-Z0-9]+$ ]]; then
-        echo_error "Invalid App ID format. Should start with 'A' followed by letters/numbers."
+        echo_error "Invalid App ID format"
         exit 1
     fi
 
-    # Save config
     save_slack_config
-    echo ""
-    echo_info "Configuration saved to $SLACK_CONFIG_FILE"
 
-    # Verify by testing the token
-    echo ""
-    echo_info "Verifying configuration..."
-
-    local test_response
+    # Verify token
+    local test_response ok
     test_response=$(curl -s -X POST "https://slack.com/api/apps.manifest.export" \
         -H "Authorization: Bearer ${SLACK_ACCESS_TOKEN}" \
         -H "Content-Type: application/x-www-form-urlencoded" \
         -d "app_id=${SLACK_APP_ID}")
-
-    local ok
     ok=$(echo "$test_response" | jq -r '.ok // false')
 
     if [[ "$ok" != "true" ]]; then
         local error
         error=$(echo "$test_response" | jq -r '.error // "unknown error"')
-        echo_error "Configuration test failed: $error"
-        echo_error "Please check your tokens and try again."
+        echo_error "Verification failed: $error"
         rm -f "$SLACK_CONFIG_FILE"
         exit 1
     fi
 
-    echo ""
-    echo -e "${GREEN}╭──────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Basic Setup Complete!${NC}                                     ${GREEN}│${NC}"
-    echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
+    echo_info "Configuration verified"
     echo ""
 
-    # Webhook setup
-    echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC}  ${BOLD}Step 3: Webhook URL${NC}                                         ${CYAN}│${NC}"
-    echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
+    echo -e "${CYAN}Step 3: Webhook URL${NC}"
+    echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps/${SLACK_APP_ID}${NC}"
+    echo -e "  ${CYAN}2.${NC} ${BOLD}Incoming Webhooks${NC} → Enable → ${BOLD}Add New Webhook${NC}"
+    echo -e "  ${CYAN}3.${NC} Select channel → Copy webhook URL"
     echo ""
-    echo -e "  ${DIM}Webhooks enable basic notifications (buttons come later).${NC}"
-    echo ""
-    echo -e "  ${CYAN}1.${NC} Go to your app: ${BOLD}https://api.slack.com/apps/${SLACK_APP_ID}${NC}"
-    echo -e "  ${CYAN}2.${NC} Click ${BOLD}Incoming Webhooks${NC}"
-    echo -e "  ${CYAN}3.${NC} Toggle ${BOLD}Activate Incoming Webhooks${NC} to On"
-    echo -e "  ${CYAN}4.${NC} Click ${BOLD}Add New Webhook to Workspace${NC}"
-    echo -e "  ${CYAN}5.${NC} Select your notification channel → Click ${BOLD}Allow${NC}"
-    echo -e "  ${CYAN}6.${NC} Copy the webhook URL"
-    echo ""
-    echo -ne "  ${YELLOW}?${NC} Paste webhook URL: "
+    echo -ne "  ${YELLOW}?${NC} Webhook URL: "
     read -r webhook_url
 
     if [[ -n "$webhook_url" ]]; then
         echo "$webhook_url" > "$WEBHOOK_FILE"
         chmod 600 "$WEBHOOK_FILE"
-        echo_info "Webhook URL saved"
+        echo_info "Webhook saved"
     else
-        echo_warn "Skipped - notifications won't work without a webhook URL"
+        echo_warn "Skipped - notifications won't work"
     fi
-    echo ""
 
-    # Optional: Bot token for thread replies
-    echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC}  ${BOLD}Optional: Enable Thread Replies${NC}                            ${CYAN}│${NC}"
-    echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
     echo ""
-    echo -e "  ${DIM}Reply to Claude notifications to send messages to the terminal.${NC}"
-    echo ""
-    echo -ne "  ${YELLOW}?${NC} Enable thread replies? [Y/n] "
+    echo -ne "${YELLOW}?${NC} Enable thread replies? [Y/n] "
     read -r enable_threads
 
     if [[ ! "$enable_threads" =~ ^[Nn]$ ]]; then
         echo ""
-        echo -e "  ${CYAN}1.${NC} Go to your app: ${BOLD}https://api.slack.com/apps/${SLACK_APP_ID}${NC}"
-        echo -e "  ${CYAN}2.${NC} Click ${BOLD}OAuth & Permissions${NC}"
-        echo -e "  ${CYAN}3.${NC} Under ${BOLD}Bot Token Scopes${NC}, add:"
-        echo -e "       ${BOLD}app_mentions:read${NC} - View messages that mention your bot"
-        echo -e "       ${BOLD}channels:history${NC} - View messages in channels the bot is in"
-        echo -e "       ${BOLD}chat:write${NC} - Send messages"
-        echo -e "       ${BOLD}files:read${NC} - Download images from replies"
-        echo -e "  ${CYAN}4.${NC} Click ${BOLD}Install to Workspace${NC} (or Reinstall)"
-        echo -e "  ${CYAN}5.${NC} Copy the ${BOLD}Bot User OAuth Token${NC} (starts with xoxb-)"
+        echo -e "  ${CYAN}1.${NC} ${BOLD}OAuth & Permissions${NC} → Add scopes: app_mentions:read, channels:history, chat:write, files:read"
+        echo -e "  ${CYAN}2.${NC} ${BOLD}Install to Workspace${NC} → Copy ${BOLD}Bot User OAuth Token${NC} (xoxb-...)"
         echo ""
         echo -ne "  ${YELLOW}?${NC} Bot Token: "
         read -r SLACK_BOT_TOKEN
 
         if [[ -n "$SLACK_BOT_TOKEN" ]]; then
-            echo ""
-            echo -e "  ${CYAN}6.${NC} Go to ${BOLD}Event Subscriptions${NC}"
-            echo -e "  ${CYAN}7.${NC} Toggle ${BOLD}Enable Events${NC} to On"
-            echo -e "  ${CYAN}8.${NC} Under ${BOLD}Subscribe to bot events${NC}, add:"
-            echo -e "       ${BOLD}message.channels${NC}"
-            echo -e "       ${BOLD}message.im${NC} (for DMs)"
-            echo -e "  ${CYAN}9.${NC} Save Changes"
-            echo ""
-            echo -e "  ${DIM}The Request URL will be set automatically when you start the tunnel.${NC}"
-
+            echo -e "  ${CYAN}3.${NC} ${BOLD}Event Subscriptions${NC} → Enable → Add: message.channels, message.im"
             save_slack_config
-            echo ""
-            echo_info "Bot token saved!"
+            echo_info "Bot token saved"
         fi
     fi
 
-    # Channel ID for thread routing
     echo ""
-    echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC}  ${BOLD}Notification Channel${NC}                                        ${CYAN}│${NC}"
-    echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
-    echo ""
-    echo -e "  ${DIM}What channel should notifications go to?${NC}"
-    echo -e "  ${DIM}(Right-click channel → View channel details → scroll to Channel ID)${NC}"
-    echo ""
-    echo -ne "  ${YELLOW}?${NC} Channel ID (e.g., C01234ABCDE): "
+    echo -e "${CYAN}Channel ID${NC}"
+    echo -e "  Right-click channel → View details → scroll to Channel ID"
+    echo -ne "  ${YELLOW}?${NC} Channel ID: "
     read -r SLACK_CHANNEL_ID
 
     if [[ -n "$SLACK_CHANNEL_ID" ]]; then
         save_slack_config
         echo_info "Channel ID saved"
-    else
-        echo_warn "Skipped - can set later in ~/.claude/.slack-config"
     fi
 
     echo ""
-    echo -e "  ${BOLD}To start the tunnel:${NC}"
-    echo -e "    local-tunnel"
-    echo ""
-    echo -e "  ${BOLD}Or for background mode:${NC}"
-    echo -e "    local-tunnel --background"
+    echo -e "${GREEN}Setup complete!${NC} Run ${BOLD}local-tunnel${NC} to start."
     echo ""
 }
 
@@ -1094,99 +999,60 @@ cmd_setup() {
 
 cmd_update_token() {
     echo ""
-    echo -e "${BOLD}Update Slack Configuration Token${NC}"
-    echo -e "${DIM}Quick refresh when your token has expired${NC}"
+    echo -e "${BOLD}Update Slack Token${NC}"
     echo ""
 
-    # Must have existing config
     if [[ ! -f "$SLACK_CONFIG_FILE" ]]; then
-        echo_error "No existing configuration found."
-        echo "  Run: local-tunnel --setup"
+        echo_error "No config found. Run: local-tunnel --setup"
         exit 1
     fi
 
-    # Load existing config to get App ID
     source "$SLACK_CONFIG_FILE"
 
     if [[ -z "${SLACK_APP_ID:-}" ]]; then
-        echo_error "App ID not found in config."
-        echo "  Run: local-tunnel --setup"
+        echo_error "App ID not found. Run: local-tunnel --setup"
         exit 1
     fi
 
-    echo -e "  Current App ID: ${BOLD}${SLACK_APP_ID}${NC}"
-    echo ""
-
-    # Open browser to config tokens page
-    echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC}  ${BOLD}Generate New Configuration Token${NC}                          ${CYAN}│${NC}"
-    echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
+    echo -e "  App ID: ${BOLD}${SLACK_APP_ID}${NC}"
     echo ""
 
     local config_url="https://api.slack.com/apps"
-    echo -e "  Opening: ${BOLD}${config_url}${NC}"
-    echo ""
-
-    # Try to open browser
     if command -v open &>/dev/null; then
         open "$config_url" 2>/dev/null || true
     elif command -v xdg-open &>/dev/null; then
         xdg-open "$config_url" 2>/dev/null || true
     fi
 
-    echo -e "  ${CYAN}1.${NC} Scroll to the ${BOLD}bottom${NC} of the page"
-    echo -e "  ${CYAN}2.${NC} Find ${BOLD}\"Your App Configuration Tokens\"${NC} section"
-    echo -e "  ${CYAN}3.${NC} Click ${BOLD}\"Generate Token\"${NC} (or regenerate existing)"
-    echo -e "  ${CYAN}4.${NC} Select your workspace and click ${BOLD}\"Generate\"${NC}"
+    echo -e "  ${CYAN}1.${NC} Scroll to bottom → ${BOLD}\"Your App Configuration Tokens\"${NC}"
+    echo -e "  ${CYAN}2.${NC} ${BOLD}\"Generate Token\"${NC} → select workspace → ${BOLD}\"Generate\"${NC}"
     echo ""
-    echo -ne "  ${YELLOW}?${NC} Paste the Access Token (xoxe-...): "
+    echo -ne "  ${YELLOW}?${NC} Access Token (xoxe-...): "
     read -r SLACK_ACCESS_TOKEN
+    [[ -z "$SLACK_ACCESS_TOKEN" ]] && { echo_error "Required"; exit 1; }
 
-    if [[ -z "$SLACK_ACCESS_TOKEN" ]]; then
-        echo_error "Access token is required"
-        exit 1
-    fi
-
-    echo ""
-    echo -ne "  ${YELLOW}?${NC} Paste the Refresh Token: "
+    echo -ne "  ${YELLOW}?${NC} Refresh Token: "
     read -r SLACK_REFRESH_TOKEN
+    [[ -z "$SLACK_REFRESH_TOKEN" ]] && { echo_error "Required"; exit 1; }
 
-    if [[ -z "$SLACK_REFRESH_TOKEN" ]]; then
-        echo_error "Refresh token is required"
-        exit 1
-    fi
-
-    # Set expiry
     SLACK_TOKEN_EXPIRES=$(($(date +%s) + 43200))
-
-    # Save config
     save_slack_config
-    echo ""
-    echo_info "Configuration saved!"
 
     # Verify
-    echo_info "Verifying token..."
-
-    local test_response
+    local test_response ok
     test_response=$(curl -s -X POST "https://slack.com/api/apps.manifest.export" \
         -H "Authorization: Bearer ${SLACK_ACCESS_TOKEN}" \
         -H "Content-Type: application/x-www-form-urlencoded" \
         -d "app_id=${SLACK_APP_ID}")
-
-    local ok
     ok=$(echo "$test_response" | jq -r '.ok // false')
 
     if [[ "$ok" != "true" ]]; then
-        local error
-        error=$(echo "$test_response" | jq -r '.error // "unknown error"')
-        echo_error "Token verification failed: $error"
+        echo_error "Verification failed: $(echo "$test_response" | jq -r '.error // "unknown"')"
         exit 1
     fi
 
     echo ""
-    echo -e "${GREEN}✓${NC} Token updated successfully!"
-    echo ""
-    echo -e "  ${DIM}The token will auto-refresh as long as you run the tunnel regularly.${NC}"
+    echo -e "${GREEN}Token updated!${NC}"
     echo ""
 }
 
@@ -1197,83 +1063,59 @@ cmd_update_token() {
 cmd_stable() {
     # Check if localtunnel is installed
     if ! command -v lt &>/dev/null; then
-        echo_warn "Localtunnel not installed. Installing..."
-        echo ""
+        echo_info "Installing localtunnel..."
         if command -v bun &>/dev/null; then
             bun add -g localtunnel
         elif command -v npm &>/dev/null; then
             npm install -g localtunnel
         else
-            echo_error "Neither bun nor npm found. Please install Node.js first."
+            echo_error "bun/npm not found. Install Node.js first."
             exit 1
         fi
-        echo ""
     fi
 
     # If already configured, ask if they want to reconfigure or just start
     if has_stable_tunnel; then
-        local current
+        local current tunnel_url
         current=$(get_localtunnel_subdomain)
-        local tunnel_url="https://${current}.loca.lt"
+        tunnel_url="https://${current}.loca.lt"
 
         echo ""
-        echo -e "  ${GREEN}✓${NC} Stable URL already configured: ${CYAN}${tunnel_url}${NC}"
-        echo ""
+        echo -e "  Current URL: ${CYAN}${tunnel_url}${NC}"
         echo -ne "  ${YELLOW}?${NC} Change subdomain? [y/N] "
         read -r change_subdomain
 
         if [[ ! "$change_subdomain" =~ ^[Yy]$ ]]; then
-            # Just start the tunnel with existing config
-            echo ""
             cmd_interactive
             return
         fi
-        echo ""
     fi
 
-    # Setup flow
     echo ""
     echo -e "${BOLD}Stable Tunnel Setup${NC}"
-    echo -e "${DIM}Get a URL that stays the same every time${NC}"
-    echo ""
-
-    echo -e "  ${GREEN}✓${NC} URL stays the same every restart"
-    echo -e "  ${GREEN}✓${NC} No accounts or tokens needed"
-    echo -e "  ${GREEN}✓${NC} Set Slack URLs once, never again"
-    echo ""
-
-    echo -e "  Choose a unique subdomain for your tunnel."
-    echo -e "  ${DIM}Pick something unlikely to be taken (e.g., claude-slack-yourname)${NC}"
-    echo ""
+    echo -e "  Choose a unique subdomain (e.g., claude-slack-yourname)"
     echo -ne "  ${YELLOW}?${NC} Subdomain: "
     read -r subdomain
 
-    if [[ -z "$subdomain" ]]; then
-        echo_error "Subdomain is required"
-        exit 1
-    fi
+    [[ -z "$subdomain" ]] && { echo_error "Subdomain required"; exit 1; }
 
-    # Remove any protocol or domain suffix if user pasted full URL
+    # Clean subdomain
     subdomain="${subdomain#https://}"
     subdomain="${subdomain%.loca.lt}"
     subdomain="${subdomain%%/*}"
 
-    # Validate subdomain (alphanumeric and hyphens only)
     if [[ ! "$subdomain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]]; then
-        echo_error "Invalid subdomain. Use only letters, numbers, and hyphens."
+        echo_error "Invalid subdomain - use only letters, numbers, hyphens"
         exit 1
     fi
 
-    # Save subdomain
     echo "$subdomain" > "$LOCALTUNNEL_SUBDOMAIN_FILE"
     chmod 600 "$LOCALTUNNEL_SUBDOMAIN_FILE"
 
     local tunnel_url="https://${subdomain}.loca.lt"
 
-    echo ""
-    echo_info "Testing tunnel..."
-
     # Test the tunnel briefly
+    echo_info "Testing tunnel..."
     local log_file="$CLAUDE_DIR/.localtunnel-test.log"
     rm -f "$log_file"
 
@@ -1282,10 +1124,7 @@ cmd_stable() {
 
     local connected=""
     for i in {1..10}; do
-        if grep -q "your url is" "$log_file" 2>/dev/null; then
-            connected="true"
-            break
-        fi
+        grep -q "your url is" "$log_file" 2>/dev/null && { connected="true"; break; }
         sleep 1
     done
 
@@ -1293,45 +1132,26 @@ cmd_stable() {
     wait "$test_pid" 2>/dev/null || true
 
     if [[ -z "$connected" ]]; then
-        echo_warn "Could not verify tunnel. The subdomain might be taken."
-        echo -e "  ${DIM}Try a more unique name if it doesn't work.${NC}"
-        cat "$log_file" 2>/dev/null | tail -3
+        echo_warn "Could not verify - subdomain might be taken"
     else
         echo -e "  ${GREEN}✓${NC} Tunnel works!"
     fi
 
     echo ""
-    echo -e "${GREEN}╭──────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Stable URL Configured!${NC}                                    ${GREEN}│${NC}"
-    echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
-    echo ""
-    echo -e "  ${BOLD}Your stable URL:${NC} ${CYAN}${tunnel_url}${NC}"
-    echo ""
+    echo -e "${GREEN}Stable URL:${NC} ${CYAN}${tunnel_url}${NC}"
 
     # Try to auto-update Slack if tokens exist
-    local slack_updated=false
     if load_slack_config && [[ -n "${SLACK_APP_ID:-}" ]]; then
-        echo_info "Updating Slack app settings..."
         if update_slack_request_url "${tunnel_url}/slack/actions" "${tunnel_url}/slack/events"; then
-            slack_updated=true
-            echo -e "  ${GREEN}✓${NC} Slack Request URLs updated automatically!"
-            echo ""
+            echo -e "  ${GREEN}✓${NC} Slack URLs updated"
         fi
+    else
+        echo ""
+        echo -e "  Update Slack app manually:"
+        echo -e "    Interactivity: ${BOLD}${tunnel_url}/slack/actions${NC}"
+        echo -e "    Events:        ${BOLD}${tunnel_url}/slack/events${NC}"
     fi
 
-    if [[ "$slack_updated" != "true" ]]; then
-        echo -e "  ${BOLD}Update your Slack app (one-time only):${NC}"
-        echo ""
-        echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps${NC} → your app"
-        echo -e "  ${CYAN}2.${NC} ${BOLD}Interactivity & Shortcuts${NC} → Request URL:"
-        echo -e "       ${BOLD}${tunnel_url}/slack/actions${NC}"
-        echo -e "  ${CYAN}3.${NC} ${BOLD}Event Subscriptions${NC} → Request URL:"
-        echo -e "       ${BOLD}${tunnel_url}/slack/events${NC}"
-        echo ""
-    fi
-
-    # Start the tunnel
-    echo_info "Starting tunnel..."
     echo ""
     cmd_interactive
 }
@@ -1639,28 +1459,20 @@ cmd_status() {
 
 cmd_interactive() {
     echo ""
-    echo -e "${BOLD}Slack Tunnel for Claude Notifications${NC}"
-    echo -e "${DIM}Creates a public URL for Slack button actions${NC}"
-    echo ""
+    echo -e "${BOLD}Slack Tunnel${NC}"
 
     local using_tailscale=false
     local using_localtunnel=false
 
-    # Load Slack config for URL updates
     load_slack_config || true
-
-    # Rebuild MCP server if needed
     rebuild_if_needed
 
     # Kill existing MCP server and start fresh
     if check_mcp_server; then
-        echo_info "Stopping existing MCP server..."
         local old_pid
         old_pid=$(cat "$CLAUDE_DIR/.mcp-server.pid" 2>/dev/null)
-        if [[ -n "$old_pid" ]]; then
-            kill "$old_pid" 2>/dev/null || true
-            sleep 1
-        fi
+        [[ -n "$old_pid" ]] && kill "$old_pid" 2>/dev/null || true
+        sleep 1
     fi
     start_mcp_server
 
@@ -1668,12 +1480,8 @@ cmd_interactive() {
     cleanup() {
         echo ""
         echo_info "Shutting down..."
-        # Stop Tailscale Funnel if active
         stop_tailscale_funnel 2>/dev/null || true
-        # Stop Localtunnel if running
-        if [[ -n "${TUNNEL_PID:-}" ]]; then
-            kill "$TUNNEL_PID" 2>/dev/null || true
-        fi
+        [[ -n "${TUNNEL_PID:-}" ]] && kill "$TUNNEL_PID" 2>/dev/null || true
         stop_mcp_server
         rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE" "$TUNNEL_TYPE_FILE"
         exit 0
@@ -1681,42 +1489,24 @@ cmd_interactive() {
     trap cleanup INT TERM
     trap 'rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE" "$TUNNEL_TYPE_FILE"' EXIT
 
-    # Try Tailscale Funnel first (if available and not forced to use localtunnel)
+    # Try Tailscale Funnel first
     if [[ "$TUNNEL_TYPE" != "localtunnel" ]] && has_tailscale && is_tailscale_connected; then
         if start_tailscale_funnel "false"; then
             using_tailscale=true
-            # Sync tunnel URL to remote servers (if links exist)
             sync_tunnel_url_to_remotes
         else
             echo_warn "Tailscale Funnel failed, falling back to Localtunnel..."
         fi
     fi
 
-    # Fall back to Localtunnel if Tailscale not available
+    # Fall back to Localtunnel
     if [[ "$using_tailscale" == "false" ]]; then
-        # Check if stable tunnel is configured
         if has_stable_tunnel; then
             using_localtunnel=true
-            local subdomain
-            subdomain=$(get_localtunnel_subdomain)
-            echo_info "Using stable URL: https://${subdomain}.loca.lt"
             start_tunnel_and_get_url "false"
         else
-            # No Tailscale, no stable Localtunnel - need setup
-            if ! load_slack_config; then
-                echo_warn "No tunnel backend available."
-                echo ""
-                echo -e "  ${BOLD}Options:${NC}"
-                echo -e "  ${CYAN}1.${NC} Install and connect Tailscale (recommended)"
-                echo -e "  ${CYAN}2.${NC} Run ${BOLD}local-tunnel --stable${NC} to setup Localtunnel"
-                echo ""
-                exit 1
-            fi
-            # Has Slack config but no stable tunnel - prompt for setup
             echo_warn "No tunnel configured."
-            echo ""
-            echo -e "  Run ${BOLD}local-tunnel --stable${NC} to configure Localtunnel."
-            echo ""
+            echo -e "  Run ${BOLD}local-tunnel --stable${NC} to setup Localtunnel."
             exit 1
         fi
     fi
@@ -1725,47 +1515,25 @@ cmd_interactive() {
     if update_slack_request_url "${TUNNEL_URL}/slack/actions" "${TUNNEL_URL}/slack/events"; then
         echo ""
         if [[ "$using_tailscale" == "true" ]]; then
-            echo -e "${GREEN}╭──────────────────────────────────────────────────────────────╮${NC}"
-            echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Tailscale Funnel connected!${NC}                               ${GREEN}│${NC}"
-            echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
+            echo -e "${GREEN}Tailscale Funnel connected${NC}"
         else
-            echo -e "${GREEN}╭──────────────────────────────────────────────────────────────╮${NC}"
-            echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Localtunnel connected!${NC}                                    ${GREEN}│${NC}"
-            echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
+            echo -e "${GREEN}Localtunnel connected${NC}"
         fi
-        echo ""
         echo -e "  URL: ${CYAN}${TUNNEL_URL}${NC}"
-        echo ""
-        echo -e "  ${DIM}Slack URLs updated automatically.${NC}"
-        echo -e "  ${DIM}Buttons and thread replies will work on both desktop and mobile.${NC}"
-        echo -e "  ${DIM}Keep this running. Press Ctrl+C to stop.${NC}"
+        echo -e "  ${DIM}Slack URLs updated. Press Ctrl+C to stop.${NC}"
     else
         echo ""
-        echo -e "${YELLOW}╭──────────────────────────────────────────────────────────────╮${NC}"
-        echo -e "${YELLOW}│${NC}  ${YELLOW}!${NC} ${BOLD}Could not auto-update Slack${NC}                               ${YELLOW}│${NC}"
-        echo -e "${YELLOW}╰──────────────────────────────────────────────────────────────╯${NC}"
-        echo ""
-        echo -e "  Actions URL: ${CYAN}${TUNNEL_URL}/slack/actions${NC}"
-        echo -e "  Events URL:  ${CYAN}${TUNNEL_URL}/slack/events${NC}"
-        echo ""
-        echo -e "  ${BOLD}Manually update in Slack:${NC}"
-        echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps/${SLACK_APP_ID:-your-app}${NC}"
-        echo -e "  ${CYAN}2.${NC} ${BOLD}Interactivity & Shortcuts${NC} → Set Request URL"
-        echo -e "  ${CYAN}3.${NC} ${BOLD}Event Subscriptions${NC} → Set Request URL"
-        echo -e "  ${CYAN}4.${NC} Click ${BOLD}Save Changes${NC} on each page"
-        echo ""
-        echo -e "  ${DIM}Keep this running. Press Ctrl+C to stop.${NC}"
+        echo_warn "Could not auto-update Slack"
+        echo -e "  Actions: ${CYAN}${TUNNEL_URL}/slack/actions${NC}"
+        echo -e "  Events:  ${CYAN}${TUNNEL_URL}/slack/events${NC}"
+        echo -e "  ${DIM}Press Ctrl+C to stop.${NC}"
     fi
     echo ""
 
-    # Keep running - wait on tunnel process (Localtunnel) or just sleep (Tailscale)
+    # Keep running
     if [[ "$using_tailscale" == "true" ]]; then
-        # Tailscale Funnel runs with --bg, so just sleep forever
-        while true; do
-            sleep 3600
-        done
+        while true; do sleep 3600; done
     else
-        # Wait for Localtunnel process
         wait "$TUNNEL_PID" 2>/dev/null || true
     fi
 }

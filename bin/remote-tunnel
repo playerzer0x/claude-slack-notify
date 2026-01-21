@@ -253,10 +253,11 @@ enable_funnel_in_acl() {
 
     echo_info "Checking current Tailscale ACL policy..."
 
-    # Get current ACL
+    # Get current ACL (request JSON format, not HuJSON)
     local current_acl
     current_acl=$(curl -s --max-time 10 "https://api.tailscale.com/api/v2/tailnet/-/acl" \
-        -u "${TAILSCALE_API_KEY}:" 2>/dev/null)
+        -u "${TAILSCALE_API_KEY}:" \
+        -H "Accept: application/json" 2>/dev/null)
 
     if [[ -z "$current_acl" ]]; then
         echo_error "Failed to fetch current ACL policy"
@@ -311,6 +312,7 @@ enable_funnel_in_acl() {
     update_response=$(curl -s --max-time 10 -X POST "https://api.tailscale.com/api/v2/tailnet/-/acl" \
         -u "${TAILSCALE_API_KEY}:" \
         -H "Content-Type: application/json" \
+        -H "Accept: application/json" \
         --data-raw "$updated_acl" 2>/dev/null)
 
     # Check for errors
@@ -379,6 +381,13 @@ is_token_expired() {
 }
 
 rotate_slack_token() {
+    # Check if refresh token exists
+    if [[ -z "${SLACK_REFRESH_TOKEN:-}" ]]; then
+        echo_error "No refresh token configured"
+        echo_error "Run 'remote-tunnel --setup' to configure Slack"
+        return 1
+    fi
+
     echo_info "Refreshing Slack configuration token..."
 
     local response

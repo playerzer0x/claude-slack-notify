@@ -216,18 +216,21 @@ remote-tunnel --use-localtunnel  # Force Localtunnel
 > Last updated: 2026-01-21
 
 ### Recent Changes
-- **Tailscale Funnel as default**: Both `local-tunnel` and `remote-tunnel` now use Tailscale Funnel by default when Tailscale is available
-  - Auto-detects Tailscale availability and uses it without any configuration needed
+- **Auto-enable Tailscale Funnel**: When Funnel fails due to missing ACL permissions, scripts now:
+  - Prompt for Tailscale API key (opens browser to key creation page)
+  - Call Tailscale API to add `funnel` attribute to ACL policy
+  - Retry Funnel after enabling
+  - API key stored in `~/.claude/.env` as `TAILSCALE_API_KEY=...`
+- **Credentials in .env**: Tailscale API key stored in `~/.claude/.env`, not copied to remotes
+- **Stale session cleanup**: When registering, old session files for the same terminal are deleted to prevent stale session ID errors
+- **Tailscale Funnel as default**: Both `local-tunnel` and `remote-tunnel` use Tailscale Funnel when available
   - Falls back to Localtunnel if Tailscale isn't available
   - New flags: `--use-tailscale` (force Tailscale), `--use-localtunnel` (force Localtunnel)
-  - `--status` shows both Tailscale and Localtunnel availability
-- **Orphan process cleanup**: Both `local-tunnel` and `remote-tunnel` now detect and clean up orphan processes on their ports
-  - `kill_orphan_mcp_server()` / `kill_orphan_relay()` - finds processes on port not tracked by PID file
-  - `start_mcp_server()` / `start_relay()` - calls orphan cleanup before starting
-  - `stop_*()` functions - also kill orphans after tracked process
-  - `--background` mode - verifies tracked PID matches port, cleans if mismatch
-  - `--status` - reports orphan/stale situations with fix commands
-  - Interactive mode - always restarts server/relay (cleans orphans)
-- **Stable URLs with Localtunnel**: `local-tunnel --stable` and `remote-tunnel --stable` use Localtunnel for permanent URLs
-- **Session persistence**: Sessions don't need to re-register after tunnel restart (instance files persist, MCP server is stateless)
-- **Auto-update Slack URLs**: Both tunnels auto-update Actions + Events Request URLs
+- **Orphan process cleanup**: Scripts detect and clean up orphan processes on their ports
+- **Session persistence**: Sessions don't need to re-register after tunnel restart
+
+### Runtime Files Added
+| File | Purpose |
+|------|---------|
+| `~/.claude/.env` | Tailscale API key (never copied to remotes) |
+| `.claudeignore` | Prevents Claude from reading credentials |

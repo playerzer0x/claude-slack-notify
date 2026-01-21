@@ -203,6 +203,45 @@ wait_for_tunnel() {
 }
 
 # -----------------------------------------------------------------------------
+# Update command - update scripts from repo
+# Usage: claude-slack-notify update [--pull]
+# -----------------------------------------------------------------------------
+if [[ "$1" == "update" ]]; then
+    REPO_PATH_FILE="${CLAUDE_DIR}/.repo-path"
+    DO_PULL=""
+
+    if [[ "$2" == "--pull" ]]; then
+        DO_PULL="1"
+    fi
+
+    # Find repo path
+    REPO_PATH=""
+    if [[ -f "$REPO_PATH_FILE" ]]; then
+        REPO_PATH=$(cat "$REPO_PATH_FILE" 2>/dev/null)
+    fi
+
+    # Validate repo path
+    if [[ -z "$REPO_PATH" || ! -d "$REPO_PATH" || ! -f "$REPO_PATH/bin/claude-slack-notify" ]]; then
+        echo "Error: Repo path not found or invalid." >&2
+        echo "" >&2
+        echo "Run install.sh from the repo directory first to set the path:" >&2
+        echo "  cd /path/to/claude-slack-notify && ./install.sh --update" >&2
+        exit 1
+    fi
+
+    echo "Updating from: $REPO_PATH"
+
+    # Optional: git pull
+    if [[ -n "$DO_PULL" ]]; then
+        echo "Pulling latest changes..."
+        (cd "$REPO_PATH" && git pull)
+    fi
+
+    # Run install.sh --update
+    exec "$REPO_PATH/install.sh" --update
+fi
+
+# -----------------------------------------------------------------------------
 # Link command - creates a link for SSH or JupyterLab sessions
 # Run this on LOCAL machine before SSH to create a reference to the local terminal
 # Usage: claude-slack-notify link [--host <hostname>] [--jupyter] [ssh-options...]

@@ -92,6 +92,54 @@ print_section() {
     echo -e "${NC}"
 }
 
+# Check for --update flag (quick non-interactive update)
+if [[ "${1:-}" == "--update" ]]; then
+    echo_info "Updating Claude Slack Notify scripts..."
+
+    # Create directories if needed
+    mkdir -p "$BIN_DIR" "$COMMANDS_DIR"
+
+    # Copy scripts
+    for script in claude-slack-notify slack-notify-start slack-notify-check get-session-id focus-helper mcp-server local-tunnel remote-tunnel; do
+        if [[ -f "$SCRIPT_DIR/bin/$script" ]]; then
+            cp "$SCRIPT_DIR/bin/$script" "$BIN_DIR/"
+            chmod +x "$BIN_DIR/$script"
+        fi
+    done
+    echo_info "Updated scripts in $BIN_DIR/"
+
+    # Copy command docs
+    cp "$SCRIPT_DIR/commands/slack-notify.md" "$COMMANDS_DIR/"
+    echo_info "Updated command docs"
+
+    # Rebuild MCP server if source exists
+    if [[ -d "$SCRIPT_DIR/mcp-server" ]]; then
+        echo_info "Rebuilding MCP server..."
+        cd "$SCRIPT_DIR/mcp-server"
+        if command -v bun &>/dev/null; then
+            bun install --silent && bun run build
+        elif command -v npm &>/dev/null; then
+            npm install --silent && npm run build
+        fi
+
+        # Copy to installed location
+        MCP_DIST_DIR="$CLAUDE_DIR/mcp-server-dist"
+        rm -rf "$MCP_DIST_DIR"
+        mkdir -p "$MCP_DIST_DIR"
+        cp -r "$SCRIPT_DIR/mcp-server/dist" "$MCP_DIST_DIR/"
+        cp -r "$SCRIPT_DIR/mcp-server/node_modules" "$MCP_DIST_DIR/"
+        cp "$SCRIPT_DIR/mcp-server/package.json" "$MCP_DIST_DIR/"
+        echo_info "MCP server rebuilt and installed"
+        cd "$SCRIPT_DIR"
+    fi
+
+    # Save repo path for `claude-slack-notify update`
+    echo "$SCRIPT_DIR" > "$CLAUDE_DIR/.repo-path"
+
+    echo_info "Update complete!"
+    exit 0
+fi
+
 # Check for --uninstall flag
 if [[ "${1:-}" == "--uninstall" ]]; then
     echo_info "Uninstalling Claude Slack Notify..."
@@ -875,6 +923,9 @@ if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
         fi
     fi
 fi
+
+# Save repo path for `claude-slack-notify update`
+echo "$SCRIPT_DIR" > "$CLAUDE_DIR/.repo-path"
 
 # =============================================================================
 # Final Summary

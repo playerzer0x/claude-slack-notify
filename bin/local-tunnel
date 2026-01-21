@@ -1008,6 +1008,20 @@ cmd_background() {
         exit 1
     fi
 
+    # Require stable URL for background mode (no interactive prompts)
+    if ! has_stable_tunnel; then
+        echo_error "Stable URL not configured."
+        echo ""
+        echo -e "  Background mode requires a stable URL to avoid changing URLs on restart."
+        echo ""
+        echo -e "  Run this first to configure:"
+        echo -e "    ${BOLD}local-tunnel --stable${NC}"
+        echo ""
+        echo -e "  Or run interactively (will prompt for subdomain):"
+        echo -e "    ${BOLD}local-tunnel${NC}"
+        exit 1
+    fi
+
     # Check if already running (and there's only ONE tunnel)
     local tunnel_count
     tunnel_count=$(pgrep -f "cloudflared tunnel.*localhost:${MCP_PORT}" 2>/dev/null | wc -l | tr -d ' ')

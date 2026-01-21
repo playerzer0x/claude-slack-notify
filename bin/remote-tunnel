@@ -706,6 +706,20 @@ cmd_background() {
         exit 1
     fi
 
+    # Require stable URL for background mode (no interactive prompts)
+    if ! has_stable_tunnel; then
+        echo_error "Stable URL not configured."
+        echo ""
+        echo -e "  Background mode requires a stable URL to avoid changing URLs on restart."
+        echo ""
+        echo -e "  Run this first to configure:"
+        echo -e "    ${BOLD}remote-tunnel --stable${NC}"
+        echo ""
+        echo -e "  Or run interactively (will prompt for subdomain):"
+        echo -e "    ${BOLD}remote-tunnel${NC}"
+        exit 1
+    fi
+
     local relay_was_running=false
     local tunnel_was_running=false
     local need_slack_update=false

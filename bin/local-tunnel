@@ -32,6 +32,7 @@ ACTIVITY_FILE="$CLAUDE_DIR/.tunnel-last-activity"
 TUNNEL_LOG="$CLAUDE_DIR/tunnel.log"
 IDLE_TIMEOUT=3600  # 1 hour in seconds
 LOCALTUNNEL_SUBDOMAIN_FILE="$CLAUDE_DIR/.localtunnel-subdomain"
+ENV_FILE="$CLAUDE_DIR/.env"
 
 # Tunnel type: "tailscale" or "localtunnel"
 TUNNEL_TYPE=""
@@ -119,6 +120,7 @@ is_tailscale_funnel_active() {
 # Start Tailscale Funnel for MCP port
 start_tailscale_funnel() {
     local background="${1:-false}"
+    local retry="${2:-false}"
 
     if ! has_tailscale; then
         echo_error "Tailscale not installed"
@@ -157,9 +159,18 @@ start_tailscale_funnel() {
         echo_info "Tailscale Funnel started: $TUNNEL_URL"
         return 0
     else
+        # Funnel failed - try to auto-enable it
+        if [[ "$retry" == "false" ]]; then
+            echo_warn "Tailscale Funnel not enabled in ACL policy"
+            if enable_funnel_in_acl; then
+                # Retry starting funnel
+                echo_info "Retrying Tailscale Funnel..."
+                start_tailscale_funnel "$background" "true"
+                return $?
+            fi
+        fi
         echo_error "Tailscale Funnel failed to start"
-        echo_error "Make sure Funnel is enabled in your Tailscale admin console:"
-        echo_error "  https://login.tailscale.com/admin/dns"
+        echo_error "Enable Funnel manually at: https://login.tailscale.com/admin/acls"
         return 1
     fi
 }
@@ -172,6 +183,179 @@ stop_tailscale_funnel() {
         return 0
     fi
     return 1
+}
+
+# =============================================================================
+# Tailscale API helpers (for auto-enabling Funnel)
+# =============================================================================
+
+# Load Tailscale API key from .env file
+load_tailscale_api_key() {
+    if [[ -f "$ENV_FILE" ]]; then
+        # Source .env to get TAILSCALE_API_KEY (grep to avoid sourcing other vars)
+        TAILSCALE_API_KEY=$(grep -E '^TAILSCALE_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+        [[ -n "$TAILSCALE_API_KEY" ]]
+        return $?
+    fi
+    return 1
+}
+
+# Prompt user to add Tailscale API key to .env
+prompt_tailscale_api_key() {
+    echo ""
+    echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
+    echo -e "${CYAN}│${NC}  ${BOLD}Tailscale Funnel Setup Required${NC}                           ${CYAN}│${NC}"
+    echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
+    echo ""
+    echo -e "  Funnel needs to be enabled in your Tailscale ACL policy."
+    echo -e "  We can do this automatically with an API key."
+    echo ""
+    echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://login.tailscale.com/admin/settings/keys${NC}"
+    echo -e "  ${CYAN}2.${NC} Click ${BOLD}Generate API key${NC}"
+    echo -e "  ${CYAN}3.${NC} Copy the key (starts with tskey-api-...)"
+    echo ""
+
+    # Try to open browser
+    if command -v open &>/dev/null; then
+        open "https://login.tailscale.com/admin/settings/keys" 2>/dev/null || true
+    elif command -v xdg-open &>/dev/null; then
+        xdg-open "https://login.tailscale.com/admin/settings/keys" 2>/dev/null || true
+    fi
+
+    echo -ne "  ${YELLOW}?${NC} Paste your API key: "
+    read -r TAILSCALE_API_KEY
+
+    if [[ -z "$TAILSCALE_API_KEY" ]]; then
+        echo_error "API key is required to enable Funnel"
+        return 1
+    fi
+
+    # Validate key format
+    if [[ ! "$TAILSCALE_API_KEY" =~ ^tskey-api- ]]; then
+        echo_error "Invalid API key format. Should start with 'tskey-api-'"
+        return 1
+    fi
+
+    # Save to .env file
+    if [[ -f "$ENV_FILE" ]]; then
+        # Remove existing TAILSCALE_API_KEY line if present
+        grep -v '^TAILSCALE_API_KEY=' "$ENV_FILE" > "$ENV_FILE.tmp" 2>/dev/null || true
+        mv "$ENV_FILE.tmp" "$ENV_FILE"
+    fi
+    echo "TAILSCALE_API_KEY=$TAILSCALE_API_KEY" >> "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+    echo_info "API key saved to $ENV_FILE"
+    return 0
+}
+
+# Check if Funnel is enabled in the ACL policy
+check_funnel_enabled_in_acl() {
+    if ! load_tailscale_api_key; then
+        return 1
+    fi
+
+    local response
+    response=$(curl -s --max-time 10 "https://api.tailscale.com/api/v2/tailnet/-/acl" \
+        -u "${TAILSCALE_API_KEY}:" 2>/dev/null)
+
+    if [[ -z "$response" ]]; then
+        return 1
+    fi
+
+    # Check for API error
+    if echo "$response" | jq -e '.message' &>/dev/null; then
+        return 1
+    fi
+
+    # Check if nodeAttrs contains funnel attribute
+    if echo "$response" | jq -e '.nodeAttrs[]?.attr[]? | select(. == "funnel")' &>/dev/null; then
+        return 0
+    fi
+
+    return 1
+}
+
+# Enable Funnel in the Tailscale ACL policy
+enable_funnel_in_acl() {
+    if ! load_tailscale_api_key; then
+        if ! prompt_tailscale_api_key; then
+            return 1
+        fi
+    fi
+
+    echo_info "Checking current Tailscale ACL policy..."
+
+    # Get current ACL
+    local current_acl
+    current_acl=$(curl -s --max-time 10 "https://api.tailscale.com/api/v2/tailnet/-/acl" \
+        -u "${TAILSCALE_API_KEY}:" 2>/dev/null)
+
+    if [[ -z "$current_acl" ]]; then
+        echo_error "Failed to fetch current ACL policy"
+        return 1
+    fi
+
+    # Check for API error
+    local error_msg
+    error_msg=$(echo "$current_acl" | jq -r '.message // empty' 2>/dev/null)
+    if [[ -n "$error_msg" ]]; then
+        echo_error "API error: $error_msg"
+        echo_error "Check your TAILSCALE_API_KEY in $ENV_FILE"
+        return 1
+    fi
+
+    # Check if funnel is already enabled
+    if echo "$current_acl" | jq -e '.nodeAttrs[]?.attr[]? | select(. == "funnel")' &>/dev/null; then
+        echo_info "Funnel is already enabled in ACL policy"
+        return 0
+    fi
+
+    echo_info "Adding Funnel attribute to ACL policy..."
+
+    # Add funnel to nodeAttrs
+    # If nodeAttrs doesn't exist or is empty, create it
+    # If it exists, append to it
+    local updated_acl
+    if echo "$current_acl" | jq -e '.nodeAttrs | length > 0' &>/dev/null; then
+        # nodeAttrs exists - check if there's already a target: ["*"] entry
+        if echo "$current_acl" | jq -e '.nodeAttrs[] | select(.target == ["*"])' &>/dev/null; then
+            # Add funnel to existing wildcard target
+            updated_acl=$(echo "$current_acl" | jq '
+                .nodeAttrs = [.nodeAttrs[] |
+                    if .target == ["*"] then
+                        .attr = ((.attr // []) + ["funnel"] | unique)
+                    else
+                        .
+                    end
+                ]
+            ')
+        else
+            # Add new entry for wildcard target with funnel
+            updated_acl=$(echo "$current_acl" | jq '.nodeAttrs += [{"target": ["*"], "attr": ["funnel"]}]')
+        fi
+    else
+        # nodeAttrs doesn't exist - create it
+        updated_acl=$(echo "$current_acl" | jq '. + {"nodeAttrs": [{"target": ["*"], "attr": ["funnel"]}]}')
+    fi
+
+    # Update the ACL
+    local update_response
+    update_response=$(curl -s --max-time 10 -X POST "https://api.tailscale.com/api/v2/tailnet/-/acl" \
+        -u "${TAILSCALE_API_KEY}:" \
+        -H "Content-Type: application/json" \
+        --data-raw "$updated_acl" 2>/dev/null)
+
+    # Check for errors
+    error_msg=$(echo "$update_response" | jq -r '.message // empty' 2>/dev/null)
+    if [[ -n "$error_msg" ]]; then
+        echo_error "Failed to update ACL: $error_msg"
+        return 1
+    fi
+
+    echo_info "Funnel enabled in ACL policy!"
+    echo -e "  ${DIM}Changes may take a few seconds to propagate.${NC}"
+    sleep 2
+    return 0
 }
 
 # =============================================================================

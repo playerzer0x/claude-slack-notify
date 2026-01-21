@@ -1,0 +1,8 @@
+# Credentials and secrets
+.env
+*.api-key
+*-api-key
+.slack-config
+
+# Tunnel URLs (contain machine DNS names)
+*-tunnel-url

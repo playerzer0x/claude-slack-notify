@@ -23,6 +23,17 @@ INSTANCE_FILE="${INSTANCES_DIR}/${INSTANCE_ID}.json"
 TIMESTAMP_FILE="/tmp/claude-prompt-start-${INSTANCE_ID}"
 
 # -----------------------------------------------------------------------------
+# Generate a random 4-word instance name (e.g., golden-shark-azure-coffee)
+# -----------------------------------------------------------------------------
+generate_instance_name() {
+    local ADJECTIVES=("red" "blue" "green" "purple" "orange" "silver" "golden" "cosmic" "swift" "bright" "dark" "wild" "calm" "bold" "quick")
+    local NOUNS=("wolf" "hawk" "bear" "lion" "tiger" "eagle" "falcon" "dragon" "phoenix" "raven" "fox" "panther" "cobra" "shark" "storm")
+    local COLORS=("amber" "coral" "jade" "ruby" "onyx" "ivory" "copper" "bronze" "teal" "indigo" "crimson" "azure" "scarlet" "violet" "emerald")
+    local ITEMS=("coffee" "thunder" "shadow" "crystal" "ember" "breeze" "river" "mountain" "forest" "ocean" "sunrise" "comet" "glacier" "canyon" "meadow")
+    echo "${ADJECTIVES[$RANDOM % ${#ADJECTIVES[@]}]}-${NOUNS[$RANDOM % ${#NOUNS[@]}]}-${COLORS[$RANDOM % ${#COLORS[@]}]}-${ITEMS[$RANDOM % ${#ITEMS[@]}]}"
+}
+
+# -----------------------------------------------------------------------------
 # Detect terminal environment and build focus URL
 # Sets: TERM_TYPE, TERM_TARGET, FOCUS_URL
 # -----------------------------------------------------------------------------
@@ -315,10 +326,14 @@ if [[ "$1" == "link" ]]; then
         fi
         JUPYTER_SSH_PORT="${CLAUDE_SSH_PORT:-22}"
 
+        # Generate 4-word instance name for 1:1 correspondence
+        INSTANCE_NAME=$(generate_instance_name)
+
         # Save link file with jupyter info
         cat > "$LINKS_DIR/${LINK_ID}.json" << EOF
 {
   "link_id": "${LINK_ID}",
+  "instance_name": "${INSTANCE_NAME}",
   "term_type": "jupyter-tmux",
   "jupyter_url": "${JUPYTER_URL}",
   "ssh_host": "${JUPYTER_SSH_HOST}",
@@ -330,9 +345,10 @@ EOF
 
         # SSH to remote and create env file for the JupyterLab terminal to source
         echo "Creating environment file on remote..."
-        ssh "${SSH_ARGS[@]}" "$SSH_HOST" "mkdir -p ~/.claude && cat > ~/.claude/jupyter-env << 'ENVEOF'
+        ssh "${SSH_ARGS[@]}" "$SSH_HOST" "mkdir -p ~/.claude && cat > ~/.claude/jupyter-env << ENVEOF
 export CLAUDE_LINK_ID=$LINK_ID
 export CLAUDE_SSH_HOST=$JUPYTER_SSH_HOST
+export CLAUDE_INSTANCE_NAME=$INSTANCE_NAME
 ENVEOF"
 
         if [[ $? -ne 0 ]]; then
@@ -345,7 +361,7 @@ ENVEOF"
         echo "│  JupyterLab Link Created                                    │"
         echo "╰─────────────────────────────────────────────────────────────╯"
         echo ""
-        echo "  Link ID:  $LINK_ID"
+        echo "  Session:  $INSTANCE_NAME"
         echo "  SSH Host: $SSH_HOST"
         echo "  URL:      $JUPYTER_URL"
         echo ""
@@ -354,7 +370,7 @@ ENVEOF"
         echo "╰─────────────────────────────────────────────────────────────╯"
         echo ""
         echo "  1. source ~/.claude/jupyter-env"
-        echo "  2. tmux new -s claude"
+        echo "  2. tmux new -s '$INSTANCE_NAME'"
         echo "  3. claude"
         echo "  4. /slack-notify"
         echo ""
@@ -419,10 +435,14 @@ ENVEOF"
         exit 1
     fi
 
-    # Save link info
+    # Generate 4-word instance name for 1:1 correspondence with tmux session
+    INSTANCE_NAME=$(generate_instance_name)
+
+    # Save link info (including instance name)
     cat > "$LINKS_DIR/${LINK_ID}.json" << EOF
 {
   "link_id": "${LINK_ID}",
+  "instance_name": "${INSTANCE_NAME}",
   "term_type": "${LINK_TERM_TYPE}",
   "term_target": "${LINK_TERM_TARGET}",
   "focus_url": "${LINK_FOCUS_URL}",
@@ -437,7 +457,7 @@ EOF
         echo "│  SSH Link Created                                           │"
         echo "╰─────────────────────────────────────────────────────────────╯"
         echo ""
-        echo "  Link ID: $LINK_ID"
+        echo "  Session: $INSTANCE_NAME"
         echo "  Host:    $SSH_HOST"
         echo ""
         echo "╭─────────────────────────────────────────────────────────────╮"
@@ -495,10 +515,10 @@ EOF
         echo -n "  Press Enter to connect and start tmux..."
         read -r
         echo ""
-        # Create new tmux session that exports env vars into the shell
-        # The vars must be exported INSIDE the shell tmux spawns, not just for tmux itself
+        # Create new tmux session named after instance, export env vars for /slack-notify
+        # CLAUDE_INSTANCE_NAME ensures register uses the same name as the tmux session
         exec ssh -t "${SSH_ARGS[@]}" "$SSH_HOST" \
-            "tmux new-session -s claude-$LINK_ID 'export CLAUDE_LINK_ID=$LINK_ID CLAUDE_SSH_HOST=$SSH_HOST; exec \$SHELL -l'"
+            "tmux new-session -s '$INSTANCE_NAME' 'export CLAUDE_LINK_ID=$LINK_ID CLAUDE_SSH_HOST=$SSH_HOST CLAUDE_INSTANCE_NAME=$INSTANCE_NAME; exec \$SHELL -l'"
     fi
 
     # Otherwise print instructions (no --host)
@@ -1018,13 +1038,16 @@ if [[ "$1" == "register" ]]; then
         done
     fi
 
+    # Priority for instance name:
+    # 1. Command line argument (explicit override)
+    # 2. CLAUDE_INSTANCE_NAME env var (set by link command for 1:1 tmux correspondence)
+    # 3. Generate a new random name
     INSTANCE_NAME="$2"
+    if [[ -z "$INSTANCE_NAME" && -n "$CLAUDE_INSTANCE_NAME" ]]; then
+        INSTANCE_NAME="$CLAUDE_INSTANCE_NAME"
+    fi
     if [[ -z "$INSTANCE_NAME" ]]; then
-        ADJECTIVES=("red" "blue" "green" "purple" "orange" "silver" "golden" "cosmic" "swift" "bright" "dark" "wild" "calm" "bold" "quick")
-        NOUNS=("wolf" "hawk" "bear" "lion" "tiger" "eagle" "falcon" "dragon" "phoenix" "raven" "fox" "panther" "cobra" "shark" "storm")
-        COLORS=("amber" "coral" "jade" "ruby" "onyx" "ivory" "copper" "bronze" "teal" "indigo" "crimson" "azure" "scarlet" "violet" "emerald")
-        ITEMS=("coffee" "thunder" "shadow" "crystal" "ember" "breeze" "river" "mountain" "forest" "ocean" "sunrise" "comet" "glacier" "canyon" "meadow")
-        INSTANCE_NAME="${ADJECTIVES[$RANDOM % ${#ADJECTIVES[@]}]}-${NOUNS[$RANDOM % ${#NOUNS[@]}]}-${COLORS[$RANDOM % ${#COLORS[@]}]}-${ITEMS[$RANDOM % ${#ITEMS[@]}]}"
+        INSTANCE_NAME=$(generate_instance_name)
     fi
 
     # detect_terminal already called above for cleanup

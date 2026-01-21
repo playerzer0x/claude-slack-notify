@@ -20,6 +20,7 @@ MCP_PORT=8463
 CLAUDE_DIR="$HOME/.claude"
 MCP_SERVER="$CLAUDE_DIR/bin/mcp-server"
 SLACK_CONFIG_FILE="$CLAUDE_DIR/.slack-config"
+WEBHOOK_FILE="$CLAUDE_DIR/slack-webhook-url"
 TUNNEL_PID_FILE="$CLAUDE_DIR/.tunnel.pid"
 TUNNEL_URL_FILE="$CLAUDE_DIR/.tunnel-url"
 WATCHDOG_PID_FILE="$CLAUDE_DIR/.tunnel-watchdog.pid"
@@ -652,6 +653,32 @@ cmd_setup() {
     echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
     echo ""
 
+    # Webhook setup
+    echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
+    echo -e "${CYAN}│${NC}  ${BOLD}Step 3: Webhook URL${NC}                                         ${CYAN}│${NC}"
+    echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
+    echo ""
+    echo -e "  ${DIM}Webhooks enable basic notifications (buttons come later).${NC}"
+    echo ""
+    echo -e "  ${CYAN}1.${NC} Go to your app: ${BOLD}https://api.slack.com/apps/${SLACK_APP_ID}${NC}"
+    echo -e "  ${CYAN}2.${NC} Click ${BOLD}Incoming Webhooks${NC}"
+    echo -e "  ${CYAN}3.${NC} Toggle ${BOLD}Activate Incoming Webhooks${NC} to On"
+    echo -e "  ${CYAN}4.${NC} Click ${BOLD}Add New Webhook to Workspace${NC}"
+    echo -e "  ${CYAN}5.${NC} Select your notification channel → Click ${BOLD}Allow${NC}"
+    echo -e "  ${CYAN}6.${NC} Copy the webhook URL"
+    echo ""
+    echo -ne "  ${YELLOW}?${NC} Paste webhook URL: "
+    read -r webhook_url
+
+    if [[ -n "$webhook_url" ]]; then
+        echo "$webhook_url" > "$WEBHOOK_FILE"
+        chmod 600 "$WEBHOOK_FILE"
+        echo_info "Webhook URL saved"
+    else
+        echo_warn "Skipped - notifications won't work without a webhook URL"
+    fi
+    echo ""
+
     # Optional: Bot token for thread replies
     echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
     echo -e "${CYAN}│${NC}  ${BOLD}Optional: Enable Thread Replies${NC}                            ${CYAN}│${NC}"
@@ -692,6 +719,25 @@ cmd_setup() {
             echo ""
             echo_info "Bot token saved!"
         fi
+    fi
+
+    # Channel ID for thread routing
+    echo ""
+    echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
+    echo -e "${CYAN}│${NC}  ${BOLD}Notification Channel${NC}                                        ${CYAN}│${NC}"
+    echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
+    echo ""
+    echo -e "  ${DIM}What channel should notifications go to?${NC}"
+    echo -e "  ${DIM}(Right-click channel → View channel details → scroll to Channel ID)${NC}"
+    echo ""
+    echo -ne "  ${YELLOW}?${NC} Channel ID (e.g., C01234ABCDE): "
+    read -r SLACK_CHANNEL_ID
+
+    if [[ -n "$SLACK_CHANNEL_ID" ]]; then
+        save_slack_config
+        echo_info "Channel ID saved"
+    else
+        echo_warn "Skipped - can set later in ~/.claude/.slack-config"
     fi
 
     echo ""

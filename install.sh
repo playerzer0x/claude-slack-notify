@@ -720,86 +720,92 @@ WEBHOOK_FILE="$CLAUDE_DIR/slack-webhook-url"
 
 if [[ -d "$SCRIPT_DIR/mcp-server/dist" && -t 0 && "${1:-}" != "--link" ]]; then
     # =============================================================================
-    # Step 1: Slack Tunnel Setup (App ID + Configuration Token)
+    # Slack Setup (platform-specific)
     # =============================================================================
-    if [[ ! -f "$SLACK_CONFIG_FILE" ]]; then
-        print_section "Slack App Setup"
-        echo ""
-        echo -e "  ${DIM}Configure your Slack app for button actions and notifications.${NC}"
-        echo -e "  ${DIM}This enables responding to Claude directly from Slack.${NC}"
-        echo ""
-        echo -ne "  ${YELLOW}?${NC} Set up Slack app now? [Y/n] "
-        read -r response
-        echo ""
+    if [[ "$(uname)" == "Darwin" ]]; then
+        # macOS: Full setup via local-tunnel (handles app, webhook, channel)
+        if [[ ! -f "$SLACK_CONFIG_FILE" ]]; then
+            print_section "Slack App Setup"
+            echo ""
+            echo -e "  ${DIM}Configure your Slack app for button actions and notifications.${NC}"
+            echo -e "  ${DIM}This enables responding to Claude directly from Slack.${NC}"
+            echo ""
+            echo -ne "  ${YELLOW}?${NC} Set up Slack app now? [Y/n] "
+            read -r response
+            echo ""
 
-        if [[ ! "$response" =~ ^[Nn]$ ]]; then
-            "$BIN_DIR/local-tunnel" --setup
+            if [[ ! "$response" =~ ^[Nn]$ ]]; then
+                "$BIN_DIR/local-tunnel" --setup
+                echo ""
+            fi
+        else
+            echo ""
+            echo -e "  ${GREEN}✓${NC} Slack app already configured"
+            if [[ -f "$WEBHOOK_FILE" ]]; then
+                echo -e "  ${GREEN}✓${NC} Webhook URL configured"
+            fi
+            # Check channel ID
+            source "$SLACK_CONFIG_FILE"
+            if [[ -n "${SLACK_CHANNEL_ID:-}" ]]; then
+                echo -e "  ${GREEN}✓${NC} Channel ID configured"
+            fi
             echo ""
         fi
     else
-        echo ""
-        echo -e "  ${GREEN}✓${NC} Slack app already configured"
-        echo ""
-    fi
+        # Linux: Only webhook and channel ID (config synced from Mac or use remote-tunnel --setup)
+        if [[ ! -f "$WEBHOOK_FILE" ]]; then
+            print_section "Slack Webhook Setup"
+            echo ""
+            echo -e "  ${DIM}Webhooks enable basic notifications.${NC}"
+            echo -e "  ${DIM}(For button support, run: remote-tunnel --setup)${NC}"
+            echo ""
+            echo -e "  ${BOLD}In your Slack app:${NC}"
+            echo -e "    ${CYAN}1.${NC} Go to ${BOLD}Incoming Webhooks${NC}"
+            echo -e "    ${CYAN}2.${NC} Toggle ${BOLD}Activate Incoming Webhooks${NC} to On"
+            echo -e "    ${CYAN}3.${NC} Click ${BOLD}Add New Webhook to Workspace${NC}"
+            echo -e "    ${CYAN}4.${NC} Select your notification channel → Click ${BOLD}Allow${NC}"
+            echo -e "    ${CYAN}5.${NC} Copy the webhook URL"
+            echo ""
+            echo -ne "  ${YELLOW}?${NC} Paste webhook URL (or Enter to skip): "
+            read -r webhook_url
 
-    # =============================================================================
-    # Step 2: Slack Webhook Setup
-    # =============================================================================
-    if [[ ! -f "$WEBHOOK_FILE" ]]; then
-        print_section "Slack Webhook Setup"
-        echo ""
-        echo -e "  ${DIM}Webhooks enable basic notifications (without buttons).${NC}"
-        echo ""
-        echo -e "  ${BOLD}In your Slack app:${NC}"
-        echo -e "    ${CYAN}1.${NC} Go to ${BOLD}Incoming Webhooks${NC}"
-        echo -e "    ${CYAN}2.${NC} Toggle ${BOLD}Activate Incoming Webhooks${NC} to On"
-        echo -e "    ${CYAN}3.${NC} Click ${BOLD}Add New Webhook to Workspace${NC}"
-        echo -e "    ${CYAN}4.${NC} Select your notification channel → Click ${BOLD}Allow${NC}"
-        echo -e "    ${CYAN}5.${NC} Copy the webhook URL"
-        echo ""
-        echo -ne "  ${YELLOW}?${NC} Paste webhook URL (or Enter to skip): "
-        read -r webhook_url
-
-        if [[ -n "$webhook_url" ]]; then
-            echo "$webhook_url" > "$WEBHOOK_FILE"
-            chmod 600 "$WEBHOOK_FILE"
-            echo_info "Webhook URL saved"
-        else
-            echo -e "  ${DIM}Skipped - set later with: echo 'URL' > ~/.claude/slack-webhook-url${NC}"
-        fi
-        echo ""
-    else
-        echo -e "  ${GREEN}✓${NC} Webhook URL already configured"
-        echo ""
-    fi
-
-    # =============================================================================
-    # Step 3: Channel ID (for thread replies)
-    # =============================================================================
-    # Check if channel ID is already configured
-    CHANNEL_ID_CONFIGURED=false
-    if [[ -f "$SLACK_CONFIG_FILE" ]]; then
-        source "$SLACK_CONFIG_FILE"
-        if [[ -n "${SLACK_CHANNEL_ID:-}" ]]; then
-            CHANNEL_ID_CONFIGURED=true
-        fi
-    fi
-
-    if [[ "$CHANNEL_ID_CONFIGURED" != "true" ]]; then
-        print_section "Notification Channel"
-        echo ""
-        echo -e "  ${DIM}What channel should notifications go to?${NC}"
-        echo -e "  ${DIM}(Right-click channel → View channel details → scroll to Channel ID)${NC}"
-        echo ""
-        echo -ne "  ${YELLOW}?${NC} Channel ID (e.g., C01234ABCDE): "
-        read -r channel_id
-
-        if [[ -n "$channel_id" ]]; then
-            # Source existing config if present to preserve other values
-            if [[ -f "$SLACK_CONFIG_FILE" ]]; then
-                source "$SLACK_CONFIG_FILE"
+            if [[ -n "$webhook_url" ]]; then
+                echo "$webhook_url" > "$WEBHOOK_FILE"
+                chmod 600 "$WEBHOOK_FILE"
+                echo_info "Webhook URL saved"
+            else
+                echo -e "  ${DIM}Skipped - set later with: echo 'URL' > ~/.claude/slack-webhook-url${NC}"
             fi
-            cat > "$SLACK_CONFIG_FILE" << EOF
+            echo ""
+        else
+            echo -e "  ${GREEN}✓${NC} Webhook URL already configured"
+            echo ""
+        fi
+
+        # Channel ID for thread routing
+        CHANNEL_ID_CONFIGURED=false
+        if [[ -f "$SLACK_CONFIG_FILE" ]]; then
+            source "$SLACK_CONFIG_FILE"
+            if [[ -n "${SLACK_CHANNEL_ID:-}" ]]; then
+                CHANNEL_ID_CONFIGURED=true
+            fi
+        fi
+
+        if [[ "$CHANNEL_ID_CONFIGURED" != "true" ]]; then
+            print_section "Notification Channel"
+            echo ""
+            echo -e "  ${DIM}What channel should notifications go to?${NC}"
+            echo -e "  ${DIM}(Right-click channel → View channel details → scroll to Channel ID)${NC}"
+            echo ""
+            echo -ne "  ${YELLOW}?${NC} Channel ID (e.g., C01234ABCDE): "
+            read -r channel_id
+
+            if [[ -n "$channel_id" ]]; then
+                # Source existing config if present to preserve other values
+                if [[ -f "$SLACK_CONFIG_FILE" ]]; then
+                    source "$SLACK_CONFIG_FILE"
+                fi
+                cat > "$SLACK_CONFIG_FILE" << EOF
 SLACK_APP_ID="${SLACK_APP_ID:-}"
 SLACK_ACCESS_TOKEN="${SLACK_ACCESS_TOKEN:-}"
 SLACK_REFRESH_TOKEN="${SLACK_REFRESH_TOKEN:-}"
@@ -807,15 +813,16 @@ SLACK_TOKEN_EXPIRES="${SLACK_TOKEN_EXPIRES:-}"
 SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN:-}"
 SLACK_CHANNEL_ID="$channel_id"
 EOF
-            chmod 600 "$SLACK_CONFIG_FILE"
-            echo_info "Channel ID saved"
+                chmod 600 "$SLACK_CONFIG_FILE"
+                echo_info "Channel ID saved"
+            else
+                echo -e "  ${DIM}Skipped - can set later in ~/.claude/.slack-config${NC}"
+            fi
+            echo ""
         else
-            echo -e "  ${DIM}Skipped - can set later in ~/.claude/.slack-config${NC}"
+            echo -e "  ${GREEN}✓${NC} Channel ID already configured"
+            echo ""
         fi
-        echo ""
-    else
-        echo -e "  ${GREEN}✓${NC} Channel ID already configured"
-        echo ""
     fi
 fi
 

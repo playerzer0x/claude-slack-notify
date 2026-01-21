@@ -5,9 +5,10 @@
 # Runs on a Linux server (in tmux) to receive Slack button clicks when your
 # Mac is closed. Auto-detects if Mac is reachable and proxies to it when possible.
 #
+# Uses Localtunnel for stable URLs that don't change between restarts.
+#
 # Commands:
-#   remote-tunnel           - Start tunnel (interactive)
-#   remote-tunnel --stable  - Setup stable URL with Localtunnel (recommended)
+#   remote-tunnel           - Start tunnel (prompts to configure stable URL if needed)
 #   remote-tunnel --setup   - Configure Slack tokens (for auto-URL updates)
 #   remote-tunnel --background - Start tunnel in background
 #   remote-tunnel --stop    - Stop background tunnel
@@ -541,15 +542,10 @@ cmd_setup() {
 }
 
 # =============================================================================
-# --stable: Setup stable URL with Localtunnel
+# --stable: Setup stable URL with Localtunnel and start tunnel
 # =============================================================================
 
 cmd_stable() {
-    echo ""
-    echo -e "${BOLD}Stable Tunnel Setup${NC}"
-    echo -e "${DIM}Get a URL that stays the same every time${NC}"
-    echo ""
-
     # Check if localtunnel is installed
     if ! command -v lt &>/dev/null; then
         echo_warn "Localtunnel not installed. Installing..."
@@ -563,19 +559,37 @@ cmd_stable() {
         echo ""
     fi
 
+    # If already configured, ask if they want to reconfigure or just start
+    if has_stable_tunnel; then
+        local current
+        current=$(get_localtunnel_subdomain)
+        local tunnel_url="https://${current}.loca.lt"
+
+        echo ""
+        echo -e "  ${GREEN}✓${NC} Stable URL already configured: ${CYAN}${tunnel_url}${NC}"
+        echo ""
+        echo -ne "  ${YELLOW}?${NC} Change subdomain? [y/N] "
+        read -r change_subdomain
+
+        if [[ ! "$change_subdomain" =~ ^[Yy]$ ]]; then
+            # Just start the tunnel with existing config
+            echo ""
+            cmd_interactive
+            return
+        fi
+        echo ""
+    fi
+
+    # Setup flow
+    echo ""
+    echo -e "${BOLD}Stable Tunnel Setup${NC}"
+    echo -e "${DIM}Get a URL that stays the same every time${NC}"
+    echo ""
+
     echo -e "  ${GREEN}✓${NC} URL stays the same every restart"
     echo -e "  ${GREEN}✓${NC} No Slack tokens needed for URL updates"
     echo -e "  ${GREEN}✓${NC} Set Slack URLs once, never again"
     echo ""
-
-    # Show current subdomain if set
-    if [[ -f "$LOCALTUNNEL_SUBDOMAIN_FILE" ]]; then
-        local current
-        current=$(cat "$LOCALTUNNEL_SUBDOMAIN_FILE")
-        echo -e "  Current subdomain: ${CYAN}${current}${NC}"
-        echo -e "  Current URL: ${CYAN}https://${current}.loca.lt${NC}"
-        echo ""
-    fi
 
     echo -e "  Choose a unique subdomain for your tunnel."
     echo -e "  ${DIM}Pick something unlikely to be taken (e.g., claude-remote-yourname)${NC}"
@@ -665,8 +679,10 @@ cmd_stable() {
         echo ""
     fi
 
-    echo -e "  ${BOLD}To start the tunnel:${NC} remote-tunnel"
+    # Start the tunnel
+    echo_info "Starting tunnel..."
     echo ""
+    cmd_interactive
 }
 
 # =============================================================================
@@ -975,9 +991,6 @@ case "${1:-}" in
     --setup)
         cmd_setup
         ;;
-    --stable)
-        cmd_stable
-        ;;
     --background)
         cmd_background
         ;;
@@ -991,19 +1004,15 @@ case "${1:-}" in
         echo "Usage: remote-tunnel [command]"
         echo ""
         echo "Commands:"
-        echo "  (none)        Interactive mode - start tunnel in foreground"
-        echo "  --stable      Setup stable URL with Localtunnel (recommended)"
+        echo "  (none)        Start tunnel (uses stable URL, prompts to configure if needed)"
         echo "  --setup       Configure Slack API tokens (for auto-URL updates)"
         echo "  --background  Start tunnel in background"
         echo "  --stop        Stop background tunnel"
         echo "  --status      Check tunnel status"
         echo ""
-        echo "By default, tunnels use random URLs that change each restart."
-        echo "Use --stable for a permanent URL (no Slack tokens needed!)."
-        echo ""
         ;;
-    "")
-        cmd_interactive
+    --stable|"")
+        cmd_stable
         ;;
     *)
         echo_error "Unknown command: $1"

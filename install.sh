@@ -713,146 +713,143 @@ if [[ -f "$SETTINGS_FILE" ]]; then
 fi
 
 # =============================================================================
-# Final Summary
+# Slack App Setup (Interactive)
 # =============================================================================
-print_header "Installation Complete" 50
-
-echo -e "  ${GREEN}✓${NC} Scripts installed to ${BOLD}~/.claude/bin/${NC}"
-if [[ "$(uname)" == "Darwin" ]]; then
-    echo -e "  ${GREEN}✓${NC} ClaudeFocus.app installed"
-    echo -e "  ${GREEN}✓${NC} LaunchAgent loaded"
-fi
-echo -e "  ${GREEN}✓${NC} Button config at ${BOLD}~/.claude/button-config${NC}"
-if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
-    echo -e "  ${GREEN}✓${NC} MCP server built (start with: ${BOLD}~/.claude/bin/mcp-server${NC})"
-fi
-echo ""
-
+SLACK_CONFIG_FILE="$CLAUDE_DIR/.slack-config"
 WEBHOOK_FILE="$CLAUDE_DIR/slack-webhook-url"
 
-if [[ -f "$WEBHOOK_FILE" ]]; then
-    print_section "Webhook Configuration"
-    echo ""
-    echo -e "  ${GREEN}✓${NC} Webhook URL already configured at ${BOLD}~/.claude/slack-webhook-url${NC}"
-    echo ""
-else
-    print_section "Slack Webhook Setup"
-    echo ""
-    echo -e "  ${DIM}To receive notifications, you need a Slack webhook URL.${NC}"
-    echo ""
-    echo -e "  ${BOLD}Quick setup:${NC}"
-    echo -e "    1. Go to ${CYAN}https://api.slack.com/apps${NC}"
-    echo -e "    2. Create New App → From scratch"
-    echo -e "    3. Click ${BOLD}Incoming Webhooks${NC} → Toggle ${BOLD}Activate Incoming Webhooks${NC} to On"
-    echo -e "    4. Click ${BOLD}Add New Webhook to Workspace${NC} → Select a channel → Click ${BOLD}Allow${NC}"
-    echo -e "    5. Copy the webhook URL"
-    echo ""
+if [[ -d "$SCRIPT_DIR/mcp-server/dist" && -t 0 && "${1:-}" != "--link" ]]; then
+    # =============================================================================
+    # Step 1: Slack Tunnel Setup (App ID + Configuration Token)
+    # =============================================================================
+    if [[ ! -f "$SLACK_CONFIG_FILE" ]]; then
+        print_section "Slack App Setup"
+        echo ""
+        echo -e "  ${DIM}Configure your Slack app for button actions and notifications.${NC}"
+        echo -e "  ${DIM}This enables responding to Claude directly from Slack.${NC}"
+        echo ""
+        echo -ne "  ${YELLOW}?${NC} Set up Slack app now? [Y/n] "
+        read -r response
+        echo ""
 
-    if [[ -t 0 ]]; then
-        echo -e "  ${YELLOW}?${NC} Paste your Slack webhook URL (or press Enter to skip): "
+        if [[ ! "$response" =~ ^[Nn]$ ]]; then
+            "$BIN_DIR/local-tunnel" --setup
+            echo ""
+        fi
+    else
+        echo ""
+        echo -e "  ${GREEN}✓${NC} Slack app already configured"
+        echo ""
+    fi
+
+    # =============================================================================
+    # Step 2: Slack Webhook Setup
+    # =============================================================================
+    if [[ ! -f "$WEBHOOK_FILE" ]]; then
+        print_section "Slack Webhook Setup"
+        echo ""
+        echo -e "  ${DIM}Webhooks enable basic notifications (without buttons).${NC}"
+        echo ""
+        echo -e "  ${BOLD}In your Slack app:${NC}"
+        echo -e "    ${CYAN}1.${NC} Go to ${BOLD}Incoming Webhooks${NC}"
+        echo -e "    ${CYAN}2.${NC} Toggle ${BOLD}Activate Incoming Webhooks${NC} to On"
+        echo -e "    ${CYAN}3.${NC} Click ${BOLD}Add New Webhook to Workspace${NC}"
+        echo -e "    ${CYAN}4.${NC} Select your notification channel → Click ${BOLD}Allow${NC}"
+        echo -e "    ${CYAN}5.${NC} Copy the webhook URL"
+        echo ""
+        echo -ne "  ${YELLOW}?${NC} Paste webhook URL (or Enter to skip): "
         read -r webhook_url
 
         if [[ -n "$webhook_url" ]]; then
-            if [[ "$webhook_url" =~ ^https://hooks\.slack\.com/ ]]; then
-                echo "$webhook_url" > "$WEBHOOK_FILE"
-                chmod 600 "$WEBHOOK_FILE"
-                echo_info "Webhook URL saved to ~/.claude/slack-webhook-url"
-            else
-                echo_warn "URL doesn't look like a Slack webhook (should start with https://hooks.slack.com/)"
-                echo_warn "Saving anyway - you can edit ~/.claude/slack-webhook-url later"
-                echo "$webhook_url" > "$WEBHOOK_FILE"
-                chmod 600 "$WEBHOOK_FILE"
-            fi
+            echo "$webhook_url" > "$WEBHOOK_FILE"
+            chmod 600 "$WEBHOOK_FILE"
+            echo_info "Webhook URL saved"
         else
-            echo_warn "Skipped - run this later to set up:"
-            echo_warn "  echo 'YOUR_URL' > ~/.claude/slack-webhook-url"
+            echo -e "  ${DIM}Skipped - set later with: echo 'URL' > ~/.claude/slack-webhook-url${NC}"
         fi
+        echo ""
     else
-        echo -e "  ${DIM}(Non-interactive mode - skipping webhook prompt)${NC}"
-        echo -e "  ${DIM}Run: echo 'YOUR_URL' > ~/.claude/slack-webhook-url${NC}"
+        echo -e "  ${GREEN}✓${NC} Webhook URL already configured"
+        echo ""
     fi
+
+    # =============================================================================
+    # Step 3: Thread Replies Setup (Bot Token + Scopes)
+    # =============================================================================
+    print_section "Thread Replies Setup"
     echo ""
-fi
+    echo -e "  ${DIM}Reply to notifications directly from Slack (text + images).${NC}"
+    echo ""
+    echo -ne "  ${YELLOW}?${NC} Enable thread replies? [Y/n] "
+    read -r enable_threads
 
-print_section "Next Steps"
-echo ""
-if [[ -f "$CLAUDE_DIR/.slack-config" ]]; then
-    echo -e "  ${CYAN}1.${NC} Start the tunnel: ${BOLD}local-tunnel${NC} (or ${BOLD}local-tunnel --background${NC})"
-    echo -e "  ${CYAN}2.${NC} In Claude, run: ${BOLD}/slack-notify${NC}"
-else
-    echo -e "  ${CYAN}1.${NC} In Claude, run: ${BOLD}/slack-notify${NC}"
-fi
-echo ""
-echo -e "  ${DIM}The Focus button will switch to the correct terminal tab.${NC}"
-echo -e "  ${DIM}Run ${BOLD}./install.sh --configure${NC}${DIM} to change button layout.${NC}"
-echo ""
+    if [[ ! "$enable_threads" =~ ^[Nn]$ ]]; then
+        echo ""
+        echo -e "  ${BOLD}Add these Bot Token Scopes${NC} (OAuth & Permissions):"
+        echo ""
+        echo -e "    ${CYAN}•${NC} ${BOLD}app_mentions:read${NC}"
+        echo -e "      ${DIM}View messages that mention your bot${NC}"
+        echo ""
+        echo -e "    ${CYAN}•${NC} ${BOLD}channels:history${NC}"
+        echo -e "      ${DIM}View messages in public channels the bot is in${NC}"
+        echo ""
+        echo -e "    ${CYAN}•${NC} ${BOLD}chat:write${NC}"
+        echo -e "      ${DIM}Send messages as your bot${NC}"
+        echo ""
+        echo -e "    ${CYAN}•${NC} ${BOLD}files:read${NC}"
+        echo -e "      ${DIM}Download images from thread replies${NC}"
+        echo ""
+        echo -e "  ${BOLD}Then:${NC}"
+        echo -e "    ${CYAN}1.${NC} Click ${BOLD}Reinstall to Workspace${NC}"
+        echo -e "    ${CYAN}2.${NC} Copy the ${BOLD}Bot User OAuth Token${NC} (starts with xoxb-)"
+        echo ""
+        echo -ne "  ${YELLOW}?${NC} Paste Bot Token (or Enter to skip): "
+        read -r bot_token
 
-# =============================================================================
-# Slack Button Actions Setup (App ID + Configuration Token)
-# =============================================================================
-SLACK_CONFIG_FILE="$CLAUDE_DIR/.slack-config"
+        if [[ -n "$bot_token" && "$bot_token" =~ ^xoxb- ]]; then
+            # Update slack config with bot token
+            if [[ -f "$SLACK_CONFIG_FILE" ]]; then
+                source "$SLACK_CONFIG_FILE"
+                cat > "$SLACK_CONFIG_FILE" << EOF
+SLACK_APP_ID="${SLACK_APP_ID:-}"
+SLACK_ACCESS_TOKEN="${SLACK_ACCESS_TOKEN:-}"
+SLACK_REFRESH_TOKEN="${SLACK_REFRESH_TOKEN:-}"
+SLACK_TOKEN_EXPIRES="${SLACK_TOKEN_EXPIRES:-}"
+SLACK_BOT_TOKEN="$bot_token"
+SLACK_CHANNEL_ID="${SLACK_CHANNEL_ID:-}"
+EOF
+                chmod 600 "$SLACK_CONFIG_FILE"
+            fi
+            echo_info "Bot token saved"
+            echo ""
 
-if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
-    if [[ -f "$SLACK_CONFIG_FILE" ]]; then
-        print_section "Slack Button Actions"
-        echo ""
-        echo -e "  ${GREEN}✓${NC} Slack tunnel already configured"
-        echo -e "  ${DIM}Run ${BOLD}local-tunnel${NC}${DIM} to start the tunnel for button support.${NC}"
-        echo ""
-        echo -e "  ${BOLD}Thread Replies (one-time setup):${NC}"
-        echo -e "  ${DIM}Reply to notifications directly from Slack (text + images):${NC}"
-        echo ""
-        echo -e "    ${CYAN}1.${NC} ${BOLD}Invite the bot${NC} to your notification channel:"
-        echo -e "       Type ${BOLD}/invite @YourBotName${NC} in the channel"
-        echo ""
-        echo -e "    ${CYAN}2.${NC} ${BOLD}Add bot scopes${NC} (OAuth & Permissions → Bot Token Scopes):"
-        echo -e "       • ${BOLD}chat:write${NC} - Send messages"
-        echo -e "       • ${BOLD}files:read${NC} - Download images from replies"
-        echo -e "       Then reinstall app to workspace"
-        echo ""
-        echo -e "    ${CYAN}3.${NC} ${BOLD}Enable Events API${NC} (Event Subscriptions):"
-        echo -e "       • Enable Events"
-        echo -e "       • Subscribe to bot event: ${BOLD}message.channels${NC}"
-        echo -e "       • Save changes"
-        echo ""
-        echo -e "    ${DIM}The Events Request URL is auto-updated when you run local-tunnel.${NC}"
+            echo -e "  ${BOLD}Enable Events API${NC} (Event Subscriptions):"
+            echo -e "    ${CYAN}1.${NC} Toggle ${BOLD}Enable Events${NC} to On"
+            echo -e "    ${CYAN}2.${NC} Subscribe to bot event: ${BOLD}message.channels${NC}"
+            echo -e "    ${CYAN}3.${NC} Click ${BOLD}Save Changes${NC}"
+            echo ""
+            echo -e "  ${DIM}The Events Request URL is auto-updated when you run local-tunnel.${NC}"
+            echo ""
+
+            echo -e "  ${BOLD}Invite the bot to your channel:${NC}"
+            echo -e "    Type ${BOLD}/invite @YourBotName${NC} in the notification channel"
+        else
+            echo -e "  ${DIM}Skipped thread replies setup${NC}"
+        fi
         echo ""
     else
-        print_section "Slack Button Actions (One-Time Setup)"
         echo ""
-        echo -e "  ${DIM}To respond to Claude directly from Slack (buttons like \"Continue\", \"1\", \"2\"),${NC}"
-        echo -e "  ${DIM}you need to configure your Slack App ID and Configuration Token.${NC}"
-        echo ""
-        echo -e "  ${DIM}This enables:${NC}"
-        echo -e "    ${CYAN}•${NC} Click buttons in Slack to send input to Claude"
-        echo -e "    ${CYAN}•${NC} Works on mobile + desktop"
-        echo -e "    ${CYAN}•${NC} Auto-updates Slack's Request URL (no manual URL copying)${NC}"
-        echo ""
-
-        SETUP_NOW=false
-        if [[ -t 0 && "${1:-}" != "--link" ]]; then
-            echo -ne "  ${YELLOW}?${NC} Set up Slack button actions now? [Y/n] "
-            read -r response
-            echo ""
-
-            if [[ ! "$response" =~ ^[Nn]$ ]]; then
-                SETUP_NOW=true
-            fi
-        fi
-
-        if [[ "$SETUP_NOW" == "true" ]]; then
-            # Run local-tunnel --setup inline
-            "$BIN_DIR/local-tunnel" --setup
-        else
-            echo -e "  ${DIM}To set up later, run:${NC}"
-            echo -e "  ${CYAN}2.${NC} ${BOLD}local-tunnel --setup${NC}"
-            echo ""
-            echo -e "     ${DIM}This will guide you through:${NC}"
-            echo -e "     ${DIM}• Getting your Slack App ID${NC}"
-            echo -e "     ${DIM}• Generating a Configuration Token (at api.slack.com/apps)${NC}"
-            echo ""
-        fi
     fi
+fi
+
+# =============================================================================
+# Button Configuration
+# =============================================================================
+# Only configure buttons interactively on fresh install or when --configure flag is passed
+if [[ "${1:-}" == "--configure" || ( ! -f "$BUTTON_CONFIG" && "${1:-}" != "--uninstall" ) ]]; then
+    configure_buttons "${1:-}"
+elif [[ ! -f "$BUTTON_CONFIG" ]]; then
+    echo "$DEFAULT_BUTTONS" > "$BUTTON_CONFIG"
 fi
 
 # =============================================================================
@@ -862,7 +859,6 @@ if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
     MCP_CONFIGURED=false
 
     if [[ -f "$SETTINGS_FILE" ]]; then
-        # Check if already configured
         if jq -e '.mcpServers["slack-notify"]' "$SETTINGS_FILE" &>/dev/null 2>&1; then
             MCP_CONFIGURED=true
         elif command -v jq &> /dev/null; then
@@ -870,14 +866,11 @@ if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
             echo -e "  ${DIM}Adding MCP server to settings.json for Slack button actions...${NC}"
             echo ""
 
-            # Create backup if not already done
             if [[ ! -f "$SETTINGS_FILE.backup" ]]; then
                 cp "$SETTINGS_FILE" "$SETTINGS_FILE.backup"
             fi
 
-            # Add MCP server config
             MCP_CONFIG="{\"mcpServers\": {\"slack-notify\": {\"type\": \"stdio\", \"command\": \"$HOME/.claude/bin/mcp-server\"}}}"
-
             MERGED=$(jq ". * $MCP_CONFIG" "$SETTINGS_FILE" 2>/dev/null)
 
             if [[ -n "$MERGED" ]] && echo "$MERGED" | jq . > /dev/null 2>&1; then
@@ -885,12 +878,11 @@ if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
                 echo_info "MCP server added to settings.json"
                 MCP_CONFIGURED=true
             else
-                echo_warn "Failed to add MCP config - add manually (see below)"
+                echo_warn "Failed to add MCP config"
             fi
             echo ""
         fi
     else
-        # Create new settings.json with MCP config
         if command -v jq &> /dev/null; then
             print_section "MCP Server Configuration"
             echo -e "  ${DIM}Creating settings.json with MCP server config...${NC}"
@@ -902,24 +894,47 @@ if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
             echo ""
         fi
     fi
-
-    # Show manual instructions if auto-config failed
-    if [[ "$MCP_CONFIGURED" != "true" ]]; then
-        print_section "MCP Server Setup (Manual)"
-        echo ""
-        echo -e "  ${DIM}The MCP server enables Slack button actions (respond from Slack).${NC}"
-        echo -e "  ${DIM}Install jq for automatic configuration: brew install jq${NC}"
-        echo ""
-        echo -e "  Add to ${BOLD}~/.claude/settings.json${NC}:"
-        echo ""
-        echo -e "  ${CYAN}\"mcpServers\": {"
-        echo -e "    \"slack-notify\": {"
-        echo -e "      \"type\": \"stdio\","
-        echo -e "      \"command\": \"$HOME/.claude/bin/mcp-server\""
-        echo -e "    }"
-        echo -e "  }${NC}"
-        echo ""
-        echo -e "  Restart Claude Code for MCP to take effect"
-        echo ""
-    fi
 fi
+
+# =============================================================================
+# Final Summary
+# =============================================================================
+print_header "Installation Complete" 50
+
+echo -e "  ${GREEN}✓${NC} Scripts installed to ${BOLD}~/.claude/bin/${NC}"
+if [[ "$(uname)" == "Darwin" ]]; then
+    echo -e "  ${GREEN}✓${NC} ClaudeFocus.app installed"
+    echo -e "  ${GREEN}✓${NC} LaunchAgent loaded"
+fi
+echo -e "  ${GREEN}✓${NC} Button config at ${BOLD}~/.claude/button-config${NC}"
+if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
+    echo -e "  ${GREEN}✓${NC} MCP server built"
+fi
+if [[ -f "$SLACK_CONFIG_FILE" ]]; then
+    echo -e "  ${GREEN}✓${NC} Slack app configured"
+fi
+if [[ -f "$WEBHOOK_FILE" ]]; then
+    echo -e "  ${GREEN}✓${NC} Webhook configured"
+fi
+echo ""
+
+print_section "Next Steps"
+echo ""
+echo -e "  ${BOLD}Start the tunnel:${NC}"
+echo -e "    ${CYAN}local-tunnel${NC}                    ${DIM}# Interactive (first time)${NC}"
+echo -e "    ${CYAN}local-tunnel --background${NC}       ${DIM}# Background mode${NC}"
+echo ""
+echo -e "  ${DIM}Uses stable URLs that don't change between restarts.${NC}"
+echo -e "  ${DIM}Prompts to configure subdomain on first run.${NC}"
+echo ""
+if [[ "$(uname)" == "Linux" ]]; then
+    echo -e "  ${BOLD}Remote server (when Mac is closed):${NC}"
+    echo -e "    ${CYAN}remote-tunnel${NC}                   ${DIM}# Start on Linux server${NC}"
+    echo ""
+fi
+echo -e "  ${BOLD}In Claude:${NC}"
+echo -e "    ${CYAN}/slack-notify${NC}                   ${DIM}# Register this session${NC}"
+echo ""
+echo -e "  ${DIM}The Focus button will switch to the correct terminal tab.${NC}"
+echo -e "  ${DIM}Run ${BOLD}./install.sh --configure${NC}${DIM} to change button layout.${NC}"
+echo ""

@@ -527,12 +527,24 @@ SLACK_PERMISSIONS='[
 ]'
 
 # Our hooks to add
+# Hook events (from official docs):
+# - UserPromptSubmit: When user submits a prompt (start timer)
+# - Stop: When main agent finishes responding (notify if elapsed > threshold)
+# - SubagentStop: When a subagent (Task) finishes (notify if elapsed > threshold)
+# - PermissionRequest: When user shown a permission dialog (notify immediately)
+# - Notification: Various notification events (idle_prompt, elicitation_dialog, permission_prompt)
 SLACK_HOOKS='{
   "hooks": {
     "UserPromptSubmit": [
       {"hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-start", "timeout": 5}]}
     ],
     "Stop": [
+      {"hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10}]}
+    ],
+    "SubagentStop": [
+      {"hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10}]}
+    ],
+    "PermissionRequest": [
       {"hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-check", "timeout": 10}]}
     ],
     "Notification": [

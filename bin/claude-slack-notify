@@ -1059,23 +1059,44 @@ if [[ "$1" == "register" ]]; then
 
     echo "$INSTANCE_JSON" > "$INSTANCE_FILE"
 
-    # Check if tunnel is running when Slack is configured (local only - warn if not)
+    # Auto-start tunnel/relay for Slack button support
     SLACK_CONFIG_FILE="${CLAUDE_DIR}/.slack-config"
-    TUNNEL_PID_FILE="${CLAUDE_DIR}/.tunnel.pid"
-    if [[ -f "$SLACK_CONFIG_FILE" ]] && [[ "$TERM_TYPE" != "ssh-linked" ]] && [[ "$TERM_TYPE" != "jupyter-tmux" ]]; then
-        # Check if tunnel is running
-        TUNNEL_RUNNING=false
-        if [[ -f "$TUNNEL_PID_FILE" ]]; then
-            EXISTING_PID=$(cat "$TUNNEL_PID_FILE" 2>/dev/null)
-            if [[ -n "$EXISTING_PID" ]] && kill -0 "$EXISTING_PID" 2>/dev/null; then
-                TUNNEL_RUNNING=true
-            fi
-        fi
-
-        if [[ "$TUNNEL_RUNNING" == "false" ]]; then
-            echo "Warning: Slack buttons require 'local-tunnel' to be running" >&2
-            echo "         Run: local-tunnel --background" >&2
-        fi
+    if [[ -f "$SLACK_CONFIG_FILE" ]]; then
+        case "$(uname)" in
+            Linux)
+                # On Linux: always auto-start remote-tunnel relay if not running
+                # (needed for button support regardless of session type)
+                REMOTE_TUNNEL="${CLAUDE_DIR}/bin/remote-tunnel"
+                if [[ -x "$REMOTE_TUNNEL" ]]; then
+                    # Check if relay is responding
+                    if ! curl -sf "http://localhost:8464/health" --max-time 1 >/dev/null 2>&1; then
+                        echo "Starting relay for Slack buttons..." >&2
+                        "$REMOTE_TUNNEL" --background >/dev/null 2>&1 || true
+                    fi
+                fi
+                ;;
+            Darwin)
+                # On macOS: warn if local-tunnel not running (only for non-linked sessions)
+                if [[ "$TERM_TYPE" != "ssh-linked" ]] && [[ "$TERM_TYPE" != "jupyter-tmux" ]]; then
+                    TUNNEL_PID_FILE="${CLAUDE_DIR}/.tunnel.pid"
+                    TUNNEL_RUNNING=false
+                    if [[ -f "$TUNNEL_PID_FILE" ]]; then
+                        EXISTING_PID=$(cat "$TUNNEL_PID_FILE" 2>/dev/null)
+                        if [[ -n "$EXISTING_PID" ]] && kill -0 "$EXISTING_PID" 2>/dev/null; then
+                            TUNNEL_RUNNING=true
+                        fi
+                    fi
+                    # Also check if MCP server is responding (Tailscale Funnel doesn't use PID file)
+                    if curl -sf "http://localhost:8463/health" --max-time 1 >/dev/null 2>&1; then
+                        TUNNEL_RUNNING=true
+                    fi
+                    if [[ "$TUNNEL_RUNNING" == "false" ]]; then
+                        echo "Warning: Slack buttons require 'local-tunnel' to be running" >&2
+                        echo "         Run: local-tunnel --background" >&2
+                    fi
+                fi
+                ;;
+        esac
     fi
 
     echo "$INSTANCE_NAME"
@@ -1251,13 +1272,13 @@ if [[ "$1" == "check" ]]; then
         ELAPSED=$((NOW - START_TIME))
     fi
 
-    # Notification events (user input requested) always notify immediately
-    # Other events only notify if elapsed >= threshold
-    if [[ "$HOOK_EVENT" == "Notification" ]]; then
-        # Always notify for Notification events - user input is requested
+    # Events that require immediate user input - always notify immediately
+    # Other events (Stop, SubagentStop) only notify if elapsed >= threshold
+    if [[ "$HOOK_EVENT" == "Notification" || "$HOOK_EVENT" == "PermissionRequest" ]]; then
+        # Always notify for user input events - user needs to respond
         rm -f "$TIMESTAMP_FILE"
     elif [[ $ELAPSED -lt $MIN_DURATION ]]; then
-        # Below threshold and not a Notification event - skip
+        # Below threshold and not a user input event - skip
         exit 0
     else
         # Threshold exceeded - clear timestamp and notify

@@ -659,10 +659,10 @@ cmd_setup() {
     echo ""
     echo -e "  ${DIM}Reply to Claude notifications to send messages to the terminal.${NC}"
     echo ""
-    echo -ne "  ${YELLOW}?${NC} Enable thread replies? [y/N] "
+    echo -ne "  ${YELLOW}?${NC} Enable thread replies? [Y/n] "
     read -r enable_threads
 
-    if [[ "$enable_threads" =~ ^[Yy]$ ]]; then
+    if [[ ! "$enable_threads" =~ ^[Nn]$ ]]; then
         echo ""
         echo -e "  ${CYAN}1.${NC} Go to your app: ${BOLD}https://api.slack.com/apps/${SLACK_APP_ID}${NC}"
         echo -e "  ${CYAN}2.${NC} Click ${BOLD}OAuth & Permissions${NC}"

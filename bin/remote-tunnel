@@ -7,7 +7,8 @@
 #
 # Commands:
 #   remote-tunnel           - Start tunnel (interactive)
-#   remote-tunnel --setup   - Copy config from Mac or configure manually
+#   remote-tunnel --stable  - Setup stable URL with Localtunnel (recommended)
+#   remote-tunnel --setup   - Configure Slack tokens (for auto-URL updates)
 #   remote-tunnel --background - Start tunnel in background
 #   remote-tunnel --stop    - Stop background tunnel
 #   remote-tunnel --status  - Check tunnel status
@@ -25,6 +26,7 @@ WATCHDOG_PID_FILE="$CLAUDE_DIR/.remote-tunnel-watchdog.pid"
 ACTIVITY_FILE="$CLAUDE_DIR/.relay-last-activity"
 TUNNEL_LOG="$CLAUDE_DIR/remote-tunnel.log"
 IDLE_TIMEOUT=3600  # 1 hour in seconds
+LOCALTUNNEL_SUBDOMAIN_FILE="$CLAUDE_DIR/.remote-localtunnel-subdomain"
 
 # Colors
 RED='\033[0;31m'
@@ -44,12 +46,12 @@ echo_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 # =============================================================================
 if [[ "$(uname)" == "Darwin" ]]; then
     echo_error "remote-tunnel is for Linux servers only."
-    echo_info "On macOS, use: slack-tunnel"
+    echo_info "On macOS, use: local-tunnel"
     exit 1
 fi
 
 # =============================================================================
-# Slack API helpers (reused from slack-tunnel)
+# Slack API helpers (reused from local-tunnel)
 # =============================================================================
 
 load_slack_config() {
@@ -68,6 +70,18 @@ SLACK_REFRESH_TOKEN="$SLACK_REFRESH_TOKEN"
 SLACK_TOKEN_EXPIRES="$SLACK_TOKEN_EXPIRES"
 EOF
     chmod 600 "$SLACK_CONFIG_FILE"
+}
+
+# =============================================================================
+# Localtunnel config (stable URL)
+# =============================================================================
+
+has_stable_tunnel() {
+    [[ -f "$LOCALTUNNEL_SUBDOMAIN_FILE" ]]
+}
+
+get_localtunnel_subdomain() {
+    cat "$LOCALTUNNEL_SUBDOMAIN_FILE" 2>/dev/null
 }
 
 is_token_expired() {
@@ -300,58 +314,109 @@ stop_watchdog() {
 
 start_tunnel_and_get_url() {
     local background="${1:-false}"
+    local log_file="$CLAUDE_DIR/.remote-tunnel.log"
 
-    # Check cloudflared installed
-    if ! command -v cloudflared &>/dev/null; then
-        echo_error "cloudflared not installed."
-        echo ""
-        echo -e "  Install with:"
-        echo -e "    Debian/Ubuntu: See https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
-        echo -e "    Or use: curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb && sudo dpkg -i cloudflared.deb"
-        exit 1
-    fi
-
-    # Kill any existing cloudflared tunnels on our port
+    # Kill any existing tunnel processes
     pkill -f "cloudflared tunnel.*localhost:${RELAY_PORT}" 2>/dev/null || true
-    rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE"
+    pkill -f "lt --port.*${RELAY_PORT}" 2>/dev/null || true
+    rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE" "$log_file"
     sleep 0.5
 
-    echo_info "Starting Cloudflare Quick Tunnel..."
+    # Priority 1: Localtunnel with saved subdomain (stable URL)
+    if has_stable_tunnel; then
+        local subdomain
+        subdomain=$(get_localtunnel_subdomain)
 
-    local log_file="$CLAUDE_DIR/.remote-cloudflared.log"
-    rm -f "$log_file"
-
-    if [[ "$background" == "true" ]]; then
-        nohup cloudflared tunnel --url "http://localhost:$RELAY_PORT" > "$log_file" 2>&1 &
-    else
-        cloudflared tunnel --url "http://localhost:$RELAY_PORT" > "$log_file" 2>&1 &
-    fi
-    TUNNEL_PID=$!
-    echo "$TUNNEL_PID" > "$TUNNEL_PID_FILE"
-
-    # Wait for URL to appear in logs
-    local tunnel_url=""
-    for i in {1..30}; do
-        if [[ -f "$log_file" ]]; then
-            tunnel_url=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$log_file" 2>/dev/null | tail -1 || true)
-            if [[ -n "$tunnel_url" ]]; then
-                break
+        if ! command -v lt &>/dev/null; then
+            echo_warn "Localtunnel not installed. Installing..."
+            if command -v npm &>/dev/null; then
+                npm install -g localtunnel
+            else
+                echo_error "npm not found. Install Node.js or use: npm install -g localtunnel"
+                exit 1
             fi
         fi
-        sleep 0.5
-    done
 
-    if [[ -z "$tunnel_url" ]]; then
-        echo_error "Failed to get tunnel URL"
-        cat "$log_file" 2>/dev/null | tail -10
-        kill "$TUNNEL_PID" 2>/dev/null || true
-        rm -f "$TUNNEL_PID_FILE"
-        exit 1
+        echo_info "Starting Localtunnel (stable URL: ${subdomain}.loca.lt)..."
+
+        if [[ "$background" == "true" ]]; then
+            nohup lt --port "$RELAY_PORT" --subdomain "$subdomain" > "$log_file" 2>&1 &
+        else
+            lt --port "$RELAY_PORT" --subdomain "$subdomain" > "$log_file" 2>&1 &
+        fi
+        TUNNEL_PID=$!
+        echo "$TUNNEL_PID" > "$TUNNEL_PID_FILE"
+
+        # Wait for URL to appear
+        local tunnel_url=""
+        for i in {1..20}; do
+            if [[ -f "$log_file" ]]; then
+                tunnel_url=$(grep -oE 'https://[a-z0-9-]+\.loca\.lt' "$log_file" 2>/dev/null | head -1 || true)
+                if [[ -n "$tunnel_url" ]]; then
+                    break
+                fi
+            fi
+            sleep 0.5
+        done
+
+        if [[ -z "$tunnel_url" ]]; then
+            echo_error "Failed to start localtunnel"
+            cat "$log_file" 2>/dev/null | tail -5
+            kill "$TUNNEL_PID" 2>/dev/null || true
+            rm -f "$TUNNEL_PID_FILE"
+            exit 1
+        fi
+
+        echo "$tunnel_url" > "$TUNNEL_URL_FILE"
+        TUNNEL_URL="$tunnel_url"
+        echo_info "Tunnel started: $tunnel_url"
+
+    # Fallback: Cloudflare quick tunnel (random URL)
+    else
+        if ! command -v cloudflared &>/dev/null; then
+            echo_error "No tunnel provider available."
+            echo ""
+            echo -e "  Install one of:"
+            echo -e "    ${BOLD}npm install -g localtunnel${NC}  (recommended for stable URLs)"
+            echo -e "    ${BOLD}cloudflared${NC}  (random URLs each restart)"
+            exit 1
+        fi
+
+        echo_info "Starting Cloudflare Quick Tunnel (random URL)..."
+        echo -e "  ${DIM}Tip: Run 'remote-tunnel --stable' for a permanent URL${NC}"
+
+        if [[ "$background" == "true" ]]; then
+            nohup cloudflared tunnel --url "http://localhost:$RELAY_PORT" > "$log_file" 2>&1 &
+        else
+            cloudflared tunnel --url "http://localhost:$RELAY_PORT" > "$log_file" 2>&1 &
+        fi
+        TUNNEL_PID=$!
+        echo "$TUNNEL_PID" > "$TUNNEL_PID_FILE"
+
+        # Wait for URL to appear in logs
+        local tunnel_url=""
+        for i in {1..30}; do
+            if [[ -f "$log_file" ]]; then
+                tunnel_url=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$log_file" 2>/dev/null | tail -1 || true)
+                if [[ -n "$tunnel_url" ]]; then
+                    break
+                fi
+            fi
+            sleep 0.5
+        done
+
+        if [[ -z "$tunnel_url" ]]; then
+            echo_error "Failed to get tunnel URL"
+            cat "$log_file" 2>/dev/null | tail -10
+            kill "$TUNNEL_PID" 2>/dev/null || true
+            rm -f "$TUNNEL_PID_FILE"
+            exit 1
+        fi
+
+        echo "$tunnel_url" > "$TUNNEL_URL_FILE"
+        TUNNEL_URL="$tunnel_url"
+        echo_info "Tunnel started: $tunnel_url"
     fi
-
-    echo "$tunnel_url" > "$TUNNEL_URL_FILE"
-    TUNNEL_URL="$tunnel_url"
-    echo_info "Tunnel started: $tunnel_url"
 }
 
 # =============================================================================
@@ -470,6 +535,134 @@ cmd_setup() {
     echo ""
     echo -e "  ${BOLD}To start the tunnel:${NC}"
     echo -e "    remote-tunnel"
+    echo ""
+}
+
+# =============================================================================
+# --stable: Setup stable URL with Localtunnel
+# =============================================================================
+
+cmd_stable() {
+    echo ""
+    echo -e "${BOLD}Stable Tunnel Setup${NC}"
+    echo -e "${DIM}Get a URL that stays the same every time${NC}"
+    echo ""
+
+    # Check if localtunnel is installed
+    if ! command -v lt &>/dev/null; then
+        echo_warn "Localtunnel not installed. Installing..."
+        echo ""
+        if command -v npm &>/dev/null; then
+            npm install -g localtunnel
+        else
+            echo_error "npm not found. Please install Node.js first."
+            exit 1
+        fi
+        echo ""
+    fi
+
+    echo -e "  ${GREEN}✓${NC} URL stays the same every restart"
+    echo -e "  ${GREEN}✓${NC} No Slack tokens needed for URL updates"
+    echo -e "  ${GREEN}✓${NC} Set Slack URLs once, never again"
+    echo ""
+
+    # Show current subdomain if set
+    if [[ -f "$LOCALTUNNEL_SUBDOMAIN_FILE" ]]; then
+        local current
+        current=$(cat "$LOCALTUNNEL_SUBDOMAIN_FILE")
+        echo -e "  Current subdomain: ${CYAN}${current}${NC}"
+        echo -e "  Current URL: ${CYAN}https://${current}.loca.lt${NC}"
+        echo ""
+    fi
+
+    echo -e "  Choose a unique subdomain for your tunnel."
+    echo -e "  ${DIM}Pick something unlikely to be taken (e.g., claude-remote-yourname)${NC}"
+    echo ""
+    echo -ne "  ${YELLOW}?${NC} Subdomain: "
+    read -r subdomain
+
+    if [[ -z "$subdomain" ]]; then
+        echo_error "Subdomain is required"
+        exit 1
+    fi
+
+    # Remove any protocol or domain suffix if user pasted full URL
+    subdomain="${subdomain#https://}"
+    subdomain="${subdomain%.loca.lt}"
+    subdomain="${subdomain%%/*}"
+
+    # Validate subdomain (alphanumeric and hyphens only)
+    if [[ ! "$subdomain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]]; then
+        echo_error "Invalid subdomain. Use only letters, numbers, and hyphens."
+        exit 1
+    fi
+
+    # Save subdomain
+    echo "$subdomain" > "$LOCALTUNNEL_SUBDOMAIN_FILE"
+    chmod 600 "$LOCALTUNNEL_SUBDOMAIN_FILE"
+
+    local tunnel_url="https://${subdomain}.loca.lt"
+
+    echo ""
+    echo_info "Testing tunnel..."
+
+    # Test the tunnel briefly
+    local log_file="$CLAUDE_DIR/.localtunnel-test.log"
+    rm -f "$log_file"
+
+    lt --port "$RELAY_PORT" --subdomain "$subdomain" > "$log_file" 2>&1 &
+    local test_pid=$!
+
+    local connected=""
+    for i in {1..10}; do
+        if grep -q "your url is" "$log_file" 2>/dev/null; then
+            connected="true"
+            break
+        fi
+        sleep 1
+    done
+
+    kill "$test_pid" 2>/dev/null || true
+
+    if [[ -z "$connected" ]]; then
+        echo_warn "Could not verify tunnel. The subdomain might be taken."
+        echo -e "  ${DIM}Try a more unique name if it doesn't work.${NC}"
+        cat "$log_file" 2>/dev/null | tail -3
+    else
+        echo -e "  ${GREEN}✓${NC} Tunnel works!"
+    fi
+
+    echo ""
+    echo -e "${GREEN}╭──────────────────────────────────────────────────────────────╮${NC}"
+    echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Stable URL Configured!${NC}                                    ${GREEN}│${NC}"
+    echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
+    echo ""
+    echo -e "  ${BOLD}Your stable URL:${NC} ${CYAN}${tunnel_url}${NC}"
+    echo ""
+
+    # Try to auto-update Slack if tokens exist
+    local slack_updated=false
+    if load_slack_config && [[ -n "${SLACK_APP_ID:-}" ]]; then
+        echo_info "Updating Slack app settings..."
+        if update_slack_request_url "${tunnel_url}/slack/actions" "${tunnel_url}/slack/events"; then
+            slack_updated=true
+            echo -e "  ${GREEN}✓${NC} Slack Request URLs updated automatically!"
+            echo ""
+        fi
+    fi
+
+    if [[ "$slack_updated" != "true" ]]; then
+        echo -e "  ${BOLD}Update your Slack app (one-time only):${NC}"
+        echo ""
+        echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps${NC} → your app"
+        echo -e "  ${CYAN}2.${NC} ${BOLD}Interactivity & Shortcuts${NC} → Request URL:"
+        echo -e "       ${BOLD}${tunnel_url}/slack/actions${NC}"
+        echo -e "  ${CYAN}3.${NC} ${BOLD}Event Subscriptions${NC} → Request URL:"
+        echo -e "       ${BOLD}${tunnel_url}/slack/events${NC}"
+        echo ""
+    fi
+
+    echo -e "  ${BOLD}To start the tunnel:${NC} remote-tunnel"
     echo ""
 }
 
@@ -602,19 +795,32 @@ cmd_status() {
     echo -e "${BOLD}Remote Tunnel Status${NC}"
     echo ""
 
-    # Check Slack config
-    if [[ -f "$SLACK_CONFIG_FILE" ]]; then
-        load_slack_config
-        echo -e "  Slack App:  ${CYAN}$SLACK_APP_ID${NC}"
-        if is_token_expired; then
-            echo -e "  Token:      ${YELLOW}Expired (will refresh on next use)${NC}"
-        else
-            echo -e "  Token:      ${GREEN}Valid${NC}"
-        fi
+    # Check stable tunnel config
+    if has_stable_tunnel; then
+        local subdomain
+        subdomain=$(get_localtunnel_subdomain)
+        echo -e "  Mode:       ${GREEN}Localtunnel (stable URL)${NC}"
+        echo -e "  URL:        ${CYAN}https://${subdomain}.loca.lt${NC}"
+        echo ""
     else
-        echo -e "  Slack:      ${YELLOW}Not configured${NC} (run: remote-tunnel --setup)"
+        echo -e "  Mode:       ${YELLOW}Quick Tunnel${NC} (random URL each restart)"
+        echo -e "              ${DIM}Run --stable for permanent URL${NC}"
+        echo ""
+
+        # Check Slack config (only needed for quick tunnels)
+        if [[ -f "$SLACK_CONFIG_FILE" ]]; then
+            load_slack_config
+            echo -e "  Slack App:  ${CYAN}$SLACK_APP_ID${NC}"
+            if is_token_expired; then
+                echo -e "  Token:      ${YELLOW}Expired (will refresh on next use)${NC}"
+            else
+                echo -e "  Token:      ${GREEN}Valid${NC}"
+            fi
+        else
+            echo -e "  Slack:      ${YELLOW}Not configured${NC} (run: remote-tunnel --setup)"
+        fi
+        echo ""
     fi
-    echo ""
 
     # Check relay
     if check_relay_running; then
@@ -766,6 +972,9 @@ case "${1:-}" in
     --setup)
         cmd_setup
         ;;
+    --stable)
+        cmd_stable
+        ;;
     --background)
         cmd_background
         ;;
@@ -780,18 +989,14 @@ case "${1:-}" in
         echo ""
         echo "Commands:"
         echo "  (none)        Interactive mode - start tunnel in foreground"
-        echo "  --setup       Configure Slack API tokens (copy from Mac or manual)"
+        echo "  --stable      Setup stable URL with Localtunnel (recommended)"
+        echo "  --setup       Configure Slack API tokens (for auto-URL updates)"
         echo "  --background  Start tunnel in background"
         echo "  --stop        Stop background tunnel"
         echo "  --status      Check tunnel status"
         echo ""
-        echo "This runs on Linux servers to receive Slack button clicks when your"
-        echo "Mac is closed. Auto-detects if Mac is reachable and proxies when possible."
-        echo ""
-        echo "Workflow:"
-        echo "  1. Copy Slack config from Mac: scp mac:~/.claude/.slack-config ~/.claude/"
-        echo "  2. Start tunnel: remote-tunnel --background"
-        echo "  3. In Claude: /slack-notify"
+        echo "By default, tunnels use random URLs that change each restart."
+        echo "Use --stable for a permanent URL (no Slack tokens needed!)."
         echo ""
         ;;
     "")

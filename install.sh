@@ -113,7 +113,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     rm -f "$BIN_DIR/get-session-id"
     rm -f "$BIN_DIR/focus-helper"
     rm -f "$BIN_DIR/mcp-server"
-    rm -f "$BIN_DIR/slack-tunnel"
+    rm -f "$BIN_DIR/local-tunnel"
     rm -f "$BIN_DIR/remote-tunnel"
     rm -f "$COMMANDS_DIR/slack-notify.md"
     echo_info "Removed scripts from ~/.claude/bin/"
@@ -298,21 +298,21 @@ if [[ "${1:-}" == "--link" ]]; then
     ln -sf "$SCRIPT_DIR/bin/get-session-id" "$BIN_DIR/"
     ln -sf "$SCRIPT_DIR/bin/focus-helper" "$BIN_DIR/"
     ln -sf "$SCRIPT_DIR/bin/mcp-server" "$BIN_DIR/"
-    ln -sf "$SCRIPT_DIR/bin/slack-tunnel" "$BIN_DIR/"
+    ln -sf "$SCRIPT_DIR/bin/local-tunnel" "$BIN_DIR/"
     ln -sf "$SCRIPT_DIR/bin/remote-tunnel" "$BIN_DIR/"
     echo_info "Installed scripts to $BIN_DIR/ (symlinked to repo)"
 else
     # Remove existing files/symlinks first, then copy fresh
-    rm -f "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/get-session-id" "$BIN_DIR/focus-helper" "$BIN_DIR/mcp-server" "$BIN_DIR/slack-tunnel" "$BIN_DIR/remote-tunnel"
+    rm -f "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/get-session-id" "$BIN_DIR/focus-helper" "$BIN_DIR/mcp-server" "$BIN_DIR/local-tunnel" "$BIN_DIR/remote-tunnel"
     cp "$SCRIPT_DIR/bin/claude-slack-notify" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/slack-notify-start" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/slack-notify-check" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/get-session-id" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/focus-helper" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/mcp-server" "$BIN_DIR/"
-    cp "$SCRIPT_DIR/bin/slack-tunnel" "$BIN_DIR/"
+    cp "$SCRIPT_DIR/bin/local-tunnel" "$BIN_DIR/"
     cp "$SCRIPT_DIR/bin/remote-tunnel" "$BIN_DIR/"
-    chmod +x "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/get-session-id" "$BIN_DIR/focus-helper" "$BIN_DIR/mcp-server" "$BIN_DIR/slack-tunnel" "$BIN_DIR/remote-tunnel"
+    chmod +x "$BIN_DIR/claude-slack-notify" "$BIN_DIR/slack-notify-start" "$BIN_DIR/slack-notify-check" "$BIN_DIR/get-session-id" "$BIN_DIR/focus-helper" "$BIN_DIR/mcp-server" "$BIN_DIR/local-tunnel" "$BIN_DIR/remote-tunnel"
     echo_info "Installed scripts to $BIN_DIR/"
 fi
 
@@ -444,7 +444,7 @@ else
     echo -e "  ${DIM}${BOLD}claude-slack-notify link --host${NC}${DIM} from your Mac.${NC}"
     echo ""
     echo -e "  ${DIM}This enables 1/2/Continue/Push buttons from your phone.${NC}"
-    echo -e "  ${DIM}Focus button requires Mac to be open (use slack-tunnel on Mac).${NC}"
+    echo -e "  ${DIM}Focus button requires Mac to be open (use local-tunnel on Mac).${NC}"
     echo ""
 fi
 
@@ -777,7 +777,7 @@ fi
 print_section "Next Steps"
 echo ""
 if [[ -f "$CLAUDE_DIR/.slack-config" ]]; then
-    echo -e "  ${CYAN}1.${NC} Start the tunnel: ${BOLD}slack-tunnel${NC} (or ${BOLD}slack-tunnel --background${NC})"
+    echo -e "  ${CYAN}1.${NC} Start the tunnel: ${BOLD}local-tunnel${NC} (or ${BOLD}local-tunnel --background${NC})"
     echo -e "  ${CYAN}2.${NC} In Claude, run: ${BOLD}/slack-notify${NC}"
 else
     echo -e "  ${CYAN}1.${NC} In Claude, run: ${BOLD}/slack-notify${NC}"
@@ -797,7 +797,7 @@ if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
         print_section "Slack Button Actions"
         echo ""
         echo -e "  ${GREEN}✓${NC} Slack tunnel already configured"
-        echo -e "  ${DIM}Run ${BOLD}slack-tunnel${NC}${DIM} to start the tunnel for button support.${NC}"
+        echo -e "  ${DIM}Run ${BOLD}local-tunnel${NC}${DIM} to start the tunnel for button support.${NC}"
         echo ""
         echo -e "  ${BOLD}Thread Replies (one-time setup):${NC}"
         echo -e "  ${DIM}Reply to notifications directly from Slack (text + images):${NC}"
@@ -815,7 +815,7 @@ if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
         echo -e "       • Subscribe to bot event: ${BOLD}message.channels${NC}"
         echo -e "       • Save changes"
         echo ""
-        echo -e "    ${DIM}The Events Request URL is auto-updated when you run slack-tunnel.${NC}"
+        echo -e "    ${DIM}The Events Request URL is auto-updated when you run local-tunnel.${NC}"
         echo ""
     else
         print_section "Slack Button Actions (One-Time Setup)"
@@ -841,11 +841,11 @@ if [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
         fi
 
         if [[ "$SETUP_NOW" == "true" ]]; then
-            # Run slack-tunnel --setup inline
-            "$BIN_DIR/slack-tunnel" --setup
+            # Run local-tunnel --setup inline
+            "$BIN_DIR/local-tunnel" --setup
         else
             echo -e "  ${DIM}To set up later, run:${NC}"
-            echo -e "  ${CYAN}2.${NC} ${BOLD}slack-tunnel --setup${NC}"
+            echo -e "  ${CYAN}2.${NC} ${BOLD}local-tunnel --setup${NC}"
             echo ""
             echo -e "     ${DIM}This will guide you through:${NC}"
             echo -e "     ${DIM}• Getting your Slack App ID${NC}"

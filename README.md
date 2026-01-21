@@ -29,8 +29,8 @@ The installer guides you through creating a Slack app, configuring webhooks, and
 Then start the tunnel (in a separate terminal or background):
 
 ```bash
-slack-tunnel              # Foreground (see status)
-slack-tunnel --background # Background (for convenience)
+local-tunnel              # Foreground (see status)
+local-tunnel --background # Background (for convenience)
 ```
 
 And in Claude Code:
@@ -39,7 +39,7 @@ And in Claude Code:
 /slack-notify
 ```
 
-> **Note**: The tunnel auto-terminates after 1 hour of inactivity. Run `slack-tunnel --background` to restart it.
+> **Note**: The tunnel auto-terminates after 1 hour of inactivity. Run `local-tunnel --background` to restart it.
 
 ## Platform Support
 
@@ -75,7 +75,7 @@ The remote install skips tunnel setup since the tunnel runs on your local Mac.
 
 ```bash
 # On your Mac:
-slack-tunnel                                  # Start tunnel (keep running)
+local-tunnel                                  # Start tunnel (keep running)
 
 # In another terminal:
 claude-slack-notify link --host user@server  # Creates link, SSHs, starts tmux
@@ -89,7 +89,7 @@ claude                                        # Start Claude on remote
 
 ```bash
 # On your Mac (keep running):
-slack-tunnel
+local-tunnel
 
 # From another Mac terminal (with JupyterLab open in Chrome):
 claude-slack-notify link --jupyter --host user@jupyter-server
@@ -164,10 +164,10 @@ Format: `LABEL|ACTION` per line. Reconfigure with `./install.sh --configure`.
 ./install.sh --uninstall  # Uninstall completely
 ./install.sh --configure  # Reconfigure buttons
 ./install.sh --link       # Install with symlinks (development)
-slack-tunnel              # Start tunnel (foreground)
-slack-tunnel --background # Start tunnel (background)
-slack-tunnel --stop       # Stop tunnel
-slack-tunnel --status     # Check tunnel status
+local-tunnel              # Start tunnel (foreground)
+local-tunnel --background # Start tunnel (background)
+local-tunnel --stop       # Stop tunnel
+local-tunnel --status     # Check tunnel status
 ```
 
 ## Debugging

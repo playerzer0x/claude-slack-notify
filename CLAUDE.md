@@ -8,7 +8,7 @@ Project-specific context for Claude Code sessions working on this codebase.
 Local Mac                              Remote Server (time-machine)
 ─────────────                          ────────────────────────────
 ┌─────────────────┐                    ┌─────────────────┐
-│ slack-tunnel    │                    │ Claude Code     │
+│ local-tunnel    │                    │ Claude Code     │
 │  ├─ ngrok       │◄───── Slack ──────►│  └─ /slack-notify│
 │  └─ MCP server  │                    │     (hooks)     │
 ├─────────────────┤                    └─────────────────┘
@@ -50,7 +50,7 @@ The `bin/mcp-server` script **prioritizes the installed copy**. After rebuilding
 1. Copy new dist to installed location
 2. Restart the MCP server process
 
-**Solution** (implemented): `slack-tunnel` now:
+**Solution** (implemented): `local-tunnel` now:
 - Auto-rebuilds if source is newer than dist
 - Copies to installed location automatically
 - Always restarts MCP server on startup
@@ -69,8 +69,8 @@ The `focus-helper` script reads link files to find the local terminal info for f
 ```bash
 # 1. Edit source files in mcp-server/src/
 
-# 2. Just run slack-tunnel - it handles everything:
-slack-tunnel
+# 2. Just run local-tunnel - it handles everything:
+local-tunnel
 # - Rebuilds if source changed
 # - Copies to ~/.claude/mcp-server-dist/
 # - Restarts MCP server
@@ -134,7 +134,7 @@ If buttons aren't working:
 | File | Purpose |
 |------|---------|
 | `bin/claude-slack-notify` | Main CLI - register, notify, link commands |
-| `bin/slack-tunnel` | Starts ngrok + MCP server for button support |
+| `bin/local-tunnel` | Starts ngrok + MCP server for button support |
 | `bin/focus-helper` | Handles `claude-focus://` URLs, switches terminals |
 | `bin/mcp-server` | Launcher script for MCP server |
 | `mcp-server/src/routes/slack.ts` | Handles Slack button click webhooks |

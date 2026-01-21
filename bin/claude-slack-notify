@@ -281,8 +281,8 @@ EOF
         echo "│  Mac-Based Buttons (Focus + Input)                          │"
         echo "╰─────────────────────────────────────────────────────────────╯"
         echo ""
-        echo "  When your Mac is open, start slack-tunnel on Mac:"
-        echo "    slack-tunnel"
+        echo "  When your Mac is open, start local-tunnel on Mac:"
+        echo "    local-tunnel"
         echo ""
         echo "  Then on the remote server, run:"
         echo "    claude"
@@ -697,8 +697,8 @@ if [[ "$1" == "register" ]]; then
         fi
 
         if [[ "$TUNNEL_RUNNING" == "false" ]]; then
-            echo "Warning: Slack buttons require 'slack-tunnel' to be running" >&2
-            echo "         Run: slack-tunnel --background" >&2
+            echo "Warning: Slack buttons require 'local-tunnel' to be running" >&2
+            echo "         Run: local-tunnel --background" >&2
         fi
     fi
 
@@ -737,7 +737,7 @@ if [[ "$1" == "stop" ]]; then
     fi
 
     # Stop tunnel if available (only on local Mac)
-    SLACK_TUNNEL="${CLAUDE_DIR}/bin/slack-tunnel"
+    SLACK_TUNNEL="${CLAUDE_DIR}/bin/local-tunnel"
     if [[ -x "$SLACK_TUNNEL" ]]; then
         "$SLACK_TUNNEL" --stop
     fi

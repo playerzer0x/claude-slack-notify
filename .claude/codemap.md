@@ -11,7 +11,7 @@ Slack notifications for Claude Code with clickable buttons that work from mobile
 │                           USER SCENARIOS                                 │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│  Mac-Based (slack-tunnel on Mac)                                        │
+│  Mac-Based (local-tunnel on Mac)                                        │
 │  ─────────────────────────────────────────────────────────────────────  │
 │  Phone/Slack → cloudflared (Mac) → MCP server (Mac) → focus-helper     │
 │                                         ↓                               │
@@ -40,7 +40,7 @@ Slack notifications for Claude Code with clickable buttons that work from mobile
 claude-slack-notify/
 ├── bin/                          # Executable scripts
 │   ├── claude-slack-notify       # Main CLI: register, notify, link commands
-│   ├── slack-tunnel              # Mac: Start tunnel + MCP server for buttons
+│   ├── local-tunnel              # Mac: Start tunnel + MCP server for buttons
 │   ├── remote-tunnel             # Linux: Start tunnel + relay when Mac is closed
 │   ├── focus-helper              # Mac: Handle claude-focus:// URLs
 │   ├── mcp-server                # Launcher script for MCP server
@@ -82,7 +82,7 @@ claude-slack-notify/
 | File | Purpose | Platform |
 |------|---------|----------|
 | `claude-slack-notify` | Main CLI - register sessions, send notifications, create SSH links | All |
-| `slack-tunnel` | Start cloudflared + MCP server, update Slack Request URL | macOS |
+| `local-tunnel` | Start cloudflared + MCP server, update Slack Request URL | macOS |
 | `remote-tunnel` | Start cloudflared + remote-relay for Mac-less operation | Linux |
 | `focus-helper` | Handle `claude-focus://` URLs, switch terminals, send input | macOS |
 | `mcp-server` | Launcher script for the Node.js MCP server | All |
@@ -112,6 +112,8 @@ claude-slack-notify/
 | `.tunnel.pid` | PID of running cloudflared tunnel |
 | `.mcp-server.pid` | PID of running MCP server |
 | `.remote-relay.pid` | PID of running remote relay |
+| `.localtunnel-subdomain` | Stable Localtunnel subdomain (local-tunnel) |
+| `.remote-localtunnel-subdomain` | Stable Localtunnel subdomain (remote-tunnel) |
 
 ## Button Value Formats
 
@@ -131,7 +133,7 @@ The `url:` prefix tells MCP server to use the URL directly without session looku
 
 ## Thread Replies
 
-When bot token is configured (`slack-tunnel --setup` → enable thread replies):
+When bot token is configured (`local-tunnel --setup` → enable thread replies):
 1. Notifications are sent via `chat.postMessage` API (not webhook)
 2. The `thread_ts` is saved to `~/.claude/threads/{ts}.json`
 3. Slack Events API sends replies to `/slack/events`
@@ -182,7 +184,7 @@ bun run dev:relay
 
 ### Local Mac Development
 ```bash
-slack-tunnel              # Start tunnel (interactive)
+local-tunnel              # Start tunnel (interactive)
 # In Claude: /slack-notify
 ```
 
@@ -206,8 +208,10 @@ remote-tunnel --background
 > Last updated: 2026-01-21
 
 ### Recent Changes
+- **Renamed `slack-tunnel` → `local-tunnel`**: Consistent naming with `remote-tunnel`
+- **Stable URLs with Localtunnel**: `local-tunnel --stable` and `remote-tunnel --stable` use Localtunnel for permanent URLs (no more changing URLs on restart)
+- **Auto-update Slack URLs**: `--stable` setup auto-updates Slack Request URLs if tokens exist
+- **Token refresh**: `local-tunnel --update-token` for quick Slack token refresh
 - **Thread reply images**: Slack thread replies with images are downloaded to `~/.claude/slack-downloads/` and paths sent to Claude
 - **Enhanced notifications**: Full context extraction from transcript (text + tool calls), truncation handling for Slack limits
-- **Auto-update Events URL**: Both `slack-tunnel` and `remote-tunnel` now auto-update the Events Request URL alongside Actions URL
-- **Bot scopes documented**: `chat:write` + `files:read` required for thread replies with images
-- **Thread replies**: Slack thread reply routing to tmux sessions via Events API (text + images)
+- **Auto-update Events URL**: Both `local-tunnel` and `remote-tunnel` now auto-update the Events Request URL alongside Actions URL

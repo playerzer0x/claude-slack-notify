@@ -1676,8 +1676,10 @@ cmd_interactive() {
         fi
         stop_mcp_server
         rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE" "$TUNNEL_TYPE_FILE"
+        exit 0
     }
-    trap cleanup EXIT INT TERM
+    trap cleanup INT TERM
+    trap 'rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE" "$TUNNEL_TYPE_FILE"' EXIT
 
     # Try Tailscale Funnel first (if available and not forced to use localtunnel)
     if [[ "$TUNNEL_TYPE" != "localtunnel" ]] && has_tailscale && is_tailscale_connected; then

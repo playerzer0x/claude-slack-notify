@@ -169,6 +169,13 @@ router.post('/actions', verifySlackSignature, async (req: Request, res: Response
       console.log(`Direct URL action: ${focusUrl} / ${actionType}`);
       const result = await executeFocusUrl(focusUrl, actionType);
       console.log(`Focus URL result for ${actionType}:`, result);
+      if (!result.success && actionType === 'focus') {
+        res.json({
+          response_type: 'ephemeral',
+          text: `⚠️ Focus failed: ${result.message || 'Unknown error'}`,
+        });
+        return;
+      }
       ack();
       return;
     }
@@ -178,12 +185,23 @@ router.post('/actions', verifySlackSignature, async (req: Request, res: Response
     const session = await getSession({ id: sessionId });
     if (!session) {
       console.error('Session not found:', sessionId);
-      ack();
+      res.json({
+        response_type: 'ephemeral',
+        text: '⚠️ Session not found - it may have expired or been unregistered',
+      });
       return;
     }
 
     const result = await executeFocus(session, actionType);
     console.log(`Focus result for ${sessionId}/${actionType}:`, result);
+
+    if (!result.success && actionType === 'focus') {
+      res.json({
+        response_type: 'ephemeral',
+        text: `⚠️ Focus failed: ${result.message || 'Unknown error'}`,
+      });
+      return;
+    }
 
     ack();
   } catch (error) {

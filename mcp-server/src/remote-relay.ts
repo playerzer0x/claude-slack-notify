@@ -577,15 +577,21 @@ app.post('/slack/actions', verifySlackSignature, async (req: Request, res: Respo
       } else {
         // No session file found locally - cannot handle
         console.log('Session not found locally - cannot handle (Mac not reachable)');
-        ack();
+        res.json({
+          response_type: 'ephemeral',
+          text: '⚠️ Session not found - Mac tunnel not running and session file missing',
+        });
         return;
       }
     }
 
-    // Handle locally - Focus is a no-op, but we can send input
+    // Handle locally - Focus requires Mac, other actions work via tmux
     if (actionType === 'focus') {
-      console.log('Focus action - no-op on remote (Mac not reachable)');
-      ack();
+      console.log('Focus action - Mac not reachable, returning ephemeral error');
+      res.json({
+        response_type: 'ephemeral',
+        text: '⚠️ Focus unavailable - Mac tunnel not running\nOther buttons (1, 2, Continue, Push) still work.',
+      });
       return;
     }
 
@@ -593,7 +599,10 @@ app.post('/slack/actions', verifySlackSignature, async (req: Request, res: Respo
     const tmuxTarget = extractTmuxTarget(focusUrl);
     if (!tmuxTarget) {
       console.error('Could not extract tmux target from URL:', focusUrl);
-      ack();
+      res.json({
+        response_type: 'ephemeral',
+        text: '⚠️ Could not determine terminal session',
+      });
       return;
     }
 

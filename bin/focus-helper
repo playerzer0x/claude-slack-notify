@@ -20,16 +20,19 @@ fi
 # Support up to 5 URL segments for ssh-linked: type/link_id/host/user/port/tmux_target
 IFS='/' read -r TYPE ARG1 ARG2 ARG3 ARG4 ARG5 <<< "$URL_PATH"
 
-# Parse action from query string
+# Parse query string parameters
 ACTION=""
+TEXT_INPUT=""
 if [[ -n "$QUERY_STRING" ]]; then
-    # Extract action=value from query string
+    # Extract parameters from query string
     for param in ${QUERY_STRING//&/ }; do
         key="${param%%=*}"
         value="${param#*=}"
         if [[ "$key" == "action" ]]; then
             ACTION="$value"
-            break
+        elif [[ "$key" == "text" ]]; then
+            # URL decode the text
+            TEXT_INPUT=$(printf '%b' "${value//%/\\x}")
         fi
     done
 fi
@@ -495,7 +498,12 @@ switch_tmux_window() {
 }
 
 # Get action input (if any)
-ACTION_INPUT=$(get_action_input "$ACTION")
+# TEXT_INPUT from ?text= takes priority over action mapping
+if [[ -n "$TEXT_INPUT" ]]; then
+    ACTION_INPUT="$TEXT_INPUT"
+else
+    ACTION_INPUT=$(get_action_input "$ACTION")
+fi
 
 # Main logic
 case "$TYPE" in

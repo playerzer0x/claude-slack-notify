@@ -247,6 +247,7 @@ function touchActivityFile(): void {
 const app = express();
 
 // Capture raw body for Slack signature verification
+// Actions endpoint uses URL-encoded, Events endpoint uses JSON
 app.use('/slack', (req, _res, next) => {
   let data = '';
   req.on('data', (chunk: Buffer) => {
@@ -254,15 +255,116 @@ app.use('/slack', (req, _res, next) => {
   });
   req.on('end', () => {
     (req as Request & { rawBody: string }).rawBody = data;
-    const params = new URLSearchParams(data);
-    req.body = Object.fromEntries(params.entries());
+
+    // Parse based on content type
+    const contentType = req.headers['content-type'] || '';
+    if (contentType.includes('application/json')) {
+      try {
+        req.body = JSON.parse(data);
+      } catch {
+        req.body = {};
+      }
+    } else {
+      // URL-encoded form data
+      const params = new URLSearchParams(data);
+      req.body = Object.fromEntries(params.entries());
+    }
     next();
   });
 });
 
+// Threads directory for reply routing
+const THREADS_DIR = join(CLAUDE_DIR, 'threads');
+
+// Load thread info by thread_ts
+function loadThreadInfo(threadTs: string): { focus_url: string; term_type: string } | null {
+  const threadFile = join(THREADS_DIR, `${threadTs}.json`);
+  if (!existsSync(threadFile)) {
+    return null;
+  }
+  try {
+    const content = readFileSync(threadFile, 'utf-8');
+    return JSON.parse(content);
+  } catch {
+    return null;
+  }
+}
+
 // Health endpoint
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', mode: 'remote-relay', timestamp: new Date().toISOString() });
+});
+
+// Slack Events endpoint (for thread replies)
+app.post('/slack/events', async (req: Request, res: Response) => {
+  touchActivityFile();
+
+  try {
+    const body = req.body;
+
+    // URL verification challenge (sent once when subscribing to events)
+    if (body.type === 'url_verification') {
+      res.json({ challenge: body.challenge });
+      return;
+    }
+
+    // Handle event callbacks
+    if (body.type === 'event_callback') {
+      const event = body.event;
+
+      // Only handle message events in threads (replies)
+      if (event.type === 'message' && event.thread_ts && !event.bot_id) {
+        const threadTs = event.thread_ts;
+        const text = event.text;
+
+        console.log(`Thread reply received: thread_ts=${threadTs}, text="${text}"`);
+
+        // Look up thread info
+        const threadInfo = loadThreadInfo(threadTs);
+        if (!threadInfo) {
+          console.log(`No thread mapping found for ${threadTs}`);
+          res.status(200).send();
+          return;
+        }
+
+        // Extract tmux target from focus URL
+        const tmuxTarget = extractTmuxTarget(threadInfo.focus_url);
+        if (!tmuxTarget) {
+          console.log(`Could not extract tmux target from ${threadInfo.focus_url}`);
+          res.status(200).send();
+          return;
+        }
+
+        // Check if Mac is reachable and proxy if so
+        const macUrl = await checkMacReachable();
+        if (macUrl) {
+          console.log('Mac is reachable, proxying event...');
+          try {
+            await fetch(`${macUrl}/slack/events`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+          } catch {
+            // Fall through to local handling
+          }
+        }
+
+        // Send text to tmux
+        const result = await sendTmuxInput(tmuxTarget, text);
+        console.log('Thread reply sent to tmux:', result);
+      }
+
+      // Always acknowledge quickly
+      res.status(200).send();
+      return;
+    }
+
+    res.status(200).send();
+  } catch (error) {
+    console.error('Error handling Slack event:', error);
+    res.status(200).send();
+  }
 });
 
 // Slack actions endpoint

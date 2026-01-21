@@ -1,11 +1,36 @@
 import type { Request, Response } from 'express';
 import { Router } from 'express';
-import { writeFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
+import { join } from 'path';
 
 import { executeFocus, executeFocusUrl, type FocusAction } from '../lib/focus-executor.js';
 import { getSession } from '../lib/session-store.js';
 import { verifySlackSignature } from '../lib/slack-verify.js';
+
+const CLAUDE_DIR = join(homedir(), '.claude');
+const THREADS_DIR = join(CLAUDE_DIR, 'threads');
+
+// Load thread info by thread_ts
+interface ThreadInfo {
+  thread_ts: string;
+  instance_id: string;
+  focus_url: string;
+  term_type: string;
+}
+
+function loadThreadInfo(threadTs: string): ThreadInfo | null {
+  const threadFile = join(THREADS_DIR, `${threadTs}.json`);
+  if (!existsSync(threadFile)) {
+    return null;
+  }
+  try {
+    const content = readFileSync(threadFile, 'utf-8');
+    return JSON.parse(content);
+  } catch {
+    return null;
+  }
+}
 
 // Touch activity file to reset idle timeout
 function touchActivityFile(): void {
@@ -106,6 +131,61 @@ router.post('/actions', verifySlackSignature, async (req: Request, res: Response
   } catch (error) {
     console.error('Error handling Slack action:', error);
     ack();
+  }
+});
+
+// POST /slack/events - Handle Slack Events (thread replies)
+router.post('/events', async (req: Request, res: Response) => {
+  touchActivityFile();
+
+  try {
+    const body = req.body;
+
+    // URL verification challenge (sent once when subscribing to events)
+    if (body.type === 'url_verification') {
+      res.json({ challenge: body.challenge });
+      return;
+    }
+
+    // Handle event callbacks
+    if (body.type === 'event_callback') {
+      const event = body.event;
+
+      // Only handle message events in threads (replies), ignore bot messages
+      if (event.type === 'message' && event.thread_ts && !event.bot_id) {
+        const threadTs = event.thread_ts;
+        const text = event.text;
+
+        console.log(`Thread reply received: thread_ts=${threadTs}, text="${text}"`);
+
+        // Look up thread info
+        const threadInfo = loadThreadInfo(threadTs);
+        if (!threadInfo) {
+          console.log(`No thread mapping found for ${threadTs}`);
+          res.status(200).send();
+          return;
+        }
+
+        // Use focus executor to send the text
+        // Build URL with text as the action (we'll handle this specially)
+        const focusUrl = threadInfo.focus_url;
+        console.log(`Sending thread reply to: ${focusUrl}`);
+
+        // Execute with the text as a custom input
+        // We pass 'focus' as action but the text will be handled via focus-helper
+        const result = await executeFocusUrl(`${focusUrl}?text=${encodeURIComponent(text)}`, 'focus');
+        console.log('Thread reply result:', result);
+      }
+
+      // Always acknowledge quickly
+      res.status(200).send();
+      return;
+    }
+
+    res.status(200).send();
+  } catch (error) {
+    console.error('Error handling Slack event:', error);
+    res.status(200).send();
   }
 });
 

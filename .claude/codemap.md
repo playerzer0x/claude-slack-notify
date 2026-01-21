@@ -104,6 +104,7 @@ claude-slack-notify/
 |------|---------|
 | `instances/*.json` | Registered Claude sessions (on machine running Claude) |
 | `links/*.json` | SSH link info (on local Mac only) |
+| `threads/*.json` | Thread mapping for reply routing (thread_ts → session) |
 | `.slack-config` | Slack App ID + tokens for API access |
 | `slack-signing-secret` | Slack signing secret for request verification |
 | `.mac-tunnel-url` | Mac's tunnel URL for remote-relay auto-detect |
@@ -126,6 +127,18 @@ Direct URL (SSH/Jupyter sessions):
 ```
 
 The `url:` prefix tells MCP server to use the URL directly without session lookup.
+
+## Thread Replies
+
+When bot token is configured (`slack-tunnel --setup` → enable thread replies):
+1. Notifications are sent via `chat.postMessage` API (not webhook)
+2. The `thread_ts` is saved to `~/.claude/threads/{ts}.json`
+3. Slack Events API sends replies to `/slack/events`
+4. The reply text is routed to the correct tmux session
+
+**Focus URL query parameters:**
+- `?action=continue` - Send predefined action input
+- `?text=hello%20world` - Send arbitrary text (URL-encoded)
 
 ## Focus URL Schemes
 

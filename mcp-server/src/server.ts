@@ -26,6 +26,7 @@ const app = express();
 
 // Capture raw body for Slack signature verification AND parse body for /slack routes
 // This must consume the stream and parse manually since we need both raw and parsed body
+// Actions endpoint uses URL-encoded, Events endpoint uses JSON
 app.use('/slack', (req, _res, next) => {
   let data = '';
   req.on('data', (chunk: Buffer) => {
@@ -33,9 +34,20 @@ app.use('/slack', (req, _res, next) => {
   });
   req.on('end', () => {
     (req as Request & { rawBody: string }).rawBody = data;
-    // Parse URL-encoded body manually (Slack sends application/x-www-form-urlencoded)
-    const params = new URLSearchParams(data);
-    req.body = Object.fromEntries(params.entries());
+
+    // Parse based on content type
+    const contentType = req.headers['content-type'] || '';
+    if (contentType.includes('application/json')) {
+      try {
+        req.body = JSON.parse(data);
+      } catch {
+        req.body = {};
+      }
+    } else {
+      // URL-encoded form data (Slack actions endpoint)
+      const params = new URLSearchParams(data);
+      req.body = Object.fromEntries(params.entries());
+    }
     next();
   });
 });

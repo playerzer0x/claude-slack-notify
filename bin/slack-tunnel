@@ -60,6 +60,8 @@ SLACK_APP_ID="$SLACK_APP_ID"
 SLACK_ACCESS_TOKEN="$SLACK_ACCESS_TOKEN"
 SLACK_REFRESH_TOKEN="$SLACK_REFRESH_TOKEN"
 SLACK_TOKEN_EXPIRES="$SLACK_TOKEN_EXPIRES"
+SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN:-}"
+SLACK_CHANNEL_ID="${SLACK_CHANNEL_ID:-}"
 EOF
     chmod 600 "$SLACK_CONFIG_FILE"
 }
@@ -561,11 +563,56 @@ cmd_setup() {
 
     echo ""
     echo -e "${GREEN}╭──────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Setup Complete!${NC}                                          ${GREEN}│${NC}"
+    echo -e "${GREEN}│${NC}  ${GREEN}✓${NC} ${BOLD}Basic Setup Complete!${NC}                                     ${GREEN}│${NC}"
     echo -e "${GREEN}╰──────────────────────────────────────────────────────────────╯${NC}"
     echo ""
-    echo -e "  The tunnel will now automatically update your Slack app's"
-    echo -e "  Request URL each time it starts."
+
+    # Optional: Bot token for thread replies
+    echo -e "${CYAN}╭──────────────────────────────────────────────────────────────╮${NC}"
+    echo -e "${CYAN}│${NC}  ${BOLD}Optional: Enable Thread Replies${NC}                            ${CYAN}│${NC}"
+    echo -e "${CYAN}╰──────────────────────────────────────────────────────────────╯${NC}"
+    echo ""
+    echo -e "  ${DIM}Reply to Claude notifications to send messages to the terminal.${NC}"
+    echo ""
+    echo -ne "  ${YELLOW}?${NC} Enable thread replies? [y/N] "
+    read -r enable_threads
+
+    if [[ "$enable_threads" =~ ^[Yy]$ ]]; then
+        echo ""
+        echo -e "  ${CYAN}1.${NC} Go to your app: ${BOLD}https://api.slack.com/apps/${SLACK_APP_ID}${NC}"
+        echo -e "  ${CYAN}2.${NC} Click ${BOLD}OAuth & Permissions${NC}"
+        echo -e "  ${CYAN}3.${NC} Under ${BOLD}Bot Token Scopes${NC}, add:"
+        echo -e "       ${BOLD}chat:write${NC}"
+        echo -e "       ${BOLD}app_mentions:read${NC} (optional, for @mentions)"
+        echo -e "  ${CYAN}4.${NC} Click ${BOLD}Install to Workspace${NC} (or Reinstall)"
+        echo -e "  ${CYAN}5.${NC} Copy the ${BOLD}Bot User OAuth Token${NC} (starts with xoxb-)"
+        echo ""
+        echo -ne "  ${YELLOW}?${NC} Bot Token: "
+        read -r SLACK_BOT_TOKEN
+
+        if [[ -n "$SLACK_BOT_TOKEN" ]]; then
+            echo ""
+            echo -e "  ${CYAN}6.${NC} Go to ${BOLD}Event Subscriptions${NC}"
+            echo -e "  ${CYAN}7.${NC} Toggle ${BOLD}Enable Events${NC} to On"
+            echo -e "  ${CYAN}8.${NC} Under ${BOLD}Subscribe to bot events${NC}, add:"
+            echo -e "       ${BOLD}message.channels${NC}"
+            echo -e "       ${BOLD}message.im${NC} (for DMs)"
+            echo -e "  ${CYAN}9.${NC} Save Changes"
+            echo ""
+            echo -e "  ${DIM}The Request URL will be set automatically when you start the tunnel.${NC}"
+            echo ""
+            echo -e "  ${CYAN}10.${NC} What channel should notifications go to?"
+            echo -e "       ${DIM}(Right-click channel → View channel details → scroll to Channel ID)${NC}"
+            echo ""
+            echo -ne "  ${YELLOW}?${NC} Channel ID (e.g., C01234ABCDE): "
+            read -r SLACK_CHANNEL_ID
+
+            save_slack_config
+            echo ""
+            echo_info "Thread replies enabled!"
+        fi
+    fi
+
     echo ""
     echo -e "  ${BOLD}To start the tunnel:${NC}"
     echo -e "    slack-tunnel"

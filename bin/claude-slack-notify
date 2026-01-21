@@ -1078,22 +1078,76 @@ Push|push"
     }"
 fi
 
-curl -s -X POST -H 'Content-type: application/json' \
-  --data "{
-    \"attachments\": [
-      {
-        \"fallback\": \"${SAFE_INSTANCE_NAME}: ${SAFE_MESSAGE}\",
-        \"color\": \"${COLOR}\",
-        \"blocks\": [
+# Check if we have bot token for API posting (enables thread replies)
+SLACK_CONFIG_FILE="${CLAUDE_DIR}/.slack-config"
+SLACK_BOT_TOKEN=""
+SLACK_CHANNEL_ID=""
+if [[ -f "$SLACK_CONFIG_FILE" ]]; then
+    source "$SLACK_CONFIG_FILE"
+fi
+
+THREADS_DIR="${CLAUDE_DIR}/threads"
+
+if [[ -n "$SLACK_BOT_TOKEN" && -n "$SLACK_CHANNEL_ID" ]]; then
+    # Use chat.postMessage API (enables thread replies)
+    RESPONSE=$(curl -s -X POST "https://slack.com/api/chat.postMessage" \
+      -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+      -H 'Content-type: application/json' \
+      --data "{
+        \"channel\": \"${SLACK_CHANNEL_ID}\",
+        \"attachments\": [
           {
-            \"type\": \"section\",
-            \"text\": {
-              \"type\": \"mrkdwn\",
-              \"text\": \"*${SAFE_INSTANCE_NAME}* on \`${SAFE_LOCATION}\`\n${SAFE_MESSAGE}\"
-            }
-          }${BUTTON_BLOCK}
+            \"fallback\": \"${SAFE_INSTANCE_NAME}: ${SAFE_MESSAGE}\",
+            \"color\": \"${COLOR}\",
+            \"blocks\": [
+              {
+                \"type\": \"section\",
+                \"text\": {
+                  \"type\": \"mrkdwn\",
+                  \"text\": \"*${SAFE_INSTANCE_NAME}* on \\\`${SAFE_LOCATION}\\\`\n${SAFE_MESSAGE}\"
+                }
+              }${BUTTON_BLOCK}
+            ]
+          }
         ]
-      }
-    ]
-  }" \
-  "$WEBHOOK_URL" > /dev/null 2>&1
+      }")
+
+    # Save thread_ts for reply routing
+    if command -v jq &>/dev/null; then
+        THREAD_TS=$(echo "$RESPONSE" | jq -r '.ts // empty' 2>/dev/null)
+        if [[ -n "$THREAD_TS" && -n "$FOCUS_URL" ]]; then
+            mkdir -p "$THREADS_DIR"
+            # Store mapping: thread_ts -> session info
+            cat > "$THREADS_DIR/${THREAD_TS}.json" << EOF
+{
+  "thread_ts": "${THREAD_TS}",
+  "instance_id": "${INSTANCE_ID}",
+  "focus_url": "${FOCUS_URL}",
+  "term_type": "${TERM_TYPE}",
+  "created_at": "$(date -Iseconds)"
+}
+EOF
+        fi
+    fi
+else
+    # Fall back to webhook (no thread reply support)
+    curl -s -X POST -H 'Content-type: application/json' \
+      --data "{
+        \"attachments\": [
+          {
+            \"fallback\": \"${SAFE_INSTANCE_NAME}: ${SAFE_MESSAGE}\",
+            \"color\": \"${COLOR}\",
+            \"blocks\": [
+              {
+                \"type\": \"section\",
+                \"text\": {
+                  \"type\": \"mrkdwn\",
+                  \"text\": \"*${SAFE_INSTANCE_NAME}* on \`${SAFE_LOCATION}\`\n${SAFE_MESSAGE}\"
+                }
+              }${BUTTON_BLOCK}
+            ]
+          }
+        ]
+      }" \
+      "$WEBHOOK_URL" > /dev/null 2>&1
+fi

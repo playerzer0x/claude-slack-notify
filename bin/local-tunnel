@@ -350,9 +350,8 @@ enable_funnel_in_acl() {
         return 1
     fi
 
-    echo_info "Funnel enabled in ACL policy!"
-    echo -e "  ${DIM}Changes may take up to 10 seconds to propagate.${NC}"
-    sleep 10
+    echo_info "Funnel enabled - changes propagate in ~10s"
+    sleep 5
     return 0
 }
 
@@ -883,11 +882,11 @@ cmd_setup() {
         exit 1
     fi
 
-    echo -e "${CYAN}Step 1: Configuration Token${NC}"
-    echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps${NC}"
-    echo -e "  ${CYAN}2.${NC} Scroll to bottom, find ${BOLD}\"Your App Configuration Tokens\"${NC}"
-    echo -e "  ${CYAN}3.${NC} Click ${BOLD}\"Generate Token\"${NC}, select workspace, click ${BOLD}\"Generate\"${NC}"
-    echo -e "  ${CYAN}4.${NC} Copy the ${BOLD}Access Token${NC} (xoxe-...)"
+    echo -e "${BOLD}Configuration Token${NC}"
+    echo -e "  1. Go to ${BOLD}https://api.slack.com/apps${NC}"
+    echo -e "  2. Scroll to bottom → ${BOLD}\"Your App Configuration Tokens\"${NC}"
+    echo -e "  3. Click ${BOLD}\"Generate Token\"${NC} → select workspace → ${BOLD}\"Generate\"${NC}"
+    echo -e "  4. Copy the ${BOLD}Access Token${NC} (xoxe-...)"
     echo ""
     echo -ne "  ${YELLOW}?${NC} Access Token: "
     read -r SLACK_ACCESS_TOKEN
@@ -897,7 +896,7 @@ cmd_setup() {
         exit 1
     fi
 
-    echo -e "  ${CYAN}5.${NC} Copy the ${BOLD}Refresh Token${NC}"
+    echo -e "  5. Copy the ${BOLD}Refresh Token${NC}"
     echo -ne "  ${YELLOW}?${NC} Refresh Token: "
     read -r SLACK_REFRESH_TOKEN
 
@@ -909,9 +908,9 @@ cmd_setup() {
     SLACK_TOKEN_EXPIRES=$(($(date +%s) + 43200))
 
     echo ""
-    echo -e "${CYAN}Step 2: Slack App ID${NC}"
+    echo -e "${BOLD}Slack App ID${NC}"
     echo -e "  Create app at ${BOLD}https://api.slack.com/apps${NC} if needed."
-    echo -e "  Copy ${BOLD}App ID${NC} from top of app page (format: A0XXXXXXXXX)"
+    echo -e "  Copy ${BOLD}App ID${NC} from top of page (format: A0XXXXXXXXX)"
     echo ""
     echo -ne "  ${YELLOW}?${NC} App ID: "
     read -r SLACK_APP_ID
@@ -942,10 +941,10 @@ cmd_setup() {
     echo_info "Configuration verified"
     echo ""
 
-    echo -e "${CYAN}Step 3: Webhook URL${NC}"
-    echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://api.slack.com/apps/${SLACK_APP_ID}${NC}"
-    echo -e "  ${CYAN}2.${NC} ${BOLD}Incoming Webhooks${NC} → Enable → ${BOLD}Add New Webhook${NC}"
-    echo -e "  ${CYAN}3.${NC} Select channel → Copy webhook URL"
+    echo -e "${BOLD}Webhook URL${NC}"
+    echo -e "  1. Go to ${BOLD}https://api.slack.com/apps/${SLACK_APP_ID}${NC}"
+    echo -e "  2. ${BOLD}Incoming Webhooks${NC} → Enable → ${BOLD}Add New Webhook${NC}"
+    echo -e "  3. Select channel → Copy webhook URL"
     echo ""
     echo -ne "  ${YELLOW}?${NC} Webhook URL: "
     read -r webhook_url
@@ -964,21 +963,21 @@ cmd_setup() {
 
     if [[ ! "$enable_threads" =~ ^[Nn]$ ]]; then
         echo ""
-        echo -e "  ${CYAN}1.${NC} ${BOLD}OAuth & Permissions${NC} → Add scopes: app_mentions:read, channels:history, chat:write, files:read"
-        echo -e "  ${CYAN}2.${NC} ${BOLD}Install to Workspace${NC} → Copy ${BOLD}Bot User OAuth Token${NC} (xoxb-...)"
+        echo -e "  1. ${BOLD}OAuth & Permissions${NC} → Add scopes: app_mentions:read, channels:history, chat:write, files:read"
+        echo -e "  2. ${BOLD}Install to Workspace${NC} → Copy ${BOLD}Bot User OAuth Token${NC} (xoxb-...)"
         echo ""
         echo -ne "  ${YELLOW}?${NC} Bot Token: "
         read -r SLACK_BOT_TOKEN
 
         if [[ -n "$SLACK_BOT_TOKEN" ]]; then
-            echo -e "  ${CYAN}3.${NC} ${BOLD}Event Subscriptions${NC} → Enable → Add: message.channels, message.im"
+            echo -e "  3. ${BOLD}Event Subscriptions${NC} → Enable → Add: message.channels, message.im"
             save_slack_config
             echo_info "Bot token saved"
         fi
     fi
 
     echo ""
-    echo -e "${CYAN}Channel ID${NC}"
+    echo -e "${BOLD}Channel ID${NC}"
     echo -e "  Right-click channel → View details → scroll to Channel ID"
     echo -ne "  ${YELLOW}?${NC} Channel ID: "
     read -r SLACK_CHANNEL_ID
@@ -1024,8 +1023,8 @@ cmd_update_token() {
         xdg-open "$config_url" 2>/dev/null || true
     fi
 
-    echo -e "  ${CYAN}1.${NC} Scroll to bottom → ${BOLD}\"Your App Configuration Tokens\"${NC}"
-    echo -e "  ${CYAN}2.${NC} ${BOLD}\"Generate Token\"${NC} → select workspace → ${BOLD}\"Generate\"${NC}"
+    echo -e "  1. Scroll to bottom → ${BOLD}\"Your App Configuration Tokens\"${NC}"
+    echo -e "  2. ${BOLD}\"Generate Token\"${NC} → select workspace → ${BOLD}\"Generate\"${NC}"
     echo ""
     echo -ne "  ${YELLOW}?${NC} Access Token (xoxe-...): "
     read -r SLACK_ACCESS_TOKEN

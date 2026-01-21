@@ -25,17 +25,13 @@ BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
 
-# Box drawing characters
+# Box drawing characters (used by print_header)
 BOX_TL="╭"
 BOX_TR="╮"
 BOX_BL="╰"
 BOX_BR="╯"
 BOX_H="─"
 BOX_V="│"
-BOX_T="┬"
-BOX_B="┴"
-BOX_ML="├"
-BOX_MR="┤"
 
 echo_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 echo_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
@@ -635,7 +631,8 @@ if [[ -d "$SCRIPT_DIR/mcp-server/dist" && -t 0 && "${1:-}" != "--link" ]]; then
     else
         # Linux: Config is synced from Mac via `claude-slack-notify link --host`
         if [[ ! -f "$SLACK_CONFIG_FILE" ]]; then
-            echo_info "Slack config synced from Mac via: claude-slack-notify link --host user@this-server"
+            echo_info "Slack config needed"
+            echo -e "  Run on Mac: ${BOLD}claude-slack-notify link --host user@this-server${NC}"
         fi
     fi
 fi

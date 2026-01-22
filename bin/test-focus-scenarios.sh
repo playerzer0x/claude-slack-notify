@@ -207,7 +207,7 @@ test_ssh_linked_registration() {
     fi
 
     if [[ -z "$link_id" ]]; then
-        log_fail "CLAUDE_LINK_ID not set (not a linked session). Run 'claude-slack-notify link --host <remote>' from Mac first."
+        log_fail "CLAUDE_LINK_ID not set (not a linked session). Run 'claude-slack-notify remote' from Mac first."
         return
     fi
 

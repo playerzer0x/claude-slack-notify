@@ -341,329 +341,6 @@ if [[ "$1" == "update" ]]; then
 fi
 
 # -----------------------------------------------------------------------------
-# Link command - creates a link for SSH or JupyterLab sessions
-# Run this on LOCAL machine before SSH to create a reference to the local terminal
-# Usage: claude-slack-notify link [--host <hostname>] [--jupyter] [ssh-options...]
-# -----------------------------------------------------------------------------
-if [[ "$1" == "link" ]]; then
-    shift  # Remove "link" from args
-
-    # Parse options
-    SSH_HOST=""
-    JUPYTER_MODE=""
-    SSH_ARGS=()
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --host|-h)
-                SSH_HOST="$2"
-                shift 2
-                ;;
-            --jupyter|-j)
-                JUPYTER_MODE="1"
-                shift
-                ;;
-            *)
-                # Collect remaining args as SSH options
-                SSH_ARGS+=("$1")
-                shift
-                ;;
-        esac
-    done
-
-    mkdir -p "$LINKS_DIR"
-
-    # Generate unique link ID (8 chars, alphanumeric)
-    LINK_ID=$(head -c 12 /dev/urandom | base64 | tr -dc 'a-z0-9' | head -c 8)
-
-    # -------------------------------------------------------------------------
-    # JupyterLab mode: link Chrome tab running JupyterLab + SSH for input
-    # -------------------------------------------------------------------------
-    if [[ -n "$JUPYTER_MODE" ]]; then
-        if [[ -z "$SSH_HOST" ]]; then
-            echo "Error: --jupyter requires --host <server>" >&2
-            echo "Usage: claude-slack-notify link --jupyter --host user@server" >&2
-            exit 1
-        fi
-
-        # Get JupyterLab URL - try active Chrome tab first, then prompt
-        JUPYTER_URL=$(osascript -e 'tell application "Google Chrome" to return URL of active tab of front window' 2>/dev/null)
-
-        # Check if it looks like JupyterLab
-        if [[ -n "$JUPYTER_URL" && ("$JUPYTER_URL" == *"lab"* || "$JUPYTER_URL" == *"jupyter"* || "$JUPYTER_URL" == *"notebook"*) ]]; then
-            echo "Detected JupyterLab URL: $JUPYTER_URL"
-            echo -n "Use this URL? [Y/n]: "
-            read -r confirm
-            if [[ "$confirm" =~ ^[Nn]$ ]]; then
-                JUPYTER_URL=""
-            fi
-        else
-            JUPYTER_URL=""
-        fi
-
-        # Prompt for URL if not auto-detected
-        if [[ -z "$JUPYTER_URL" ]]; then
-            echo "Enter your JupyterLab URL (from browser address bar):"
-            echo -n "> "
-            read -r JUPYTER_URL
-            if [[ -z "$JUPYTER_URL" ]]; then
-                echo "Error: JupyterLab URL is required" >&2
-                exit 1
-            fi
-        fi
-
-        # Strip path/hash to get base URL for matching
-        JUPYTER_URL=$(echo "$JUPYTER_URL" | sed 's|/lab/.*||; s|/tree/.*||; s|/notebooks/.*||; s|#.*||')
-
-        # Parse SSH_HOST for user@host format
-        if [[ "$SSH_HOST" == *"@"* ]]; then
-            JUPYTER_SSH_USER="${SSH_HOST%%@*}"
-            JUPYTER_SSH_HOST="${SSH_HOST#*@}"
-        else
-            JUPYTER_SSH_USER=$(whoami)
-            JUPYTER_SSH_HOST="$SSH_HOST"
-        fi
-        JUPYTER_SSH_PORT="${CLAUDE_SSH_PORT:-22}"
-
-        # Generate 4-word instance name for 1:1 correspondence
-        INSTANCE_NAME=$(generate_instance_name)
-
-        # Save link file with jupyter info
-        cat > "$LINKS_DIR/${LINK_ID}.json" << EOF
-{
-  "link_id": "${LINK_ID}",
-  "instance_name": "${INSTANCE_NAME}",
-  "term_type": "jupyter-tmux",
-  "jupyter_url": "${JUPYTER_URL}",
-  "ssh_host": "${JUPYTER_SSH_HOST}",
-  "ssh_user": "${JUPYTER_SSH_USER}",
-  "ssh_port": "${JUPYTER_SSH_PORT}",
-  "created_at": "$(date -Iseconds)"
-}
-EOF
-
-        # SSH to remote and create env file for the JupyterLab terminal to source
-        echo "Creating environment file on remote..."
-        ssh "${SSH_ARGS[@]}" "$SSH_HOST" "mkdir -p ~/.claude && cat > ~/.claude/jupyter-env << ENVEOF
-export CLAUDE_LINK_ID=$LINK_ID
-export CLAUDE_SSH_HOST=$JUPYTER_SSH_HOST
-export CLAUDE_INSTANCE_NAME=$INSTANCE_NAME
-ENVEOF"
-
-        if [[ $? -ne 0 ]]; then
-            echo "Error: Could not SSH to $SSH_HOST to create env file" >&2
-            exit 1
-        fi
-
-        echo ""
-        echo "╭─────────────────────────────────────────────────────────────╮"
-        echo "│  JupyterLab Link Created                                    │"
-        echo "╰─────────────────────────────────────────────────────────────╯"
-        echo ""
-        echo "  Session:  $INSTANCE_NAME"
-        echo "  SSH Host: $SSH_HOST"
-        echo "  URL:      $JUPYTER_URL"
-        echo ""
-        echo "╭─────────────────────────────────────────────────────────────╮"
-        echo "│  Next Steps (in JupyterLab terminal)                        │"
-        echo "╰─────────────────────────────────────────────────────────────╯"
-        echo ""
-        echo "  1. claude-slack-notify jupyter"
-        echo "  2. claude"
-        echo "  3. /slack-notify"
-        echo ""
-        exit 0
-    fi
-
-    # -------------------------------------------------------------------------
-    # Normal mode: link local terminal (iTerm/Terminal.app)
-    # -------------------------------------------------------------------------
-    # Detect local terminal
-    # We need a minimal detect_terminal inline since the function hasn't been defined yet
-    LINK_TERM_TYPE="unknown"
-    LINK_TERM_TARGET=""
-    LINK_FOCUS_URL=""
-
-    case "$(uname -s)" in
-        Darwin)
-            if [[ -n "$TMUX" ]]; then
-                local_session=$(tmux display-message -p '#{session_name}' 2>/dev/null)
-                local_window=$(tmux display-message -p '#{window_index}' 2>/dev/null)
-                local_pane=$(tmux display-message -p '#{pane_index}' 2>/dev/null)
-                local_tmux_target="${local_session}:${local_window}.${local_pane}"
-                local_client_tty=$(tmux display-message -p '#{client_tty}' 2>/dev/null)
-                local_client_termtype=$(tmux display-message -p '#{client_termtype}' 2>/dev/null)
-
-                if [[ "$local_client_termtype" == *"iTerm"* ]] || [[ -n "$ITERM_SESSION_ID" ]]; then
-                    term_app="iterm"
-                else
-                    term_app="terminal"
-                fi
-
-                if [[ -n "$local_client_tty" ]]; then
-                    LINK_TERM_TYPE="${term_app}-tmux"
-                    LINK_TERM_TARGET="${local_client_tty}|${local_tmux_target}"
-                    LINK_FOCUS_URL="claude-focus://${term_app}-tmux/$(url_encode "$local_client_tty")/$(url_encode "$local_tmux_target")"
-                else
-                    LINK_TERM_TYPE="tmux"
-                    LINK_TERM_TARGET="$local_tmux_target"
-                    LINK_FOCUS_URL="claude-focus://tmux/$(url_encode "$local_tmux_target")"
-                fi
-            elif [[ -n "$ITERM_SESSION_ID" ]]; then
-                LINK_TERM_TYPE="iterm2"
-                LINK_TERM_TARGET="${ITERM_SESSION_ID#*:}"
-                LINK_FOCUS_URL="claude-focus://iterm2/${LINK_TERM_TARGET}"
-            elif [[ "$__CFBundleIdentifier" == "com.apple.Terminal" || "$TERM_PROGRAM" == "Apple_Terminal" ]]; then
-                local_terminal_tty=$(tty 2>/dev/null)
-                if [[ -n "$local_terminal_tty" && "$local_terminal_tty" != "not a tty" ]]; then
-                    LINK_TERM_TYPE="terminal"
-                    LINK_TERM_TARGET="$local_terminal_tty"
-                    LINK_FOCUS_URL="claude-focus://terminal/$(url_encode "$local_terminal_tty")"
-                fi
-            fi
-            ;;
-        *)
-            echo "Error: link command only works on macOS (the local machine)" >&2
-            exit 1
-            ;;
-    esac
-
-    if [[ "$LINK_TERM_TYPE" == "unknown" ]]; then
-        echo "Error: Could not detect terminal. Run this from iTerm2, Terminal.app, or tmux." >&2
-        exit 1
-    fi
-
-    # Generate 4-word instance name for 1:1 correspondence with tmux session
-    INSTANCE_NAME=$(generate_instance_name)
-
-    # Get Mac's tunnel URL for remote routing
-    MAC_TUNNEL_URL=""
-    if [[ -f "$CLAUDE_DIR/.tunnel-url" ]]; then
-        MAC_TUNNEL_URL=$(cat "$CLAUDE_DIR/.tunnel-url" 2>/dev/null)
-    fi
-
-    # Save link info (including instance name and Mac tunnel URL)
-    cat > "$LINKS_DIR/${LINK_ID}.json" << EOF
-{
-  "link_id": "${LINK_ID}",
-  "instance_name": "${INSTANCE_NAME}",
-  "term_type": "${LINK_TERM_TYPE}",
-  "term_target": "${LINK_TERM_TARGET}",
-  "focus_url": "${LINK_FOCUS_URL}",
-  "mac_tunnel_url": "${MAC_TUNNEL_URL}",
-  "created_at": "$(date -Iseconds)"
-}
-EOF
-
-    # If --host provided, SSH directly and start tmux
-    if [[ -n "$SSH_HOST" ]]; then
-        echo ""
-        echo "╭─────────────────────────────────────────────────────────────╮"
-        echo "│  SSH Link Created                                           │"
-        echo "╰─────────────────────────────────────────────────────────────╯"
-        echo ""
-        echo "  Session: $INSTANCE_NAME"
-        echo "  Host:    $SSH_HOST"
-        echo ""
-        echo "╭─────────────────────────────────────────────────────────────╮"
-        echo "│  Mac-Based Buttons (Focus + Input)                          │"
-        echo "╰─────────────────────────────────────────────────────────────╯"
-        echo ""
-        echo "  When your Mac is open, start local-tunnel on Mac:"
-        echo "    local-tunnel"
-        echo ""
-        echo "  Then on the remote server, run:"
-        echo "    claude"
-        echo "    /slack-notify"
-        echo ""
-        echo "  ✓ Focus button will switch to this terminal"
-        echo "  ✓ 1/2/Continue/Push buttons work from Slack"
-        echo ""
-        echo "╭─────────────────────────────────────────────────────────────╮"
-        echo "│  Remote-Only Buttons (Mac can be closed)                    │"
-        echo "╰─────────────────────────────────────────────────────────────╯"
-        echo ""
-        echo "  For buttons to work when Mac is closed:"
-        echo ""
-        echo "    1. On remote, start remote-tunnel:"
-        echo "       remote-tunnel --background"
-        echo ""
-        echo "    2. Run Claude and register:"
-        echo "       claude"
-        echo "       /slack-notify"
-        echo ""
-        echo "  ✓ 1/2/Continue/Push buttons work from phone"
-        echo "  ✗ Focus button won't switch windows (Mac is closed)"
-        echo ""
-
-        # Offer to sync Slack config to remote
-        SYNC_CONFIG=""
-        if [[ -f "$CLAUDE_DIR/.slack-config" ]]; then
-            echo -n "  Sync Slack config to remote for remote-tunnel? [Y/n] "
-            read -r SYNC_CONFIG
-            if [[ ! "$SYNC_CONFIG" =~ ^[Nn]$ ]]; then
-                echo ""
-                echo "  Syncing Slack config..."
-                scp -q "${SSH_ARGS[@]}" "$CLAUDE_DIR/.slack-config" "$SSH_HOST:~/.claude/" 2>/dev/null && \
-                    echo "  ✓ .slack-config synced"
-                if [[ -f "$CLAUDE_DIR/slack-webhook-url" ]]; then
-                    scp -q "${SSH_ARGS[@]}" "$CLAUDE_DIR/slack-webhook-url" "$SSH_HOST:~/.claude/" 2>/dev/null && \
-                        echo "  ✓ slack-webhook-url synced"
-                fi
-                if [[ -f "$CLAUDE_DIR/slack-signing-secret" ]]; then
-                    scp -q "${SSH_ARGS[@]}" "$CLAUDE_DIR/slack-signing-secret" "$SSH_HOST:~/.claude/" 2>/dev/null && \
-                        echo "  ✓ slack-signing-secret synced"
-                fi
-            fi
-        fi
-
-        # Sync Mac tunnel URL to remote for smart routing
-        if [[ -n "$MAC_TUNNEL_URL" ]]; then
-            echo ""
-            echo "  Syncing Mac tunnel URL for button routing..."
-            ssh "${SSH_ARGS[@]}" "$SSH_HOST" "mkdir -p ~/.claude && echo '$MAC_TUNNEL_URL' > ~/.claude/.mac-tunnel-url" 2>/dev/null && \
-                echo "  ✓ Mac tunnel URL synced: $MAC_TUNNEL_URL"
-        else
-            echo ""
-            echo "  ⚠ No Mac tunnel URL found. Start local-tunnel first for Focus button support."
-        fi
-
-        echo ""
-        echo -n "  Press Enter to connect and start tmux..."
-        read -r
-        echo ""
-        # Create new tmux session named after instance, set env vars in tmux session environment
-        # Using tmux set-environment makes variables available to ALL windows/panes in the session
-        # CLAUDE_INSTANCE_NAME ensures register uses the same name as the tmux session
-        exec ssh -t "${SSH_ARGS[@]}" "$SSH_HOST" \
-            "tmux new-session -s '$INSTANCE_NAME' \\; \
-             set-environment CLAUDE_LINK_ID '$LINK_ID' \\; \
-             set-environment CLAUDE_SSH_HOST '$SSH_HOST' \\; \
-             set-environment CLAUDE_INSTANCE_NAME '$INSTANCE_NAME'"
-    fi
-
-    # Otherwise print instructions (no --host)
-    echo ""
-    echo "╭─────────────────────────────────────────────────────────────╮"
-    echo "│  Link Created                                               │"
-    echo "╰─────────────────────────────────────────────────────────────╯"
-    echo ""
-    echo "  Link ID: $LINK_ID"
-    echo ""
-    echo "╭─────────────────────────────────────────────────────────────╮"
-    echo "│  Next Steps                                                 │"
-    echo "╰─────────────────────────────────────────────────────────────╯"
-    echo ""
-    echo "  Option 1: Use --host to connect directly"
-    echo "    claude-slack-notify link --host <hostname>"
-    echo ""
-    echo "  Option 2: SSH manually with link ID"
-    echo "    export CLAUDE_LINK_ID=$LINK_ID"
-    echo "    ssh <hostname>"
-    echo ""
-    exit 0
-fi
-
-# -----------------------------------------------------------------------------
 # Links command - list or manage links
 # Usage: claude-slack-notify links [clean]
 # -----------------------------------------------------------------------------
@@ -754,16 +431,86 @@ if [[ "$1" == "local" ]]; then
 fi
 
 # -----------------------------------------------------------------------------
-# Remote command - check/start remote-tunnel (Linux), then register session
-# Usage: claude-slack-notify remote [optional-name]
+# Remote command - simplified SSH workflow for Mac, tunnel starter for Linux
+# Mac: SSH to saved remote host with tmux session (sync Slack config on first run)
+# Linux: Start remote-tunnel and register session
+# Usage: claude-slack-notify remote [hostname]
 # -----------------------------------------------------------------------------
 if [[ "$1" == "remote" ]]; then
-    # Platform check - Linux only
+    shift  # Remove "remote" from args
+    HOST_ARG="${1:-}"  # Optional hostname override
+    REMOTE_HOST_FILE="${CLAUDE_DIR}/.remote-host"
+
+    # -------------------------------------------------------------------------
+    # Mac behavior: SSH to remote server
+    # -------------------------------------------------------------------------
     if [[ "$(uname)" == "Darwin" ]]; then
-        echo "Error: 'remote' command is for Linux only. Use 'local' on macOS." >&2
-        exit 1
+        # Get remote hostname from arg, config file, or prompt
+        REMOTE_HOST=""
+        FIRST_RUN=""
+
+        if [[ -n "$HOST_ARG" ]]; then
+            # Hostname provided as argument - use it and save
+            REMOTE_HOST="$HOST_ARG"
+            mkdir -p "$CLAUDE_DIR"
+            echo "$REMOTE_HOST" > "$REMOTE_HOST_FILE"
+        elif [[ -f "$REMOTE_HOST_FILE" ]]; then
+            # Use saved hostname
+            REMOTE_HOST=$(cat "$REMOTE_HOST_FILE" 2>/dev/null)
+        fi
+
+        if [[ -z "$REMOTE_HOST" ]]; then
+            # First run - prompt for hostname
+            FIRST_RUN="1"
+            echo "Remote host not configured."
+            echo -n "Enter hostname (e.g., user@server or SSH alias): "
+            read -r REMOTE_HOST
+            if [[ -z "$REMOTE_HOST" ]]; then
+                echo "Error: hostname is required" >&2
+                exit 1
+            fi
+            mkdir -p "$CLAUDE_DIR"
+            echo "$REMOTE_HOST" > "$REMOTE_HOST_FILE"
+        fi
+
+        # Generate 4-word instance name for tmux session
+        INSTANCE_NAME=$(generate_instance_name)
+
+        # Sync Slack config on first run
+        if [[ -n "$FIRST_RUN" && -f "$CLAUDE_DIR/.slack-config" ]]; then
+            echo ""
+            echo "Syncing Slack config to $REMOTE_HOST..."
+            scp -q "$CLAUDE_DIR/.slack-config" "$REMOTE_HOST:~/.claude/" 2>/dev/null && \
+                echo "  ✓ .slack-config"
+            if [[ -f "$CLAUDE_DIR/slack-webhook-url" ]]; then
+                scp -q "$CLAUDE_DIR/slack-webhook-url" "$REMOTE_HOST:~/.claude/" 2>/dev/null && \
+                    echo "  ✓ slack-webhook-url"
+            fi
+            if [[ -f "$CLAUDE_DIR/slack-signing-secret" ]]; then
+                scp -q "$CLAUDE_DIR/slack-signing-secret" "$REMOTE_HOST:~/.claude/" 2>/dev/null && \
+                    echo "  ✓ slack-signing-secret"
+            fi
+        fi
+
+        echo ""
+        echo "Remote: $REMOTE_HOST"
+        echo "Session: $INSTANCE_NAME"
+        echo ""
+        echo "Run in Claude: /slack-notify"
+        echo ""
+        echo -n "Press Enter to connect..."
+        read -r
+        echo ""
+
+        # SSH and create tmux session with CLAUDE_INSTANCE_NAME set
+        exec ssh -t "$REMOTE_HOST" \
+            "tmux new-session -s '$INSTANCE_NAME' \\; \
+             set-environment CLAUDE_INSTANCE_NAME '$INSTANCE_NAME'"
     fi
 
+    # -------------------------------------------------------------------------
+    # Linux behavior: Start remote-tunnel and register session
+    # -------------------------------------------------------------------------
     # Check remote-tunnel exists
     REMOTE_TUNNEL="${CLAUDE_DIR}/bin/remote-tunnel"
     if [[ ! -x "$REMOTE_TUNNEL" ]]; then
@@ -810,9 +557,8 @@ if [[ "$1" == "remote" ]]; then
 
     echo "Note: Focus button won't switch windows (Mac not connected)"
 
-    # Now register the session (shift to get optional name argument)
-    shift
-    OPTIONAL_NAME="${1:-}"
+    # Now register the session (use HOST_ARG if provided as optional name)
+    OPTIONAL_NAME="${HOST_ARG:-}"
 
     # Re-execute as register command
     exec "$0" register "$OPTIONAL_NAME"
@@ -821,7 +567,7 @@ fi
 # -----------------------------------------------------------------------------
 # Jupyter command - simplified JupyterLab tmux setup
 # Usage: claude-slack-notify jupyter (or jupyter-start)
-# Run this in a JupyterLab terminal after running `link --jupyter` on Mac
+# Run this in a JupyterLab terminal to set up a linked session
 # -----------------------------------------------------------------------------
 if [[ "$1" == "jupyter" || "$1" == "jupyter-start" ]]; then
     JUPYTER_ENV_FILE="$CLAUDE_DIR/jupyter-env"
@@ -1075,7 +821,7 @@ detect_terminal() {
     # Check for SSH session with linked local terminal
     if [[ -n "$SSH_CONNECTION" ]]; then
         SSH_USER=$(whoami)
-        # Use CLAUDE_SSH_HOST if set (passed from link --host), otherwise fall back to hostname
+        # Use CLAUDE_SSH_HOST if set (passed from remote command), otherwise fall back to hostname
         # CLAUDE_SSH_HOST ensures we use the same host/alias the user connected with
         SSH_HOST="${CLAUDE_SSH_HOST:-$(hostname -f 2>/dev/null || hostname)}"
         SSH_PORT="${CLAUDE_SSH_PORT:-22}"
@@ -1301,7 +1047,7 @@ if [[ "$1" == "register" ]]; then
 
     # Priority for instance name:
     # 1. Command line argument (explicit override)
-    # 2. CLAUDE_INSTANCE_NAME env var (set by link command for 1:1 tmux correspondence)
+    # 2. CLAUDE_INSTANCE_NAME env var (set by remote command for 1:1 tmux correspondence)
     # 3. Generate a new random name
     INSTANCE_NAME="$2"
     if [[ -z "$INSTANCE_NAME" && -n "$CLAUDE_INSTANCE_NAME" ]]; then

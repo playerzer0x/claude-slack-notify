@@ -41,41 +41,30 @@ Run each scenario and verify the focus button works correctly.
 - [ ] Click Focus button
 - [ ] **Expected**: iTerm2 focuses AND tmux switches to correct window
 
-## Linked Sessions (Mac -> Remote)
+## Remote Sessions (Mac -> Remote)
 
-### Test 5: Terminal.app link to Linux tmux
-- [ ] On Mac Terminal.app, run: `claude-slack-notify link --host <remote>`
+### Test 5: Terminal.app remote to Linux tmux
+- [ ] On Mac Terminal.app, run: `claude-slack-notify remote`
+- [ ] Enter hostname when prompted (first run only)
 - [ ] On remote (in tmux), run: `/slack-notify`
 - [ ] Verify: `tmux show-environment | grep CLAUDE` shows variables
-- [ ] Switch Mac to different app
-- [ ] Click Focus button
-- [ ] **Expected**: Mac Terminal.app focuses
+- [ ] Run tests for notification delivery
+- [ ] **Note**: Focus button not supported in simplified remote mode
 
-### Test 6: Terminal.app + tmux link to Linux tmux
-- [ ] On Mac Terminal.app, run: `tmux new -s local-test`
-- [ ] In tmux, run: `claude-slack-notify link --host <remote>`
-- [ ] On remote, run: `/slack-notify`
-- [ ] Create new local tmux window, switch to it
-- [ ] Click Focus button
-- [ ] **Expected**: Mac Terminal focuses AND local tmux switches
+### Test 6: Remote with different hosts
+- [ ] Run: `claude-slack-notify remote other-host` to override saved host
+- [ ] Verify: SSHs to `other-host` instead of saved host
+- [ ] Run: `rm ~/.claude/.remote-host` to reset
+- [ ] Run: `claude-slack-notify remote` - should prompt again
 
-### Test 7: iTerm2 link to Linux tmux
-- [ ] On Mac iTerm2, run: `claude-slack-notify link --host <remote>`
-- [ ] On remote, run: `/slack-notify`
-- [ ] Switch Mac to different app
-- [ ] Click Focus button
-- [ ] **Expected**: Mac iTerm2 focuses
-
-### Test 8: JupyterLab Chrome link
+### Test 7: JupyterLab setup
 - [ ] Open JupyterLab in Chrome
-- [ ] On Mac, run: `claude-slack-notify link --jupyter --host <remote>`
 - [ ] On remote JupyterLab terminal:
-  - [ ] `source ~/.claude/jupyter-env`
-  - [ ] `tmux new -s jupyter \; set-environment CLAUDE_LINK_ID "$CLAUDE_LINK_ID" \; set-environment CLAUDE_SSH_HOST "$CLAUDE_SSH_HOST" \; set-environment CLAUDE_INSTANCE_NAME "$CLAUDE_INSTANCE_NAME"`
-  - [ ] `/slack-notify`
-- [ ] Switch to different Chrome tab
-- [ ] Click Focus button
-- [ ] **Expected**: Chrome switches to JupyterLab tab
+  - [ ] `claude-slack-notify jupyter` (first run prompts for URL)
+  - [ ] Automatically starts tmux session with environment set
+  - [ ] `claude` then `/slack-notify`
+- [ ] Test notification delivery
+- [ ] **Note**: Focus button requires opening the setup URL on Mac
 
 ## Automated Tests
 
@@ -122,9 +111,8 @@ SLACK_NOTIFY_DEBUG=1 claude-slack-notify register test
 
 ### Wrong hostname in focus URL
 1. Verify `tmux show-environment CLAUDE_SSH_HOST` returns correct alias
-2. If empty, the session was created with old link command - recreate it
+2. If empty, recreate the session using `claude-slack-notify remote`
 
-### Session registered as ssh-tmux instead of ssh-linked
-1. CLAUDE_LINK_ID is not set
-2. Check if link file exists on Mac: `ls ~/.claude/links/`
-3. Check tmux session environment: `tmux show-environment | grep CLAUDE`
+### Session registered without CLAUDE_INSTANCE_NAME
+1. Check tmux session environment: `tmux show-environment | grep CLAUDE`
+2. Recreate session using `claude-slack-notify remote` from Mac

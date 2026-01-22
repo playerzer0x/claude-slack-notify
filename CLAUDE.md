@@ -210,7 +210,7 @@ If buttons aren't working:
 
 | File | Purpose |
 |------|---------|
-| `bin/claude-slack-notify` | Main CLI - register, notify, link commands |
+| `bin/claude-slack-notify` | Main CLI - register, notify, remote commands |
 | `bin/local-tunnel` | Starts ngrok + MCP server for button support |
 | `bin/focus-helper` | Handles `claude-focus://` URLs, switches terminals |
 | `bin/mcp-server` | Launcher script for MCP server |

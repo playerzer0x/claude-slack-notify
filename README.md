@@ -107,10 +107,8 @@ The remote install skips tunnel setup since the tunnel runs on your local Mac.
 
 ```bash
 # On your Mac:
-local-tunnel                                  # Start tunnel (keep running)
-
-# In another terminal:
-claude-slack-notify link --host user@server  # Creates link, SSHs, starts tmux
+claude-slack-notify remote                    # First run: prompts for host, syncs config
+                                              # Then: SSHs into tmux session
 claude                                        # Start Claude on remote
 /slack-notify                                 # Register in Slack
 ```

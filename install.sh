@@ -641,10 +641,10 @@ if [[ -d "$SCRIPT_DIR/mcp-server/dist" && -t 0 && "${1:-}" != "--link" ]]; then
             fi
         fi
     else
-        # Linux: Config is synced from Mac via `claude-slack-notify link --host`
+        # Linux: Config is synced from Mac via `claude-slack-notify remote`
         if [[ ! -f "$SLACK_CONFIG_FILE" ]]; then
             echo_info "Slack config needed"
-            echo -e "  Run on Mac: ${BOLD}claude-slack-notify link --host user@this-server${NC}"
+            echo -e "  Run on Mac: ${BOLD}claude-slack-notify remote${NC} (syncs config automatically)"
         fi
     fi
 fi

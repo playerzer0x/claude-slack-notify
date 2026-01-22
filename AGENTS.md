@@ -25,7 +25,7 @@ For ssh-linked sessions, embed the focus URL directly in button values:
 - Remote: `url:claude-focus://ssh-linked/...|action`
 
 ### Config Sync
-Slack credentials (`~/.claude/.slack-config`) must exist on any machine sending notifications with buttons. Use `link --host` from Mac to sync config to Remote.
+Slack credentials (`~/.claude/.slack-config`) must exist on any machine sending notifications with buttons. Use `remote` from Mac to sync config to Remote (automatically on first run).
 
 ## Quick Reference
 

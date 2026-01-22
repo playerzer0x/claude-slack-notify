@@ -42,7 +42,7 @@ Slack notifications for Claude Code with clickable buttons that work from mobile
 ```
 claude-slack-notify/
 ├── bin/                          # Executable scripts
-│   ├── claude-slack-notify       # Main CLI: register, notify, link commands
+│   ├── claude-slack-notify       # Main CLI: register, notify, remote commands
 │   ├── local-tunnel              # Mac: Start tunnel + MCP server for buttons
 │   ├── remote-tunnel             # Linux: Start tunnel + relay when Mac is closed
 │   ├── focus-helper              # Mac: Handle claude-focus:// URLs
@@ -84,7 +84,7 @@ claude-slack-notify/
 
 | File | Purpose | Platform |
 |------|---------|----------|
-| `claude-slack-notify` | Main CLI - register sessions, send notifications, create SSH links | All |
+| `claude-slack-notify` | Main CLI - register sessions, send notifications, SSH to remote | All |
 | `local-tunnel` | Start tunnel + MCP server with /focus endpoint for forwarding | macOS |
 | `remote-tunnel` | Start tunnel + MCP server (canonical Slack endpoint) | Linux |
 | `focus-helper` | Handle `claude-focus://` URLs, switch terminals, send input | macOS |
@@ -106,8 +106,8 @@ claude-slack-notify/
 | File | Purpose |
 |------|---------|
 | `instances/*.json` | Registered Claude sessions (on machine running Claude) |
-| `links/*.json` | SSH link info (on local Mac only) |
 | `threads/*.json` | Thread mapping for reply routing (thread_ts → session) |
+| `.remote-host` | Saved remote hostname for `remote` command (on Mac) |
 | `slack-downloads/` | Downloaded images from Slack thread replies |
 | `.slack-config` | Slack App ID + tokens for API access |
 | `slack-signing-secret` | Slack signing secret for request verification |
@@ -209,17 +209,18 @@ local-tunnel --use-tailscale    # Force Tailscale Funnel
 local-tunnel --use-localtunnel  # Force Localtunnel
 ```
 
-### SSH to Linux Server
+### SSH to Linux Server (simplified)
 ```bash
 # On Mac:
-claude-slack-notify link --host user@server
-# Follow prompts, then in Claude: /slack-notify
+claude-slack-notify remote
+# First run: prompts for hostname, syncs Slack config
+# Then: SSH + tmux session
+# In Claude: /slack-notify
 ```
 
 ### Linux Server (Mac Closed)
 ```bash
-# Config is auto-synced when you use `link --host` from Mac
-# Just start the remote tunnel:
+# Run on the Linux server directly:
 remote-tunnel --background    # Uses Tailscale Funnel if available
 
 # Force specific backend:
@@ -310,6 +311,10 @@ rm ~/.claude/.mac-tunnel-url  # On Mac
 > Last updated: 2026-01-22
 
 ### Recent Changes
+- **Simplified `remote` command**: On Mac, `claude-slack-notify remote` now:
+  - First run: prompts for hostname, saves to `~/.claude/.remote-host`, syncs Slack config
+  - Subsequent runs: shows instructions, press Enter to SSH + tmux
+  - Removed complex `link --host` command (~320 lines deleted)
 - **v1.0.2**: Port 443 conflict warning in `remote-tunnel`
 - **v1.0.1**: Fixed Mac MCP server self-loop bug
 - **Remote as canonical endpoint**: Remote server now receives all Slack button clicks
@@ -317,7 +322,7 @@ rm ~/.claude/.mac-tunnel-url  # On Mac
   - Focus action forwarded to Mac's `/slack/focus` endpoint
   - Buttons work even when Mac is offline (input only)
 - **Instant button response**: ACK Slack immediately, process in background
-- **Mac tunnel URL sync**: `link --host` stores Mac's tunnel URL on remote
+- **Mac tunnel URL sync**: `remote` syncs Slack config on first run
 - **Removed Slack URL auto-update**: `local-tunnel` no longer changes Slack Request URL
 
 ### Previous Changes

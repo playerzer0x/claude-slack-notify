@@ -108,6 +108,7 @@ claude-slack-notify/
 | `instances/*.json` | Registered Claude sessions (on machine running Claude) |
 | `threads/*.json` | Thread mapping for reply routing (thread_ts → session) |
 | `.remote-host` | Saved remote hostname for `remote` command (on Mac) |
+| `.remote-sessions/{host}/*.json` | Multi-session storage per host (on Mac) |
 | `slack-downloads/` | Downloaded images from Slack thread replies |
 | `.slack-config` | Slack App ID + tokens for API access |
 | `slack-signing-secret` | Slack signing secret for request verification |
@@ -311,6 +312,15 @@ rm ~/.claude/.mac-tunnel-url  # On Mac
 > Last updated: 2026-01-22
 
 ### Recent Changes
+- **Multi-session support for `remote` command**: When connecting to a host with multiple tmux sessions:
+  - Interactive menu shows sessions sorted by last connected time
+  - Relative time display (e.g., "connected 10 min ago")
+  - `--session NAME` flag for direct session selection
+  - `--new` flag still works to force create new session
+  - Dead sessions cleaned up automatically
+  - Storage: `~/.claude/.remote-sessions/{host}/{session}.json`
+  - Migrates from old single-file format automatically
+
 - **Simplified `remote` command**: On Mac, `claude-slack-notify remote` now:
   - First run: prompts for hostname, saves to `~/.claude/.remote-host`, syncs Slack config
   - Creates link file and detects local terminal for Focus button support

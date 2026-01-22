@@ -52,6 +52,225 @@ sanitize_hostname() {
 }
 
 # -----------------------------------------------------------------------------
+# Session management helpers for multi-session remote support
+# -----------------------------------------------------------------------------
+
+# Acquire an exclusive lock for session operations on a host
+# Args: $1 = host directory path
+# Returns: 0 on success, exits on failure
+acquire_session_lock() {
+    local host_dir="$1"
+    mkdir -p "$host_dir"
+    exec 200>"$host_dir/.lock"
+    if ! flock -n 200; then
+        echo "Another remote command is running for this host. Please wait." >&2
+        exit 1
+    fi
+}
+
+# Migrate from old single-file format to new directory format
+# Args: $1 = sessions base dir, $2 = safe hostname
+# Returns: 0 on success (or already migrated/no old file)
+migrate_session_format() {
+    local sessions_dir="$1"
+    local safe_host="$2"
+    local old_file="$sessions_dir/${safe_host}.json"
+    local new_dir="$sessions_dir/${safe_host}"
+
+    # Skip if already migrated or no old file
+    [[ -d "$new_dir" ]] && return 0
+    [[ ! -f "$old_file" ]] && return 0
+
+    # Extract instance name from old file
+    local instance_name
+    instance_name=$(grep -o '"instance_name": *"[^"]*"' "$old_file" | cut -d'"' -f4)
+    [[ -z "$instance_name" ]] && instance_name="migrated-session"
+
+    # Atomic: create temp dir, copy, rename, then remove old
+    local tmp_dir="$sessions_dir/.migrate-${safe_host}-$$"
+    mkdir -p "$tmp_dir" || return 1
+    cp "$old_file" "$tmp_dir/${instance_name}.json" || { rm -rf "$tmp_dir"; return 1; }
+    mv "$tmp_dir" "$new_dir" || { rm -rf "$tmp_dir"; return 1; }
+    rm -f "$old_file"
+    return 0
+}
+
+# Query remote host for active tmux sessions
+# Args: $1 = hostname
+# Returns: 0 with session names on stdout, 1 on error
+query_remote_sessions() {
+    local host="$1"
+    local output status
+    output=$(ssh -o ConnectTimeout=5 -o BatchMode=yes "$host" \
+        "tmux list-sessions -F '#{session_name}'" 2>&1)
+    status=$?
+
+    if [[ $status -ne 0 ]]; then
+        if [[ "$output" == *"no server running"* ]] || [[ "$output" == *"no sessions"* ]]; then
+            # No tmux sessions - this is fine
+            echo ""
+            return 0
+        elif [[ "$output" == *"Permission denied"* ]]; then
+            echo "Error: SSH authentication failed for $host" >&2
+            return 1
+        elif [[ "$output" == *"Connection refused"* ]] || [[ "$output" == *"timed out"* ]]; then
+            echo "Error: Cannot connect to $host" >&2
+            return 1
+        fi
+        # Unknown error - show it
+        echo "SSH error: $output" >&2
+        return 1
+    fi
+    echo "$output"
+}
+
+# Check if a specific tmux session exists on remote
+# Args: $1 = hostname, $2 = session name
+# Returns: 0 if exists, 1 if not
+check_session_exists() {
+    local host="$1" session="$2"
+    ssh -o ConnectTimeout=5 -o BatchMode=yes "$host" \
+        "tmux has-session -t '$session'" 2>/dev/null
+}
+
+# Validate session name format
+# Args: $1 = session name
+# Returns: 0 if valid, exits with error if invalid
+validate_session_name() {
+    local name="$1"
+    if [[ ! "$name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        echo "Error: Session name can only contain letters, numbers, underscores, and hyphens" >&2
+        exit 1
+    fi
+    if [[ ${#name} -gt 50 ]]; then
+        echo "Error: Session name too long (max 50 characters)" >&2
+        exit 1
+    fi
+}
+
+# Read and validate menu choice from user
+# Args: $1 = max number option
+# Returns: number (1-max), "new", or exits on EOF
+read_menu_choice() {
+    local max="$1"
+    local choice
+    while true; do
+        read -r choice
+        if [[ "$choice" == "n" || "$choice" == "N" ]]; then
+            echo "new"
+            return
+        fi
+        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= max )); then
+            echo "$choice"
+            return
+        fi
+        if [[ -z "$choice" ]]; then
+            echo "1"  # default
+            return
+        fi
+        echo -n "Invalid. Enter 1-${max} or 'n': " >&2
+    done
+}
+
+# Show session selection menu and get user's choice
+# Args: $1 = host_dir, $2 = hostname, $3 = array of live session names (space-separated)
+# Returns: selected session name on stdout
+show_session_menu() {
+    local host_dir="$1"
+    local hostname="$2"
+    shift 2
+    local -a live_sessions=("$@")
+
+    # Build array of sessions with timestamps for sorting
+    local -a session_info=()
+    for session in "${live_sessions[@]}"; do
+        local session_file="$host_dir/${session}.json"
+        local last_connected=""
+        if [[ -f "$session_file" ]]; then
+            last_connected=$(grep -o '"last_connected": *"[^"]*"' "$session_file" 2>/dev/null | cut -d'"' -f4)
+        fi
+        [[ -z "$last_connected" ]] && last_connected="1970-01-01T00:00:00"
+        session_info+=("$last_connected|$session")
+    done
+
+    # Sort by timestamp (most recent first)
+    local -a sorted_sessions=()
+    while IFS= read -r line; do
+        sorted_sessions+=("${line#*|}")
+    done < <(printf '%s\n' "${session_info[@]}" | sort -r)
+
+    # Limit to 10 sessions
+    local max_show=10
+    if [[ ${#sorted_sessions[@]} -gt $max_show ]]; then
+        sorted_sessions=("${sorted_sessions[@]:0:$max_show}")
+    fi
+
+    # Display menu to stderr so stdout is reserved for the result
+    echo "" >&2
+    echo "Sessions for $hostname:" >&2
+    echo "" >&2
+
+    local i=1
+    for session in "${sorted_sessions[@]}"; do
+        local session_file="$host_dir/${session}.json"
+        local last_connected_str=""
+        if [[ -f "$session_file" ]]; then
+            local last_ts
+            last_ts=$(grep -o '"last_connected": *"[^"]*"' "$session_file" 2>/dev/null | cut -d'"' -f4)
+            if [[ -n "$last_ts" ]]; then
+                # Calculate relative time
+                local last_epoch now_epoch diff_secs
+                # Strip timezone suffix for BSD date (take first 19 chars: YYYY-MM-DDTHH:MM:SS)
+                local ts_no_tz="${last_ts:0:19}"
+                last_epoch=$(date -d "$last_ts" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%S" "$ts_no_tz" +%s 2>/dev/null)
+                now_epoch=$(date +%s)
+                if [[ -n "$last_epoch" ]]; then
+                    diff_secs=$((now_epoch - last_epoch))
+                    if [[ $diff_secs -lt 60 ]]; then
+                        last_connected_str="(connected just now)"
+                    elif [[ $diff_secs -lt 3600 ]]; then
+                        last_connected_str="(connected $((diff_secs / 60)) min ago)"
+                    elif [[ $diff_secs -lt 86400 ]]; then
+                        last_connected_str="(connected $((diff_secs / 3600)) hours ago)"
+                    else
+                        last_connected_str="(connected $((diff_secs / 86400)) days ago)"
+                    fi
+                fi
+            fi
+        fi
+        echo "  $i) $session $last_connected_str" >&2
+        ((i++))
+    done
+    echo "  n) New session" >&2
+    echo "" >&2
+    echo -n "Select [1-${#sorted_sessions[@]}/n, default=1]: " >&2
+
+    local choice
+    choice=$(read_menu_choice ${#sorted_sessions[@]})
+
+    if [[ "$choice" == "new" ]]; then
+        echo "" >&2
+        return 1  # Signal to create new session
+    fi
+
+    # Return selected session name on stdout
+    echo "${sorted_sessions[$((choice - 1))]}"
+    return 0
+}
+
+# Clean up dead sessions (sessions that no longer exist on remote)
+# Args: $1 = host_dir, $2 = array of dead session names
+cleanup_dead_sessions() {
+    local host_dir="$1"
+    shift
+    local -a dead_sessions=("$@")
+
+    for session in "${dead_sessions[@]}"; do
+        rm -f "$host_dir/${session}.json"
+    done
+}
+
+# -----------------------------------------------------------------------------
 # Detect terminal environment and build focus URL
 # Sets: TERM_TYPE, TERM_TARGET, FOCUS_URL
 # -----------------------------------------------------------------------------
@@ -451,21 +670,33 @@ fi
 # -----------------------------------------------------------------------------
 # Remote command - simplified SSH workflow for Mac, tunnel starter for Linux
 # Mac: SSH to saved remote host with tmux session (sync Slack config on first run)
-#      Session name persists per host - reconnects attach to existing tmux session
+#      Supports multiple sessions per host with interactive menu selection
 # Linux: Start remote-tunnel and register session
-# Usage: claude-slack-notify remote [--new] [hostname]
-#   --new   Force new session (generate new instance name, don't reuse existing)
+# Usage: claude-slack-notify remote [--new] [--session NAME] [hostname]
+#   --new           Force create a new session (skip menu)
+#   --session NAME  Use or create a specific named session (skip menu)
 # -----------------------------------------------------------------------------
 if [[ "$1" == "remote" ]]; then
     shift  # Remove "remote" from args
 
-    # Parse arguments: [--new] [hostname]
+    # Parse arguments: [--new] [--session NAME] [hostname]
     NEW_SESSION=""
+    SESSION_NAME=""
     HOST_ARG=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --new)
                 NEW_SESSION="1"
+                shift
+                ;;
+            --session)
+                shift
+                if [[ $# -eq 0 ]]; then
+                    echo "Error: --session requires a name argument" >&2
+                    exit 1
+                fi
+                SESSION_NAME="$1"
+                validate_session_name "$SESSION_NAME"
                 shift
                 ;;
             *)
@@ -510,29 +741,123 @@ if [[ "$1" == "remote" ]]; then
             echo "$REMOTE_HOST" > "$REMOTE_HOST_FILE"
         fi
 
-        # Session persistence: load or create instance name for this host
+        # Session persistence: multi-session support with per-host directories
         mkdir -p "$SESSIONS_DIR"
         SAFE_HOST=$(sanitize_hostname "$REMOTE_HOST")
-        SESSION_FILE="${SESSIONS_DIR}/${SAFE_HOST}.json"
+        HOST_DIR="${SESSIONS_DIR}/${SAFE_HOST}"
+
+        # Migrate from old single-file format if needed
+        migrate_session_format "$SESSIONS_DIR" "$SAFE_HOST"
+
+        # Acquire lock to prevent race conditions
+        acquire_session_lock "$HOST_DIR"
 
         RECONNECT_MODE=""
-        if [[ -f "$SESSION_FILE" && -z "$NEW_SESSION" ]]; then
-            # Load existing instance name from session file
-            INSTANCE_NAME=$(grep -o '"instance_name": *"[^"]*"' "$SESSION_FILE" 2>/dev/null | cut -d'"' -f4)
-            if [[ -n "$INSTANCE_NAME" ]]; then
+        INSTANCE_NAME=""
+
+        # If --session NAME was provided, use that directly
+        if [[ -n "$SESSION_NAME" ]]; then
+            INSTANCE_NAME="$SESSION_NAME"
+            if [[ -f "$HOST_DIR/${INSTANCE_NAME}.json" ]]; then
                 RECONNECT_MODE="1"
+            fi
+        # If --new was provided, skip menu and create new session
+        elif [[ -n "$NEW_SESSION" ]]; then
+            INSTANCE_NAME=$(generate_instance_name)
+        else
+            # Check what sessions exist locally and which are alive on remote
+            declare -a local_sessions=()
+            declare -a live_sessions=()
+            declare -a dead_sessions=()
+
+            # Get local session files
+            if [[ -d "$HOST_DIR" ]]; then
+                for f in "$HOST_DIR"/*.json; do
+                    [[ -f "$f" ]] || continue
+                    name=$(basename "$f" .json)
+                    [[ "$name" == ".lock" ]] && continue
+                    local_sessions+=("$name")
+                done
+            fi
+
+            if [[ ${#local_sessions[@]} -gt 0 ]]; then
+                # Query remote for live tmux sessions
+                echo "Checking remote sessions..."
+                remote_sessions=""
+                if ! remote_sessions=$(query_remote_sessions "$REMOTE_HOST"); then
+                    # SSH error already printed, exit
+                    exit 1
+                fi
+
+                # Match local sessions against live remote sessions
+                for session in "${local_sessions[@]}"; do
+                    if echo "$remote_sessions" | grep -q "^${session}$"; then
+                        live_sessions+=("$session")
+                    else
+                        dead_sessions+=("$session")
+                    fi
+                done
+            fi
+
+            # Decide behavior based on live session count
+            if [[ ${#live_sessions[@]} -eq 0 ]]; then
+                # No live sessions - create new
+                INSTANCE_NAME=$(generate_instance_name)
+            elif [[ ${#live_sessions[@]} -eq 1 ]]; then
+                # Exactly one live session - use it directly
+                INSTANCE_NAME="${live_sessions[0]}"
+                RECONNECT_MODE="1"
+            else
+                # Multiple live sessions - show menu
+                if [[ ! -t 0 ]]; then
+                    echo "Error: Session selection requires interactive terminal." >&2
+                    echo "Use: claude-slack-notify remote --session NAME $REMOTE_HOST" >&2
+                    echo "" >&2
+                    echo "Available sessions:" >&2
+                    for s in "${live_sessions[@]}"; do
+                        echo "  $s" >&2
+                    done
+                    exit 1
+                fi
+
+                selected=""
+                if selected=$(show_session_menu "$HOST_DIR" "$REMOTE_HOST" "${live_sessions[@]}"); then
+                    INSTANCE_NAME="$selected"
+                    RECONNECT_MODE="1"
+                else
+                    # User chose to create new session
+                    INSTANCE_NAME=$(generate_instance_name)
+                fi
+            fi
+
+            # Schedule cleanup of dead sessions in background after successful connect
+            if [[ ${#dead_sessions[@]} -gt 0 ]]; then
+                # Store dead sessions for cleanup after SSH (can't background from here reliably)
+                DEAD_SESSIONS_TO_CLEAN=("${dead_sessions[@]}")
             fi
         fi
 
-        if [[ -z "$INSTANCE_NAME" ]]; then
-            # Generate new instance name (first run or --new flag)
-            INSTANCE_NAME=$(generate_instance_name)
-            # Save session file
+        # Create/update session file
+        SESSION_FILE="$HOST_DIR/${INSTANCE_NAME}.json"
+        mkdir -p "$HOST_DIR"
+        if [[ -f "$SESSION_FILE" ]]; then
+            # Update last_connected timestamp using a temp file for atomicity
+            tmp_file="$SESSION_FILE.tmp.$$"
+            if grep -q '"last_connected":' "$SESSION_FILE"; then
+                sed "s/\"last_connected\": *\"[^\"]*\"/\"last_connected\": \"$(date -Iseconds)\"/" "$SESSION_FILE" > "$tmp_file"
+            else
+                # Add last_connected field before closing brace
+                sed 's/}$/,\n  "last_connected": "'"$(date -Iseconds)"'"\n}/' "$SESSION_FILE" > "$tmp_file"
+            fi
+            mv "$tmp_file" "$SESSION_FILE"
+        else
+            # Create new session file
             cat > "$SESSION_FILE" << EOF
 {
   "hostname": "$REMOTE_HOST",
   "instance_name": "$INSTANCE_NAME",
-  "created_at": "$(date -Iseconds)"
+  "created_at": "$(date -Iseconds)",
+  "last_connected": "$(date -Iseconds)"
 }
 EOF
         fi
@@ -638,6 +963,11 @@ EOF
         echo -n "Press Enter to connect..."
         read -r
         echo ""
+
+        # Clean up dead sessions before connecting (non-blocking)
+        if [[ -n "${DEAD_SESSIONS_TO_CLEAN+x}" && ${#DEAD_SESSIONS_TO_CLEAN[@]} -gt 0 ]]; then
+            cleanup_dead_sessions "$HOST_DIR" "${DEAD_SESSIONS_TO_CLEAN[@]}"
+        fi
 
         # SSH and attach-or-create tmux session with all required env vars for Focus button
         # -A flag: attach to existing session if it exists, create new if not

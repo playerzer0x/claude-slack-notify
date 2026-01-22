@@ -215,14 +215,14 @@ wait_for_tunnel() {
 
 # -----------------------------------------------------------------------------
 # Update command - update scripts from repo
-# Usage: claude-slack-notify update [--pull]
+# Usage: claude-slack-notify update [--no-pull]
 # -----------------------------------------------------------------------------
 if [[ "$1" == "update" ]]; then
     REPO_PATH_FILE="${CLAUDE_DIR}/.repo-path"
-    DO_PULL=""
+    DO_PULL="1"  # Pull by default
 
-    if [[ "$2" == "--pull" ]]; then
-        DO_PULL="1"
+    if [[ "$2" == "--no-pull" ]]; then
+        DO_PULL=""
     fi
 
     # Find repo path
@@ -240,21 +240,46 @@ if [[ "$1" == "update" ]]; then
         exit 1
     fi
 
-    echo "Updating from: $REPO_PATH"
+    echo "╭─────────────────────────────────────────────────────────────╮"
+    echo "│  Updating Claude Slack Notify                               │"
+    echo "╰─────────────────────────────────────────────────────────────╯"
+    echo ""
+    echo "  Repo: $REPO_PATH"
+    echo ""
 
-    # Optional: git pull
+    # Git pull (default behavior)
     if [[ -n "$DO_PULL" ]]; then
-        echo "Pulling latest changes..."
-        if (cd "$REPO_PATH" && git pull); then
-            echo "✓ Pulled latest changes"
+        echo "  Pulling latest changes..."
+        cd "$REPO_PATH"
+        if git pull; then
+            echo ""
         else
-            echo "Warning: git pull failed, continuing with local version" >&2
+            echo "  ⚠ git pull failed, continuing with local version" >&2
+            echo ""
         fi
-        echo ""
     fi
 
     # Run install.sh --update
-    exec "$REPO_PATH/install.sh" --update
+    "$REPO_PATH/install.sh" --update
+    UPDATE_STATUS=$?
+
+    if [[ $UPDATE_STATUS -eq 0 ]]; then
+        echo ""
+        echo "╭─────────────────────────────────────────────────────────────╮"
+        echo "│  Next Steps                                                 │"
+        echo "╰─────────────────────────────────────────────────────────────╯"
+        echo ""
+        echo "  1. Re-run /slack-notify to update your session registration"
+        echo ""
+        echo "  2. If you're on Mac with local-tunnel running:"
+        echo "     • Restart local-tunnel: Ctrl+C, then run 'local-tunnel'"
+        echo ""
+    else
+        echo ""
+        echo "  ✗ Update failed" >&2
+        exit 1
+    fi
+    exit 0
 fi
 
 # -----------------------------------------------------------------------------

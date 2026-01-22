@@ -865,15 +865,15 @@ EOF
         echo "│  JupyterLab Link Setup                                      │"
         echo "╰─────────────────────────────────────────────────────────────╯"
         echo ""
-        echo "  Open this URL on your Mac to complete setup:"
+        echo "  Open this URL on your Mac to enable Focus button:"
         echo ""
         echo "  claude-focus://jupyter-link/${LINK_ID}?url=${ENCODED_URL}&host=${ENCODED_HOST}&name=${ENCODED_NAME}"
         echo ""
-        echo "  (Click the link if your terminal supports it, or copy to browser)"
+        echo "  (Click or paste in browser - do this before using Focus)"
         echo ""
-        echo "  Then run this command again: claude-slack-notify jupyter"
+        echo "  Starting tmux session..."
         echo ""
-        exit 0
+        # Fall through to start tmux session
     fi
 
     # Source the environment file to get CLAUDE_LINK_ID etc.

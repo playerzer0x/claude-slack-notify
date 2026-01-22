@@ -378,19 +378,34 @@ if [[ "$1" == "link" ]]; then
             exit 1
         fi
 
-        # Get Chrome tab URL (JupyterLab must be open in Chrome)
+        # Get JupyterLab URL - try active Chrome tab first, then prompt
         JUPYTER_URL=$(osascript -e 'tell application "Google Chrome" to return URL of active tab of front window' 2>/dev/null)
 
-        if [[ -z "$JUPYTER_URL" ]]; then
-            echo "Error: Could not get Chrome tab URL." >&2
-            echo "Make sure JupyterLab is open in the active Chrome tab." >&2
-            exit 1
+        # Check if it looks like JupyterLab
+        if [[ -n "$JUPYTER_URL" && ("$JUPYTER_URL" == *"lab"* || "$JUPYTER_URL" == *"jupyter"* || "$JUPYTER_URL" == *"notebook"*) ]]; then
+            echo "Detected JupyterLab URL: $JUPYTER_URL"
+            echo -n "Use this URL? [Y/n]: "
+            read -r confirm
+            if [[ "$confirm" =~ ^[Nn]$ ]]; then
+                JUPYTER_URL=""
+            fi
+        else
+            JUPYTER_URL=""
         fi
 
-        if [[ "$JUPYTER_URL" != *"lab"* && "$JUPYTER_URL" != *"jupyter"* && "$JUPYTER_URL" != *"notebook"* ]]; then
-            echo "Warning: URL doesn't look like JupyterLab: $JUPYTER_URL"
-            echo "Continuing anyway..."
+        # Prompt for URL if not auto-detected
+        if [[ -z "$JUPYTER_URL" ]]; then
+            echo "Enter your JupyterLab URL (from browser address bar):"
+            echo -n "> "
+            read -r JUPYTER_URL
+            if [[ -z "$JUPYTER_URL" ]]; then
+                echo "Error: JupyterLab URL is required" >&2
+                exit 1
+            fi
         fi
+
+        # Strip path/hash to get base URL for matching
+        JUPYTER_URL=$(echo "$JUPYTER_URL" | sed 's|/lab/.*||; s|/tree/.*||; s|/notebooks/.*||; s|#.*||')
 
         # Parse SSH_HOST for user@host format
         if [[ "$SSH_HOST" == *"@"* ]]; then

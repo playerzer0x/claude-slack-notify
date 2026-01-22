@@ -34,6 +34,24 @@ generate_instance_name() {
 }
 
 # -----------------------------------------------------------------------------
+# Sanitize hostname for use as filename (session persistence)
+# Converts special chars to underscores, truncates long names with hash suffix
+# -----------------------------------------------------------------------------
+sanitize_hostname() {
+    local hostname="$1"
+    local safe_host
+    # Replace all non-alphanumeric chars (except _ and -) with underscore
+    safe_host=$(echo "$hostname" | sed 's/[^a-zA-Z0-9_-]/_/g')
+    # Truncate long hostnames (>50 chars) with hash suffix
+    if [[ ${#safe_host} -gt 50 ]]; then
+        local hash
+        hash=$(echo "$hostname" | md5sum | head -c 8)
+        safe_host="${safe_host:0:50}_${hash}"
+    fi
+    echo "$safe_host"
+}
+
+# -----------------------------------------------------------------------------
 # Detect terminal environment and build focus URL
 # Sets: TERM_TYPE, TERM_TARGET, FOCUS_URL
 # -----------------------------------------------------------------------------
@@ -433,13 +451,32 @@ fi
 # -----------------------------------------------------------------------------
 # Remote command - simplified SSH workflow for Mac, tunnel starter for Linux
 # Mac: SSH to saved remote host with tmux session (sync Slack config on first run)
+#      Session name persists per host - reconnects attach to existing tmux session
 # Linux: Start remote-tunnel and register session
-# Usage: claude-slack-notify remote [hostname]
+# Usage: claude-slack-notify remote [--new] [hostname]
+#   --new   Force new session (generate new instance name, don't reuse existing)
 # -----------------------------------------------------------------------------
 if [[ "$1" == "remote" ]]; then
     shift  # Remove "remote" from args
-    HOST_ARG="${1:-}"  # Optional hostname override
+
+    # Parse arguments: [--new] [hostname]
+    NEW_SESSION=""
+    HOST_ARG=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --new)
+                NEW_SESSION="1"
+                shift
+                ;;
+            *)
+                HOST_ARG="$1"
+                shift
+                ;;
+        esac
+    done
+
     REMOTE_HOST_FILE="${CLAUDE_DIR}/.remote-host"
+    SESSIONS_DIR="${CLAUDE_DIR}/.remote-sessions"
 
     # -------------------------------------------------------------------------
     # Mac behavior: SSH to remote server with Focus button support
@@ -473,10 +510,36 @@ if [[ "$1" == "remote" ]]; then
             echo "$REMOTE_HOST" > "$REMOTE_HOST_FILE"
         fi
 
-        # Generate unique link ID and instance name
+        # Session persistence: load or create instance name for this host
+        mkdir -p "$SESSIONS_DIR"
+        SAFE_HOST=$(sanitize_hostname "$REMOTE_HOST")
+        SESSION_FILE="${SESSIONS_DIR}/${SAFE_HOST}.json"
+
+        RECONNECT_MODE=""
+        if [[ -f "$SESSION_FILE" && -z "$NEW_SESSION" ]]; then
+            # Load existing instance name from session file
+            INSTANCE_NAME=$(grep -o '"instance_name": *"[^"]*"' "$SESSION_FILE" 2>/dev/null | cut -d'"' -f4)
+            if [[ -n "$INSTANCE_NAME" ]]; then
+                RECONNECT_MODE="1"
+            fi
+        fi
+
+        if [[ -z "$INSTANCE_NAME" ]]; then
+            # Generate new instance name (first run or --new flag)
+            INSTANCE_NAME=$(generate_instance_name)
+            # Save session file
+            cat > "$SESSION_FILE" << EOF
+{
+  "hostname": "$REMOTE_HOST",
+  "instance_name": "$INSTANCE_NAME",
+  "created_at": "$(date -Iseconds)"
+}
+EOF
+        fi
+
+        # Always generate fresh LINK_ID (local terminal info changes each connect)
         mkdir -p "$LINKS_DIR"
         LINK_ID=$(head -c 12 /dev/urandom | base64 | tr -dc 'a-z0-9' | head -c 8)
-        INSTANCE_NAME=$(generate_instance_name)
 
         # Detect local terminal for Focus button
         LINK_TERM_TYPE="unknown"
@@ -561,20 +624,25 @@ EOF
 
         echo ""
         echo "Remote: $REMOTE_HOST"
-        echo "Session: $INSTANCE_NAME"
+        if [[ -n "$RECONNECT_MODE" ]]; then
+            echo "Session: $INSTANCE_NAME (reconnecting)"
+        else
+            echo "Session: $INSTANCE_NAME (new)"
+        fi
         if [[ "$LINK_TERM_TYPE" != "unknown" ]]; then
             echo "Focus: $LINK_TERM_TYPE"
         fi
         echo ""
-        echo "Run in Claude: /slack-notify"
+        echo "Run /slack-notify in Claude to enable buttons"
         echo ""
         echo -n "Press Enter to connect..."
         read -r
         echo ""
 
-        # SSH and create tmux session with all required env vars for Focus button
+        # SSH and attach-or-create tmux session with all required env vars for Focus button
+        # -A flag: attach to existing session if it exists, create new if not
         exec ssh -t "$REMOTE_HOST" \
-            "tmux new-session -s '$INSTANCE_NAME' \\; \
+            "tmux new-session -A -s '$INSTANCE_NAME' \\; \
              set-environment CLAUDE_LINK_ID '$LINK_ID' \\; \
              set-environment CLAUDE_SSH_HOST '$REMOTE_HOST' \\; \
              set-environment CLAUDE_INSTANCE_NAME '$INSTANCE_NAME'"

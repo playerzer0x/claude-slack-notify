@@ -62,7 +62,65 @@ The `bin/mcp-server` script **prioritizes the installed copy**. After rebuilding
 
 The `focus-helper` script reads link files to find the local terminal info for focusing.
 
-### 4. Terminal.app Detection Fails (No Buttons on Mac)
+### 4. Focus Button Doesn't Work - nginx/Caddy Blocking Tailscale Funnel
+
+**Symptom**: Clicking Focus button in Slack does nothing. No new entries in `~/.claude/logs/focus-debug.log` on Mac.
+
+**Root cause**: On Linux server, nginx or Caddy is already listening on port 443 for the Tailscale domain (e.g., `time-machine.singapura-sargas.ts.net`). Tailscale Funnel can't intercept HTTPS traffic because nginx/Caddy handles it first.
+
+**Diagnosis**:
+```bash
+# Check what's on port 443
+ss -tlnp | grep :443
+
+# Test if funnel is working (should show mode:remote-relay)
+curl -sk "https://your-server.ts.net/health"
+# If you see something else (like port:3007), nginx is intercepting
+```
+
+**Solution**: Either:
+1. Stop nginx/Caddy if not needed:
+   ```bash
+   sudo systemctl stop nginx && sudo systemctl disable nginx
+   ```
+2. Or add a reverse proxy rule in nginx for `/slack/*` → `localhost:8464`
+
+**Files involved**:
+- `/etc/nginx/sites-available/*` - nginx config
+- `~/.claude/bin/remote-tunnel` - starts Tailscale Funnel
+
+### 5. Focus Button Doesn't Work - Mac MCP Server Self-Loop
+
+**Symptom**: Clicking Focus button shows "Mac returned 404: Cannot POST /focus" in server logs.
+
+**Root cause**: Two bugs combined:
+1. `local-tunnel` writes Mac's own tunnel URL to `~/.claude/.mac-tunnel-url`
+2. `forwardToMac()` in slack.ts called `/focus` instead of `/slack/focus`
+3. MCP server on Mac reads `.mac-tunnel-url` and tries to forward to itself
+
+**Diagnosis**:
+```bash
+# On Mac - check if .mac-tunnel-url exists and points to self
+cat ~/.claude/.mac-tunnel-url
+# If this shows your Mac's tunnel URL, that's the bug
+```
+
+**Solution** (implemented in code):
+1. Fixed endpoint: `forwardToMac()` now calls `/slack/focus` not `/focus`
+2. Fixed self-loop: `loadMacTunnelUrl()` returns null on Mac (`process.platform === 'darwin'`)
+
+**Workaround** (before fix is deployed):
+```bash
+# On Mac, delete the self-referencing file
+rm ~/.claude/.mac-tunnel-url
+# Restart MCP server
+```
+
+**Files involved**:
+- `mcp-server/src/routes/slack.ts` - `loadMacTunnelUrl()` and `forwardToMac()`
+- `bin/local-tunnel` - writes `.mac-tunnel-url` (line ~161)
+
+### 6. Terminal.app Detection Fails (No Buttons on Mac)
 
 **Symptom**: Running `/slack-notify` in Claude on Mac Terminal.app shows notification but no buttons.
 

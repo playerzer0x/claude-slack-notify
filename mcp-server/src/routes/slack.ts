@@ -118,7 +118,13 @@ const MAC_FOCUS_TYPES = new Set([
 const INPUT_ACTIONS = new Set(['1', '2', 'continue', 'push']);
 
 // Load Mac tunnel URL from config
+// Returns null if on Mac (we ARE the Mac, don't forward to self)
 function loadMacTunnelUrl(): string | null {
+  // On Mac, we handle focus directly - no need to forward to ourselves
+  if (process.platform === 'darwin') {
+    return null;
+  }
+
   const configPath = join(CLAUDE_DIR, '.mac-tunnel-url');
   if (!existsSync(configPath)) {
     return null;
@@ -137,7 +143,7 @@ async function forwardToMac(
   action: FocusAction
 ): Promise<{ success: boolean; message: string }> {
   try {
-    const response = await fetch(`${macTunnelUrl}/focus`, {
+    const response = await fetch(`${macTunnelUrl}/slack/focus`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: focusUrl, action }),

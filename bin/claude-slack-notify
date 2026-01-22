@@ -269,10 +269,61 @@ if [[ "$1" == "update" ]]; then
         echo "│  Next Steps                                                 │"
         echo "╰─────────────────────────────────────────────────────────────╯"
         echo ""
+
+        # Detect environment for context-specific instructions
+        UPDATE_OS=$(uname -s)
+        UPDATE_ENV=""
+
+        case "$UPDATE_OS" in
+            Darwin)
+                UPDATE_ENV="mac"
+                ;;
+            Linux)
+                if [[ -n "$SSH_CONNECTION" ]]; then
+                    UPDATE_ENV="remote-linux"
+                elif [[ -n "$WSL_DISTRO_NAME" ]] || grep -qi microsoft /proc/version 2>/dev/null; then
+                    UPDATE_ENV="wsl"
+                else
+                    UPDATE_ENV="linux"
+                fi
+                ;;
+            *)
+                UPDATE_ENV="other"
+                ;;
+        esac
+
         echo "  1. Re-run /slack-notify to update your session registration"
         echo ""
-        echo "  2. If you're on Mac with local-tunnel running:"
-        echo "     • Restart local-tunnel: Ctrl+C, then run 'local-tunnel'"
+
+        case "$UPDATE_ENV" in
+            mac)
+                echo "  2. If local-tunnel is running:"
+                echo "     • Restart it: Ctrl+C, then run 'local-tunnel'"
+                echo ""
+                echo "  Environment: macOS"
+                if [[ -n "$ITERM_SESSION_ID" ]]; then
+                    echo "  Terminal: iTerm2"
+                elif [[ "$TERM_PROGRAM" == "Apple_Terminal" ]]; then
+                    echo "  Terminal: Terminal.app"
+                fi
+                ;;
+            remote-linux)
+                echo "  2. On your Mac (where local-tunnel runs):"
+                echo "     • Restart local-tunnel if MCP server code changed"
+                echo ""
+                echo "  Environment: Remote Linux (via SSH)"
+                [[ -n "$TMUX" ]] && echo "  Tmux: $(tmux display-message -p '#{session_name}' 2>/dev/null)"
+                ;;
+            wsl)
+                echo "  2. If using local-tunnel on Windows:"
+                echo "     • Restart the tunnel process"
+                echo ""
+                echo "  Environment: WSL ($WSL_DISTRO_NAME)"
+                ;;
+            *)
+                echo "  Environment: $UPDATE_OS"
+                ;;
+        esac
         echo ""
     else
         echo ""
@@ -1211,7 +1262,51 @@ if [[ "$1" == "status" ]]; then
     # Machine info
     MACHINE_HOSTNAME=$(hostname -f 2>/dev/null || hostname)
     MACHINE_OS=$(uname -s)
-    echo "  Machine: $MACHINE_HOSTNAME ($MACHINE_OS)"
+
+    # Detect environment type
+    ENV_TYPE=""
+    TERMINAL_APP=""
+
+    case "$MACHINE_OS" in
+        Darwin)
+            ENV_TYPE="macOS"
+            if [[ -n "$ITERM_SESSION_ID" ]]; then
+                TERMINAL_APP="iTerm2"
+            elif [[ "$TERM_PROGRAM" == "Apple_Terminal" || "$__CFBundleIdentifier" == "com.apple.Terminal" ]]; then
+                TERMINAL_APP="Terminal.app"
+            elif [[ -n "$TERM_PROGRAM" ]]; then
+                TERMINAL_APP="$TERM_PROGRAM"
+            fi
+            ;;
+        Linux)
+            if [[ -n "$WSL_DISTRO_NAME" ]] || grep -qi microsoft /proc/version 2>/dev/null; then
+                ENV_TYPE="WSL ($WSL_DISTRO_NAME)"
+                if [[ -n "$WT_SESSION" ]]; then
+                    TERMINAL_APP="Windows Terminal"
+                fi
+            elif [[ -n "$JUPYTER_SERVER_ROOT" || -n "$JPY_PARENT_PID" ]]; then
+                ENV_TYPE="JupyterLab"
+                TERMINAL_APP="Browser"
+            else
+                ENV_TYPE="Linux"
+            fi
+            ;;
+        MINGW*|MSYS*|CYGWIN*)
+            ENV_TYPE="Windows (Git Bash)"
+            if [[ -n "$WT_SESSION" ]]; then
+                TERMINAL_APP="Windows Terminal"
+            elif [[ -n "$ConEmuPID" ]]; then
+                TERMINAL_APP="ConEmu"
+            fi
+            ;;
+        *)
+            ENV_TYPE="$MACHINE_OS"
+            ;;
+    esac
+
+    echo "  Machine: $MACHINE_HOSTNAME"
+    echo "  OS: $ENV_TYPE"
+    [[ -n "$TERMINAL_APP" ]] && echo "  Terminal: $TERMINAL_APP"
 
     # SSH session info
     if [[ -n "$SSH_CONNECTION" ]]; then
@@ -1222,7 +1317,9 @@ if [[ "$1" == "status" ]]; then
     # Tmux session info
     if [[ -n "$TMUX" ]]; then
         TMUX_SESSION=$(tmux display-message -p '#{session_name}' 2>/dev/null)
-        echo "  Tmux session: $TMUX_SESSION"
+        TMUX_WINDOW=$(tmux display-message -p '#{window_index}' 2>/dev/null)
+        TMUX_PANE=$(tmux display-message -p '#{pane_index}' 2>/dev/null)
+        echo "  Tmux: $TMUX_SESSION:$TMUX_WINDOW.$TMUX_PANE"
 
         # Check tmux environment for link info
         LINK_ID=$(tmux show-environment CLAUDE_LINK_ID 2>/dev/null | cut -d= -f2-)

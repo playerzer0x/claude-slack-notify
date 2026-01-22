@@ -1113,6 +1113,11 @@ detect_terminal() {
                 TERM_TYPE="terminal"
                 TERM_TARGET="$terminal_tty"
                 FOCUS_URL="claude-focus://terminal/$(url_encode "$terminal_tty")"
+            else
+                # Last resort: generic Terminal.app focus (focuses frontmost window)
+                TERM_TYPE="terminal"
+                TERM_TARGET="frontmost"
+                FOCUS_URL="claude-focus://terminal/frontmost"
             fi
         fi
         return

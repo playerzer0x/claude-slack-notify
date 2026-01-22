@@ -167,6 +167,24 @@ send_terminal_input() {
     local input="$2"
     if [[ -n "$input" ]]; then
         echo "$(date): Sending input to Terminal.app (tty=$target_tty): $input" >> $LOG_FILE
+
+        # Special case: "frontmost" sends to the active Terminal window
+        if [[ "$target_tty" == "frontmost" ]]; then
+            osascript << APPLESCRIPT 2>/dev/null
+tell application "Terminal"
+    activate
+    tell application "System Events"
+        tell process "Terminal"
+            keystroke "$input"
+            delay 0.1
+            key code 36
+        end tell
+    end tell
+end tell
+APPLESCRIPT
+            return
+        fi
+
         osascript << APPLESCRIPT 2>/dev/null
 tell application "Terminal"
     repeat with w in windows
@@ -448,6 +466,14 @@ APPLESCRIPT
 switch_terminal_tab() {
     local target_tty="$1"
     echo "$(date): Looking for Terminal.app tab with tty=$target_tty" >> $LOG_FILE
+
+    # Special case: "frontmost" just activates Terminal.app
+    if [[ "$target_tty" == "frontmost" ]]; then
+        osascript -e 'tell application "Terminal" to activate'
+        osascript -e 'tell application "System Events" to set frontmost of process "Terminal" to true'
+        echo "$(date): Terminal.app activated (frontmost)" >> $LOG_FILE
+        return
+    fi
 
     local result
     result=$(osascript << APPLESCRIPT 2>&1

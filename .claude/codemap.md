@@ -304,6 +304,7 @@ rm ~/.claude/.mac-tunnel-url  # On Mac
 
 | Version | Changes |
 |---------|---------|
+| v1.0.3 | Cross-platform session locking (macOS, Windows Git Bash/MSYS2 support) |
 | v1.0.2 | Add port 443 conflict warning in `remote-tunnel` |
 | v1.0.1 | Fix Focus button self-loop bug on Mac (platform check + correct endpoint) |
 | v1.0.0 | Initial release with remote-as-canonical architecture |
@@ -312,6 +313,13 @@ rm ~/.claude/.mac-tunnel-url  # On Mac
 > Last updated: 2026-01-22
 
 ### Recent Changes
+- **v1.0.3: Cross-platform session locking**: `acquire_session_lock()` now works on:
+  - Linux: uses `flock` (existing behavior)
+  - WSL: uses `flock` (it's Linux)
+  - macOS: mkdir-based locking (atomic operation)
+  - Windows (Git Bash/MSYS2): mkdir-based locking with GNU stat
+  - Handles BSD vs GNU stat syntax for stale lock detection (1hr timeout)
+
 - **Multi-session support for `remote` command**: When connecting to a host with multiple tmux sessions:
   - Interactive menu shows sessions sorted by last connected time
   - Relative time display (e.g., "connected 10 min ago")

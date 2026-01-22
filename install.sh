@@ -232,9 +232,9 @@ if [[ "${1:-}" == "--uninstall" ]]; then
             echo_info "Removed slack-notify hooks from settings.json"
         fi
 
-        # Remove slack-notify permissions
-        if grep -q 'Bash(SESSION_ID=:\*)' "$SETTINGS_FILE" 2>/dev/null; then
-            jq '.permissions.allow = ([.permissions.allow // []] | flatten | map(select(. != "Bash(SESSION_ID=:*)")))' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
+        # Remove slack-notify permissions (both old and new patterns)
+        if grep -q 'Bash(SESSION_ID=' "$SETTINGS_FILE" 2>/dev/null; then
+            jq '.permissions.allow = ([.permissions.allow // []] | flatten | map(select(startswith("Bash(SESSION_ID=") | not)))' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
             echo_info "Removed slack-notify permissions from settings.json"
         fi
     elif [[ -f "$SETTINGS_FILE" ]]; then
@@ -522,8 +522,10 @@ fi
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 
 # Permissions needed for /slack-notify command
+# Pattern matches the register command from slack-notify.md:
+# SESSION_ID=$(~/.claude/bin/get-session-id) && CLAUDE_INSTANCE_ID="$SESSION_ID" ~/.claude/bin/claude-slack-notify ...
 SLACK_PERMISSIONS='[
-  "Bash(SESSION_ID=:*)"
+  "Bash(SESSION_ID=$(~/.claude/bin/get-session-id)*)"
 ]'
 
 # Our hooks to add

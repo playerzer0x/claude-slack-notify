@@ -522,10 +522,12 @@ fi
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 
 # Permissions needed for /slack-notify command
-# Pattern matches the register command from slack-notify.md:
-# SESSION_ID=$(~/.claude/bin/get-session-id) && CLAUDE_INSTANCE_ID="$SESSION_ID" ~/.claude/bin/claude-slack-notify ...
+# Patterns match commands from slack-notify.md:
+# - Register: SESSION_ID=$(~/.claude/bin/get-session-id) && CLAUDE_INSTANCE_ID="$SESSION_ID" ...
+# - Subcommands: ~/.claude/bin/claude-slack-notify local|remote|clean|stop
 SLACK_PERMISSIONS='[
-  "Bash(SESSION_ID=$(~/.claude/bin/get-session-id)*)"
+  "Bash(SESSION_ID=$(*)",
+  "Bash(~/.claude/bin/claude-slack-notify *)"
 ]'
 
 # Our hooks to add

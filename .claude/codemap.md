@@ -229,13 +229,92 @@ remote-tunnel --use-localtunnel  # Force Localtunnel
 # In Claude: /slack-notify
 ```
 
+## Troubleshooting
+
+### Focus Button Not Working
+
+#### 1. nginx/Caddy Blocking Port 443 (Linux)
+
+**Symptom**: Clicking Focus button does nothing. No entries in `~/.claude/logs/focus-debug.log` on Mac.
+
+**Root cause**: nginx or Caddy is listening on port 443, intercepting Tailscale Funnel traffic before it reaches the remote-relay.
+
+**Diagnosis**:
+```bash
+# Check what's on port 443
+ss -tlnp | grep :443
+
+# Test if funnel is working (should show mode:remote-relay)
+curl -sk "https://your-server.ts.net/health"
+# If you see something else (like port:3007), nginx is intercepting
+```
+
+**Fix**: Stop nginx/caddy or add a reverse proxy rule:
+```bash
+sudo systemctl stop nginx && sudo systemctl disable nginx
+```
+
+**Prevention**: `remote-tunnel` now warns if another process is on port 443.
+
+#### 2. Mac MCP Server Self-Loop (v1.0.0)
+
+**Symptom**: Server logs show "Mac returned 404: Cannot POST /focus"
+
+**Root cause**: Two bugs:
+1. `forwardToMac()` called `/focus` but endpoint is `/slack/focus` (router mounted at `/slack`)
+2. Mac read `.mac-tunnel-url` pointing to itself, causing infinite loop
+
+**Fix** (v1.0.1):
+- `loadMacTunnelUrl()` returns null on Mac (`process.platform === 'darwin'`)
+- `forwardToMac()` now calls `/slack/focus`
+
+**Workaround** (before updating):
+```bash
+rm ~/.claude/.mac-tunnel-url  # On Mac
+# Restart MCP server
+```
+
+### Debugging Checklist
+
+1. **Is MCP server running?**
+   ```bash
+   curl http://localhost:8463/health
+   ```
+
+2. **Is it running NEW code?**
+   ```bash
+   ls -la ~/.claude/mcp-server-dist/dist/routes/slack.js
+   ```
+
+3. **Is tunnel URL correct in Slack app?**
+   ```bash
+   # Tailscale Funnel
+   curl -sk "https://your-server.ts.net/health"
+   ```
+
+4. **Check logs after clicking**:
+   ```bash
+   tail ~/.claude/mcp-server.log
+   tail ~/.claude/logs/focus-debug.log
+   ```
+
+## Version History
+
+| Version | Changes |
+|---------|---------|
+| v1.0.2 | Add port 443 conflict warning in `remote-tunnel` |
+| v1.0.1 | Fix Focus button self-loop bug on Mac (platform check + correct endpoint) |
+| v1.0.0 | Initial release with remote-as-canonical architecture |
+
 ## Current Focus
 > Last updated: 2026-01-22
 
 ### Recent Changes
+- **v1.0.2**: Port 443 conflict warning in `remote-tunnel`
+- **v1.0.1**: Fixed Mac MCP server self-loop bug
 - **Remote as canonical endpoint**: Remote server now receives all Slack button clicks
   - Input actions (1, 2, continue, push) handled locally on Remote
-  - Focus action forwarded to Mac's `/focus` endpoint
+  - Focus action forwarded to Mac's `/slack/focus` endpoint
   - Buttons work even when Mac is offline (input only)
 - **Instant button response**: ACK Slack immediately, process in background
 - **Mac tunnel URL sync**: `link --host` stores Mac's tunnel URL on remote

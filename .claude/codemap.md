@@ -313,6 +313,13 @@ rm ~/.claude/.mac-tunnel-url  # On Mac
 > Last updated: 2026-01-22
 
 ### Recent Changes
+- **Interactive session menu with arrow navigation**: The `remote` command now uses a clean, interactive menu:
+  - Up/Down arrow keys (or j/k vim keys) for navigation
+  - Enter to select, 'n' for new session, 'q' to quit
+  - Each session name has a unique color (hash-based, consistent)
+  - Selected item highlighted with reverse video
+  - Hidden cursor during navigation for clean appearance
+
 - **v1.0.3: Cross-platform session locking**: `acquire_session_lock()` now works on:
   - Linux: uses `flock` (existing behavior)
   - WSL: uses `flock` (it's Linux)

@@ -201,7 +201,152 @@ validate_session_name() {
     fi
 }
 
-# Read and validate menu choice from user
+# -----------------------------------------------------------------------------
+# Interactive menu with arrow key navigation
+# -----------------------------------------------------------------------------
+
+# Color palette for session names (12 distinct colors)
+MENU_COLORS=(
+    $'\033[38;5;39m'   # Bright blue
+    $'\033[38;5;208m'  # Orange
+    $'\033[38;5;42m'   # Green
+    $'\033[38;5;205m'  # Pink
+    $'\033[38;5;226m'  # Yellow
+    $'\033[38;5;141m'  # Purple
+    $'\033[38;5;81m'   # Cyan
+    $'\033[38;5;196m'  # Red
+    $'\033[38;5;118m'  # Lime
+    $'\033[38;5;213m'  # Magenta
+    $'\033[38;5;220m'  # Gold
+    $'\033[38;5;51m'   # Aqua
+)
+MENU_RESET=$'\033[0m'
+MENU_DIM=$'\033[2m'
+MENU_BOLD=$'\033[1m'
+MENU_REVERSE=$'\033[7m'
+
+# Get a consistent color for a session name (hash-based)
+get_session_color() {
+    local session="$1"
+    local hash=0
+    for ((i = 0; i < ${#session}; i++)); do
+        hash=$(( (hash * 31 + $(printf '%d' "'${session:$i:1}")) % ${#MENU_COLORS[@]} ))
+    done
+    echo "${MENU_COLORS[$hash]}"
+}
+
+# Draw the interactive menu
+# Args: $1 = selected index, $2+ = menu items (format: "label|description")
+draw_menu() {
+    local selected="$1"
+    shift
+    local -a items=("$@")
+    local total=${#items[@]}
+
+    # Move cursor up to redraw (if not first draw)
+    if [[ -n "$MENU_DRAWN" ]]; then
+        printf '\033[%dA' "$((total + 1))" >&2
+    fi
+    MENU_DRAWN=1
+
+    local i=0
+    for item in "${items[@]}"; do
+        local label="${item%%|*}"
+        local desc="${item#*|}"
+        local color=""
+        local prefix="   "
+        local suffix=""
+
+        # Get color for this item (except "New session")
+        if [[ "$label" != "New session" ]]; then
+            color=$(get_session_color "$label")
+        fi
+
+        if [[ $i -eq $selected ]]; then
+            prefix="${MENU_BOLD}${MENU_REVERSE} › "
+            suffix=" ${MENU_RESET}"
+            if [[ -n "$color" ]]; then
+                printf '%s%s%s%s%s %s%s%s\n' "$prefix" "$color" "$label" "$MENU_RESET" "$MENU_REVERSE" "$MENU_DIM" "$desc" "$suffix" >&2
+            else
+                printf '%s%s %s%s%s\n' "$prefix" "$label" "$MENU_DIM" "$desc" "$suffix" >&2
+            fi
+        else
+            if [[ -n "$color" ]]; then
+                printf '%s%s%s%s  %s%s%s\n' "$prefix" "$color" "$label" "$MENU_RESET" "$MENU_DIM" "$desc" "$MENU_RESET" >&2
+            else
+                printf '%s%s  %s%s%s\n' "$prefix" "$label" "$MENU_DIM" "$desc" "$MENU_RESET" >&2
+            fi
+        fi
+        ((i++))
+    done
+
+    printf '%s↑↓ navigate  enter select  n new%s\n' "$MENU_DIM" "$MENU_RESET" >&2
+}
+
+# Interactive menu with arrow key navigation
+# Args: menu items (format: "label|description")
+# Returns: selected index (0-based), or "new" for new session
+interactive_menu() {
+    local -a items=("$@")
+    local total=${#items[@]}
+    local selected=0
+
+    # Hide cursor
+    printf '\033[?25l' >&2
+
+    # Ensure cursor is restored on exit
+    trap 'printf "\033[?25h" >&2' RETURN
+
+    # Initial draw
+    MENU_DRAWN=""
+    draw_menu "$selected" "${items[@]}"
+
+    # Read keys
+    while true; do
+        # Read a single character (with escape sequence handling)
+        local key
+        IFS= read -rsn1 key
+
+        case "$key" in
+            $'\x1b')  # Escape sequence (arrow keys)
+                read -rsn2 -t 0.1 rest
+                case "$rest" in
+                    '[A')  # Up arrow
+                        ((selected > 0)) && ((selected--))
+                        ;;
+                    '[B')  # Down arrow
+                        ((selected < total - 1)) && ((selected++))
+                        ;;
+                esac
+                ;;
+            'k'|'K')  # Vim up
+                ((selected > 0)) && ((selected--))
+                ;;
+            'j'|'J')  # Vim down
+                ((selected < total - 1)) && ((selected++))
+                ;;
+            'n'|'N')  # New session
+                printf '\033[?25h' >&2  # Show cursor
+                echo "new"
+                return
+                ;;
+            '')  # Enter key
+                printf '\033[?25h' >&2  # Show cursor
+                echo "$selected"
+                return
+                ;;
+            'q'|'Q'|$'\x03')  # Quit (q or Ctrl+C)
+                printf '\033[?25h' >&2  # Show cursor
+                echo "quit"
+                return
+                ;;
+        esac
+
+        draw_menu "$selected" "${items[@]}"
+    done
+}
+
+# Read and validate menu choice from user (legacy fallback)
 # Args: $1 = max number option
 # Returns: number (1-max), "new", or exits on EOF
 read_menu_choice() {
@@ -258,12 +403,8 @@ show_session_menu() {
         sorted_sessions=("${sorted_sessions[@]:0:$max_show}")
     fi
 
-    # Display menu to stderr so stdout is reserved for the result
-    echo "" >&2
-    echo "Sessions for $hostname:" >&2
-    echo "" >&2
-
-    local i=1
+    # Build menu items with descriptions (session|description format)
+    local -a menu_items=()
     for session in "${sorted_sessions[@]}"; do
         local session_file="$host_dir/${session}.json"
         local last_connected_str=""
@@ -280,35 +421,44 @@ show_session_menu() {
                 if [[ -n "$last_epoch" ]]; then
                     diff_secs=$((now_epoch - last_epoch))
                     if [[ $diff_secs -lt 60 ]]; then
-                        last_connected_str="(connected just now)"
+                        last_connected_str="connected just now"
                     elif [[ $diff_secs -lt 3600 ]]; then
-                        last_connected_str="(connected $((diff_secs / 60)) min ago)"
+                        last_connected_str="connected $((diff_secs / 60)) min ago"
                     elif [[ $diff_secs -lt 86400 ]]; then
-                        last_connected_str="(connected $((diff_secs / 3600)) hours ago)"
+                        last_connected_str="connected $((diff_secs / 3600)) hours ago"
                     else
-                        last_connected_str="(connected $((diff_secs / 86400)) days ago)"
+                        last_connected_str="connected $((diff_secs / 86400)) days ago"
                     fi
                 fi
             fi
         fi
-        echo "  $i) $session $last_connected_str" >&2
-        ((i++))
+        menu_items+=("${session}|${last_connected_str}")
     done
-    echo "  n) New session" >&2
+
+    # Display header
     echo "" >&2
-    echo -n "Select [1-${#sorted_sessions[@]}/n, default=1]: " >&2
+    printf '%sSessions on %s%s%s:%s\n' "$MENU_BOLD" "$MENU_DIM" "$hostname" "$MENU_RESET" "$MENU_RESET" >&2
+    echo "" >&2
 
+    # Run interactive menu
     local choice
-    choice=$(read_menu_choice ${#sorted_sessions[@]})
+    choice=$(interactive_menu "${menu_items[@]}")
 
-    if [[ "$choice" == "new" ]]; then
-        echo "" >&2
-        return 1  # Signal to create new session
-    fi
-
-    # Return selected session name on stdout
-    echo "${sorted_sessions[$((choice - 1))]}"
-    return 0
+    case "$choice" in
+        new)
+            echo "" >&2
+            return 1  # Signal to create new session
+            ;;
+        quit)
+            echo "" >&2
+            exit 0
+            ;;
+        *)
+            # Return selected session name on stdout
+            echo "${sorted_sessions[$choice]}"
+            return 0
+            ;;
+    esac
 }
 
 # Clean up dead sessions (sessions that no longer exist on remote)

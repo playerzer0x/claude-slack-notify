@@ -819,6 +819,13 @@ fi
 if [[ "$1" == "jupyter" || "$1" == "jupyter-start" ]]; then
     JUPYTER_ENV_FILE="$CLAUDE_DIR/jupyter-env"
 
+    # Handle --reset flag to force re-setup
+    if [[ "$2" == "--reset" || "$2" == "-r" ]]; then
+        rm -f "$JUPYTER_ENV_FILE"
+        echo "Reset jupyter configuration. Setting up fresh link..."
+        echo ""
+    fi
+
     # If jupyter-env doesn't exist, create it and show setup URL
     if [[ ! -f "$JUPYTER_ENV_FILE" ]]; then
         echo "Setting up JupyterLab link..."

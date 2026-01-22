@@ -522,9 +522,11 @@ fi
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 
 # Permissions needed for /slack-notify command
-# Pattern matches the register command which contains SESSION_ID= and claude-slack-notify
+# Multiple patterns to catch the register command variations
 SLACK_PERMISSIONS='[
-  "Bash(SESSION_ID=*claude-slack-notify*)"
+  "Bash(SESSION_ID=*claude-slack-notify*)",
+  "Bash(*claude-slack-notify register*)",
+  "Bash(*claude-slack-notify \"Instance registered*)"
 ]'
 
 # Our hooks to add

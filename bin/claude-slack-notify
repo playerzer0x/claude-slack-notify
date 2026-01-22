@@ -370,7 +370,10 @@ ENVEOF"
         echo "╰─────────────────────────────────────────────────────────────╯"
         echo ""
         echo "  1. source ~/.claude/jupyter-env"
-        echo "  2. tmux new -s '$INSTANCE_NAME'"
+        echo "  2. tmux new -s '$INSTANCE_NAME' \\\\; \\"
+        echo "        set-environment CLAUDE_LINK_ID \"\$CLAUDE_LINK_ID\" \\\\; \\"
+        echo "        set-environment CLAUDE_SSH_HOST \"\$CLAUDE_SSH_HOST\" \\\\; \\"
+        echo "        set-environment CLAUDE_INSTANCE_NAME \"\$CLAUDE_INSTANCE_NAME\""
         echo "  3. claude"
         echo "  4. /slack-notify"
         echo ""
@@ -515,10 +518,14 @@ EOF
         echo -n "  Press Enter to connect and start tmux..."
         read -r
         echo ""
-        # Create new tmux session named after instance, export env vars for /slack-notify
+        # Create new tmux session named after instance, set env vars in tmux session environment
+        # Using tmux set-environment makes variables available to ALL windows/panes in the session
         # CLAUDE_INSTANCE_NAME ensures register uses the same name as the tmux session
         exec ssh -t "${SSH_ARGS[@]}" "$SSH_HOST" \
-            "tmux new-session -s '$INSTANCE_NAME' 'export CLAUDE_LINK_ID=$LINK_ID CLAUDE_SSH_HOST=$SSH_HOST CLAUDE_INSTANCE_NAME=$INSTANCE_NAME; exec \$SHELL -l'"
+            "tmux new-session -s '$INSTANCE_NAME' \\; \
+             set-environment CLAUDE_LINK_ID '$LINK_ID' \\; \
+             set-environment CLAUDE_SSH_HOST '$SSH_HOST' \\; \
+             set-environment CLAUDE_INSTANCE_NAME '$INSTANCE_NAME'"
     fi
 
     # Otherwise print instructions (no --host)
@@ -804,6 +811,24 @@ detect_terminal() {
     TERM_TARGET=""
     FOCUS_URL=""
 
+    # If in tmux, try to get link variables from tmux session environment
+    # This is needed because tmux set-environment stores vars at session level,
+    # not in individual shell environments. New windows/panes won't inherit them.
+    if [[ -n "$TMUX" ]]; then
+        if [[ -z "$CLAUDE_LINK_ID" ]]; then
+            CLAUDE_LINK_ID=$(tmux show-environment CLAUDE_LINK_ID 2>/dev/null | cut -d= -f2-)
+            [[ "$CLAUDE_LINK_ID" == "-CLAUDE_LINK_ID" ]] && CLAUDE_LINK_ID=""
+        fi
+        if [[ -z "$CLAUDE_SSH_HOST" ]]; then
+            CLAUDE_SSH_HOST=$(tmux show-environment CLAUDE_SSH_HOST 2>/dev/null | cut -d= -f2-)
+            [[ "$CLAUDE_SSH_HOST" == "-CLAUDE_SSH_HOST" ]] && CLAUDE_SSH_HOST=""
+        fi
+        if [[ -z "$CLAUDE_INSTANCE_NAME" ]]; then
+            CLAUDE_INSTANCE_NAME=$(tmux show-environment CLAUDE_INSTANCE_NAME 2>/dev/null | cut -d= -f2-)
+            [[ "$CLAUDE_INSTANCE_NAME" == "-CLAUDE_INSTANCE_NAME" ]] && CLAUDE_INSTANCE_NAME=""
+        fi
+    fi
+
     # Check for linked session without SSH (e.g., JupyterLab terminal)
     # CLAUDE_LINK_ID is set but SSH_CONNECTION is not
     if [[ -n "$CLAUDE_LINK_ID" && -z "$SSH_CONNECTION" ]]; then
@@ -835,6 +860,11 @@ detect_terminal() {
         # CLAUDE_SSH_HOST ensures we use the same host/alias the user connected with
         SSH_HOST="${CLAUDE_SSH_HOST:-$(hostname -f 2>/dev/null || hostname)}"
         SSH_PORT="${CLAUDE_SSH_PORT:-22}"
+
+        # Debug logging for troubleshooting link issues
+        if [[ -n "$SLACK_NOTIFY_DEBUG" ]]; then
+            echo "DEBUG: SSH detected. CLAUDE_LINK_ID='$CLAUDE_LINK_ID' CLAUDE_SSH_HOST='$CLAUDE_SSH_HOST' SSH_HOST='$SSH_HOST'" >&2
+        fi
 
         if [[ -n "$CLAUDE_LINK_ID" ]]; then
             # Linked SSH mode - local terminal for focus, remote for input

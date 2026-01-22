@@ -264,6 +264,13 @@ if [[ "$1" == "update" ]]; then
     UPDATE_STATUS=$?
 
     if [[ $UPDATE_STATUS -eq 0 ]]; then
+        # Clear jupyter-env so next `jupyter` command prompts for setup
+        JUPYTER_ENV_FILE="${CLAUDE_DIR}/jupyter-env"
+        if [[ -f "$JUPYTER_ENV_FILE" ]]; then
+            rm -f "$JUPYTER_ENV_FILE"
+            echo "  Cleared jupyter-env (will re-prompt on next 'jupyter' run)"
+        fi
+
         echo ""
         echo "╭─────────────────────────────────────────────────────────────╮"
         echo "│  Next Steps                                                 │"
@@ -819,14 +826,8 @@ fi
 if [[ "$1" == "jupyter" || "$1" == "jupyter-start" ]]; then
     JUPYTER_ENV_FILE="$CLAUDE_DIR/jupyter-env"
 
-    # Handle --reset flag to force re-setup
-    if [[ "$2" == "--reset" || "$2" == "-r" ]]; then
-        rm -f "$JUPYTER_ENV_FILE"
-        echo "Reset jupyter configuration. Setting up fresh link..."
-        echo ""
-    fi
-
     # If jupyter-env doesn't exist, create it and show setup URL
+    # (Run 'claude-slack-notify update' to reset and re-prompt for setup)
     if [[ ! -f "$JUPYTER_ENV_FILE" ]]; then
         echo "Setting up JupyterLab link..."
         echo ""

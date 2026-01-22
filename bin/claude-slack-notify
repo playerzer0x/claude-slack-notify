@@ -460,7 +460,7 @@ ENVEOF"
         echo "│  Next Steps (in JupyterLab terminal)                        │"
         echo "╰─────────────────────────────────────────────────────────────╯"
         echo ""
-        echo "  1. claude-slack-notify jupyter-start"
+        echo "  1. claude-slack-notify jupyter"
         echo "  2. claude"
         echo "  3. /slack-notify"
         echo ""
@@ -812,11 +812,11 @@ if [[ "$1" == "remote" ]]; then
 fi
 
 # -----------------------------------------------------------------------------
-# Jupyter-start command - simplified JupyterLab tmux setup
-# Usage: claude-slack-notify jupyter-start
+# Jupyter command - simplified JupyterLab tmux setup
+# Usage: claude-slack-notify jupyter (or jupyter-start)
 # Run this in a JupyterLab terminal after running `link --jupyter` on Mac
 # -----------------------------------------------------------------------------
-if [[ "$1" == "jupyter-start" ]]; then
+if [[ "$1" == "jupyter" || "$1" == "jupyter-start" ]]; then
     JUPYTER_ENV_FILE="$CLAUDE_DIR/jupyter-env"
 
     if [[ ! -f "$JUPYTER_ENV_FILE" ]]; then

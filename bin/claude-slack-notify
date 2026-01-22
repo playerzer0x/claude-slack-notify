@@ -819,12 +819,61 @@ fi
 if [[ "$1" == "jupyter" || "$1" == "jupyter-start" ]]; then
     JUPYTER_ENV_FILE="$CLAUDE_DIR/jupyter-env"
 
+    # If jupyter-env doesn't exist, create it and show setup URL
     if [[ ! -f "$JUPYTER_ENV_FILE" ]]; then
-        echo "Error: jupyter-env file not found at $JUPYTER_ENV_FILE" >&2
-        echo "" >&2
-        echo "First run on your Mac:" >&2
-        echo "  claude-slack-notify link --jupyter --host <remote>" >&2
-        exit 1
+        echo "Setting up JupyterLab link..."
+        echo ""
+
+        # Generate link ID and instance name
+        LINK_ID=$(head -c 6 /dev/urandom | base64 | tr -dc 'a-z0-9' | head -c 8)
+        INSTANCE_NAME=$(generate_instance_name)
+        SSH_HOST=$(hostname -f 2>/dev/null || hostname)
+
+        # Ask for JupyterLab URL
+        echo "Enter your JupyterLab URL (from browser address bar):"
+        echo -n "> "
+        read -r JUPYTER_URL
+
+        if [[ -z "$JUPYTER_URL" ]]; then
+            echo "Error: JupyterLab URL is required" >&2
+            exit 1
+        fi
+
+        # Strip path to get base URL
+        JUPYTER_URL=$(echo "$JUPYTER_URL" | sed 's|/lab/.*||; s|/tree/.*||; s|/notebooks/.*||; s|#.*||')
+
+        # Save jupyter-env
+        cat > "$JUPYTER_ENV_FILE" << EOF
+export CLAUDE_LINK_ID=$LINK_ID
+export CLAUDE_SSH_HOST=$SSH_HOST
+export CLAUDE_INSTANCE_NAME=$INSTANCE_NAME
+export CLAUDE_JUPYTER_URL=$JUPYTER_URL
+EOF
+
+        # URL encode for the setup link
+        url_encode_param() {
+            python3 -c "import urllib.parse; print(urllib.parse.quote('$1', safe=''))" 2>/dev/null || \
+            echo "$1" | sed 's/:/%3A/g; s|/|%2F|g; s/ /%20/g'
+        }
+
+        ENCODED_URL=$(url_encode_param "$JUPYTER_URL")
+        ENCODED_HOST=$(url_encode_param "$SSH_HOST")
+        ENCODED_NAME=$(url_encode_param "$INSTANCE_NAME")
+
+        echo ""
+        echo "╭─────────────────────────────────────────────────────────────╮"
+        echo "│  JupyterLab Link Setup                                      │"
+        echo "╰─────────────────────────────────────────────────────────────╯"
+        echo ""
+        echo "  Open this URL on your Mac to complete setup:"
+        echo ""
+        echo "  claude-focus://jupyter-link/${LINK_ID}?url=${ENCODED_URL}&host=${ENCODED_HOST}&name=${ENCODED_NAME}"
+        echo ""
+        echo "  (Click the link if your terminal supports it, or copy to browser)"
+        echo ""
+        echo "  Then run this command again: claude-slack-notify jupyter"
+        echo ""
+        exit 0
     fi
 
     # Source the environment file to get CLAUDE_LINK_ID etc.

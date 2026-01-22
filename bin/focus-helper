@@ -23,6 +23,9 @@ IFS='/' read -r TYPE ARG1 ARG2 ARG3 ARG4 ARG5 <<< "$URL_PATH"
 # Parse query string parameters
 ACTION=""
 TEXT_INPUT=""
+PARAM_URL=""
+PARAM_HOST=""
+PARAM_NAME=""
 if [[ -n "$QUERY_STRING" ]]; then
     # Extract parameters from query string
     for param in ${QUERY_STRING//&/ }; do
@@ -33,6 +36,12 @@ if [[ -n "$QUERY_STRING" ]]; then
         elif [[ "$key" == "text" ]]; then
             # URL decode the text
             TEXT_INPUT=$(printf '%b' "${value//%/\\x}")
+        elif [[ "$key" == "url" ]]; then
+            PARAM_URL=$(printf '%b' "${value//%/\\x}")
+        elif [[ "$key" == "host" ]]; then
+            PARAM_HOST=$(printf '%b' "${value//%/\\x}")
+        elif [[ "$key" == "name" ]]; then
+            PARAM_NAME=$(printf '%b' "${value//%/\\x}")
         fi
     done
 fi
@@ -712,5 +721,51 @@ APPLESCRIPT
         if [[ -n "$ACTION_INPUT" && -n "$remote_tmux_target" ]]; then
             send_ssh_tmux_input "$ssh_host" "$ssh_user" "$ssh_port" "$remote_tmux_target" "$ACTION_INPUT"
         fi
+        ;;
+    jupyter-link)
+        # Create JupyterLab link file from URL parameters
+        # URL format: claude-focus://jupyter-link/{link_id}?url={jupyter_url}&host={ssh_host}&name={instance_name}
+        link_id="$ARG1"
+        jupyter_url="$PARAM_URL"
+        ssh_host="$PARAM_HOST"
+        instance_name="${PARAM_NAME:-jupyter}"
+
+        echo "$(date): Creating jupyter link: id=$link_id url=$jupyter_url host=$ssh_host name=$instance_name" >> "$LOG_FILE"
+
+        if [[ -z "$link_id" || -z "$jupyter_url" || -z "$ssh_host" ]]; then
+            echo "$(date): Error: Missing required parameters for jupyter-link" >> "$LOG_FILE"
+            osascript -e 'display notification "Missing link parameters" with title "Claude Slack Notify"'
+            exit 1
+        fi
+
+        # Create links directory if needed
+        mkdir -p "$LINKS_DIR"
+
+        # Get current user for SSH
+        ssh_user=$(whoami)
+        ssh_port="22"
+
+        # Create the link file
+        link_file="$LINKS_DIR/${link_id}.json"
+        cat > "$link_file" << EOF
+{
+  "link_id": "${link_id}",
+  "instance_name": "${instance_name}",
+  "term_type": "jupyter-tmux",
+  "jupyter_url": "${jupyter_url}",
+  "ssh_host": "${ssh_host}",
+  "ssh_user": "${ssh_user}",
+  "ssh_port": "${ssh_port}",
+  "created_at": "$(date -Iseconds)"
+}
+EOF
+
+        echo "$(date): Link file created: $link_file" >> "$LOG_FILE"
+
+        # Open JupyterLab in Chrome
+        open -a "Google Chrome" "$jupyter_url"
+
+        # Show success notification
+        osascript -e "display notification \"JupyterLab link created. Run 'claude-slack-notify jupyter' on remote.\" with title \"Claude Slack Notify\" sound name \"Glass\""
         ;;
 esac

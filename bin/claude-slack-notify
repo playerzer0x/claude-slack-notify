@@ -1199,6 +1199,136 @@ if [[ "$1" == "list" ]]; then
 fi
 
 # -----------------------------------------------------------------------------
+# Status - show system status, tunnels, and registered sessions
+# Usage: claude-slack-notify status
+# -----------------------------------------------------------------------------
+if [[ "$1" == "status" ]]; then
+    echo "╭─────────────────────────────────────────────────────────────╮"
+    echo "│  Claude Slack Notify Status                                 │"
+    echo "╰─────────────────────────────────────────────────────────────╯"
+    echo ""
+
+    # Machine info
+    MACHINE_HOSTNAME=$(hostname -f 2>/dev/null || hostname)
+    MACHINE_OS=$(uname -s)
+    echo "  Machine: $MACHINE_HOSTNAME ($MACHINE_OS)"
+
+    # SSH session info
+    if [[ -n "$SSH_CONNECTION" ]]; then
+        SSH_FROM=$(echo "$SSH_CONNECTION" | awk '{print $1}')
+        echo "  SSH from: $SSH_FROM"
+    fi
+
+    # Tmux session info
+    if [[ -n "$TMUX" ]]; then
+        TMUX_SESSION=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+        echo "  Tmux session: $TMUX_SESSION"
+
+        # Check tmux environment for link info
+        LINK_ID=$(tmux show-environment CLAUDE_LINK_ID 2>/dev/null | cut -d= -f2-)
+        [[ "$LINK_ID" == "-CLAUDE_LINK_ID" ]] && LINK_ID=""
+        if [[ -n "$LINK_ID" ]]; then
+            LINK_HOST=$(tmux show-environment CLAUDE_SSH_HOST 2>/dev/null | cut -d= -f2-)
+            [[ "$LINK_HOST" == "-CLAUDE_SSH_HOST" ]] && LINK_HOST=""
+            echo "  Linked to: $LINK_HOST (link: $LINK_ID)"
+        fi
+    fi
+    echo ""
+
+    # Tunnel/MCP status (check for local services)
+    echo "  ┌─────────────────────────────────────────────────────────┐"
+    echo "  │ Services                                                │"
+    echo "  └─────────────────────────────────────────────────────────┘"
+
+    # Check MCP server
+    if is_mcp_server_running; then
+        MCP_PORT=$(cat "${CLAUDE_DIR}/.mcp-server.port" 2>/dev/null || echo "8463")
+        echo "    MCP Server: ✓ running on port $MCP_PORT"
+    else
+        echo "    MCP Server: ✗ not running"
+    fi
+
+    # Check ngrok tunnel
+    NGROK_URL=""
+    if [[ -f "${CLAUDE_DIR}/.ngrok.log" ]]; then
+        NGROK_URL=$(grep -o '"url":"https://[^"]*"' "${CLAUDE_DIR}/.ngrok.log" 2>/dev/null | tail -1 | cut -d'"' -f4)
+    fi
+    if [[ -n "$NGROK_URL" ]]; then
+        # Verify tunnel is actually responding
+        if curl -sf "$NGROK_URL" --max-time 2 >/dev/null 2>&1; then
+            echo "    Ngrok Tunnel: ✓ $NGROK_URL"
+        else
+            echo "    Ngrok Tunnel: ⚠ URL found but not responding"
+            echo "                  $NGROK_URL"
+        fi
+    else
+        echo "    Ngrok Tunnel: ✗ not running"
+    fi
+    echo ""
+
+    # Registered sessions on this machine
+    echo "  ┌─────────────────────────────────────────────────────────┐"
+    echo "  │ Registered Sessions                                     │"
+    echo "  └─────────────────────────────────────────────────────────┘"
+
+    SESSION_COUNT=0
+    if [[ -d "$INSTANCES_DIR" ]]; then
+        for f in "$INSTANCES_DIR"/*.json; do
+            [[ -f "$f" ]] || continue
+            SESSION_COUNT=$((SESSION_COUNT + 1))
+            NAME=$(grep -o '"name": *"[^"]*"' "$f" | cut -d'"' -f4)
+            HOST=$(grep -o '"hostname": *"[^"]*"' "$f" | cut -d'"' -f4)
+            TERM=$(grep -o '"term_type": *"[^"]*"' "$f" | cut -d'"' -f4)
+            CREATED=$(grep -o '"created_at": *"[^"]*"' "$f" | cut -d'"' -f4 | cut -dT -f1,2 | tr 'T' ' ')
+
+            # Check if this is our current session
+            SESS_ID=$(basename "$f" .json)
+            if [[ "$SESS_ID" == "$INSTANCE_ID" ]]; then
+                echo "    → $NAME ($TERM) - current session"
+            else
+                echo "    • $NAME ($TERM) @ $HOST"
+            fi
+        done
+    fi
+
+    if [[ $SESSION_COUNT -eq 0 ]]; then
+        echo "    (no sessions registered)"
+    fi
+    echo ""
+
+    # Links (Mac only, for SSH sessions)
+    if [[ -d "${CLAUDE_DIR}/links" ]]; then
+        LINK_COUNT=$(find "${CLAUDE_DIR}/links" -name "*.json" 2>/dev/null | wc -l)
+        if [[ $LINK_COUNT -gt 0 ]]; then
+            echo "  ┌─────────────────────────────────────────────────────────┐"
+            echo "  │ Active Links (for SSH sessions)                        │"
+            echo "  └─────────────────────────────────────────────────────────┘"
+
+            for f in "${CLAUDE_DIR}/links"/*.json; do
+                [[ -f "$f" ]] || continue
+                LID=$(basename "$f" .json)
+                LTYPE=$(grep -o '"term_type": *"[^"]*"' "$f" | cut -d'"' -f4)
+                LCREATED=$(grep -o '"created_at": *"[^"]*"' "$f" | cut -d'"' -f4 | cut -dT -f1,2 | tr 'T' ' ')
+                echo "    • $LID ($LTYPE) created $LCREATED"
+            done
+            echo ""
+        fi
+    fi
+
+    # Quick help
+    echo "  ┌─────────────────────────────────────────────────────────┐"
+    echo "  │ Quick Commands                                          │"
+    echo "  └─────────────────────────────────────────────────────────┘"
+    echo "    claude-slack-notify update    Pull latest & reinstall"
+    echo "    claude-slack-notify list      List all sessions"
+    echo "    claude-slack-notify stop      Stop this session"
+    echo "    /slack-notify                 Register in Claude"
+    echo ""
+
+    exit 0
+fi
+
+# -----------------------------------------------------------------------------
 # Stop - unregister session and stop tunnel (if available)
 # Usage: claude-slack-notify stop
 # On local Mac: stops tunnel + MCP server + unregisters session

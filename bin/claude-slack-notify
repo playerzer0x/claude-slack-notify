@@ -517,7 +517,13 @@ ENVEOF"
     # Generate 4-word instance name for 1:1 correspondence with tmux session
     INSTANCE_NAME=$(generate_instance_name)
 
-    # Save link info (including instance name)
+    # Get Mac's tunnel URL for remote routing
+    MAC_TUNNEL_URL=""
+    if [[ -f "$CLAUDE_DIR/.tunnel-url" ]]; then
+        MAC_TUNNEL_URL=$(cat "$CLAUDE_DIR/.tunnel-url" 2>/dev/null)
+    fi
+
+    # Save link info (including instance name and Mac tunnel URL)
     cat > "$LINKS_DIR/${LINK_ID}.json" << EOF
 {
   "link_id": "${LINK_ID}",
@@ -525,6 +531,7 @@ ENVEOF"
   "term_type": "${LINK_TERM_TYPE}",
   "term_target": "${LINK_TERM_TARGET}",
   "focus_url": "${LINK_FOCUS_URL}",
+  "mac_tunnel_url": "${MAC_TUNNEL_URL}",
   "created_at": "$(date -Iseconds)"
 }
 EOF
@@ -590,6 +597,18 @@ EOF
                 fi
             fi
         fi
+
+        # Sync Mac tunnel URL to remote for smart routing
+        if [[ -n "$MAC_TUNNEL_URL" ]]; then
+            echo ""
+            echo "  Syncing Mac tunnel URL for button routing..."
+            ssh "${SSH_ARGS[@]}" "$SSH_HOST" "mkdir -p ~/.claude && echo '$MAC_TUNNEL_URL' > ~/.claude/.mac-tunnel-url" 2>/dev/null && \
+                echo "  ✓ Mac tunnel URL synced: $MAC_TUNNEL_URL"
+        else
+            echo ""
+            echo "  ⚠ No Mac tunnel URL found. Start local-tunnel first for Focus button support."
+        fi
+
         echo ""
         echo -n "  Press Enter to connect and start tmux..."
         read -r

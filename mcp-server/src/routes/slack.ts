@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { Router } from 'express';
+import express, { Router } from 'express';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -104,6 +104,69 @@ const router = Router();
 
 const VALID_ACTIONS = new Set<FocusAction>(['1', '2', 'continue', 'push', 'focus']);
 
+// Session types that require Mac's focus-helper for FOCUS action
+// Input actions (1, 2, continue, push) can be handled locally via tmux
+const MAC_FOCUS_TYPES = new Set([
+  'terminal',
+  'terminal-tmux',
+  'iterm2',
+  'iterm-tmux',
+  'ssh-linked',
+]);
+
+// Actions that send input to tmux - can be handled locally without Mac
+const INPUT_ACTIONS = new Set(['1', '2', 'continue', 'push']);
+
+// Load Mac tunnel URL from config
+function loadMacTunnelUrl(): string | null {
+  const configPath = join(CLAUDE_DIR, '.mac-tunnel-url');
+  if (!existsSync(configPath)) {
+    return null;
+  }
+  try {
+    return readFileSync(configPath, 'utf-8').trim();
+  } catch {
+    return null;
+  }
+}
+
+// Forward focus request to Mac's tunnel
+async function forwardToMac(
+  macTunnelUrl: string,
+  focusUrl: string,
+  action: FocusAction
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const response = await fetch(`${macTunnelUrl}/focus`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: focusUrl, action }),
+      signal: AbortSignal.timeout(5000), // 5 second timeout
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      return { success: false, message: `Mac returned ${response.status}: ${text}` };
+    }
+
+    const result = (await response.json()) as { success: boolean; message: string };
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('timeout') || message.includes('ECONNREFUSED')) {
+      return { success: false, message: 'Mac tunnel not reachable (is local-tunnel running?)' };
+    }
+    return { success: false, message: `Failed to reach Mac: ${message}` };
+  }
+}
+
+// Extract session type from focus URL
+function getSessionTypeFromUrl(focusUrl: string): string | null {
+  // Format: claude-focus://TYPE/...
+  const match = focusUrl.match(/^claude-focus:\/\/([^/]+)/);
+  return match ? match[1] : null;
+}
+
 interface SlackBlockAction {
   action_id: string;
   value: string;
@@ -117,6 +180,38 @@ interface SlackPayload {
 function isValidAction(action: string): action is FocusAction {
   return VALID_ACTIONS.has(action as FocusAction);
 }
+
+// POST /focus - Internal endpoint for focus requests (from remote MCP server)
+// No Slack signature verification - this is for internal routing
+router.post('/focus', express.json(), async (req: Request, res: Response) => {
+  touchActivityFile();
+
+  try {
+    const { url, action = 'focus' } = req.body as { url?: string; action?: string };
+
+    if (!url) {
+      res.status(400).json({ success: false, message: 'Missing url parameter' });
+      return;
+    }
+
+    if (!isValidAction(action)) {
+      res.status(400).json({ success: false, message: `Invalid action: ${action}` });
+      return;
+    }
+
+    console.log(`Focus request: url=${url} action=${action}`);
+    const result = await executeFocusUrl(url, action as FocusAction);
+    console.log(`Focus result:`, result);
+
+    res.json(result);
+  } catch (error) {
+    console.error('Error handling focus request:', error);
+    res.status(500).json({
+      success: false,
+      message: error instanceof Error ? error.message : 'Internal server error',
+    });
+  }
+});
 
 // POST /slack/actions - Handle Slack interactive button clicks
 router.post('/actions', verifySlackSignature, async (req: Request, res: Response) => {
@@ -167,16 +262,46 @@ router.post('/actions', verifySlackSignature, async (req: Request, res: Response
     if (firstPart.startsWith('url:')) {
       const focusUrl = firstPart.substring(4); // Remove "url:" prefix
       console.log(`Direct URL action: ${focusUrl} / ${actionType}`);
-      const result = await executeFocusUrl(focusUrl, actionType);
-      console.log(`Focus URL result for ${actionType}:`, result);
-      if (!result.success && actionType === 'focus') {
-        res.json({
-          response_type: 'ephemeral',
-          text: `⚠️ Focus failed: ${result.message || 'Unknown error'}`,
-        });
-        return;
-      }
+
+      // ACK immediately for snappy response - process in background
       ack();
+
+      // Determine routing: input actions are always local, focus may need Mac
+      const sessionType = getSessionTypeFromUrl(focusUrl);
+
+      // Process action in background (fire and forget)
+      (async () => {
+        try {
+          let result: { success: boolean; message: string };
+
+          // Input actions (1, 2, continue, push) are handled locally for speed
+          if (INPUT_ACTIONS.has(actionType)) {
+            console.log(`Input action ${actionType} - handling locally`);
+            result = await executeFocusUrl(focusUrl, actionType);
+          } else if (sessionType && MAC_FOCUS_TYPES.has(sessionType)) {
+            // Focus action on Mac-focused session - route to Mac's tunnel
+            const macTunnelUrl = loadMacTunnelUrl();
+            if (macTunnelUrl) {
+              console.log(`Focus action routing to Mac: ${macTunnelUrl}`);
+              result = await forwardToMac(macTunnelUrl, focusUrl, actionType);
+            } else {
+              console.log(`No Mac tunnel URL configured, trying local focus-helper`);
+              result = await executeFocusUrl(focusUrl, actionType);
+            }
+          } else {
+            // Remote session (ssh-tmux, jupyter-tmux) or unknown - handle locally
+            result = await executeFocusUrl(focusUrl, actionType);
+          }
+
+          console.log(`Focus result for ${actionType}:`, result);
+          if (!result.success) {
+            console.error(`Action ${actionType} failed:`, result.message);
+          }
+        } catch (error) {
+          console.error(`Background action ${actionType} error:`, error);
+        }
+      })();
+
       return;
     }
 
@@ -192,18 +317,43 @@ router.post('/actions', verifySlackSignature, async (req: Request, res: Response
       return;
     }
 
-    const result = await executeFocus(session, actionType);
-    console.log(`Focus result for ${sessionId}/${actionType}:`, result);
-
-    if (!result.success && actionType === 'focus') {
-      res.json({
-        response_type: 'ephemeral',
-        text: `⚠️ Focus failed: ${result.message || 'Unknown error'}`,
-      });
-      return;
-    }
-
+    // ACK immediately for snappy response - process in background
     ack();
+
+    const termType = session.term_type;
+
+    // Process action in background (fire and forget)
+    (async () => {
+      try {
+        let result: { success: boolean; message: string };
+
+        // Input actions (1, 2, continue, push) are handled locally for speed
+        if (INPUT_ACTIONS.has(actionType)) {
+          console.log(`Input action ${actionType} on ${termType} - handling locally`);
+          result = await executeFocus(session, actionType);
+        } else if (termType && MAC_FOCUS_TYPES.has(termType)) {
+          // Focus action on Mac-focused session - route to Mac's tunnel
+          const macTunnelUrl = loadMacTunnelUrl();
+          if (macTunnelUrl && session.focus_url) {
+            console.log(`Focus action routing ${termType} to Mac: ${macTunnelUrl}`);
+            result = await forwardToMac(macTunnelUrl, session.focus_url, actionType);
+          } else {
+            // No Mac tunnel or no focus_url - try local (might work if we're on Mac)
+            result = await executeFocus(session, actionType);
+          }
+        } else {
+          // Remote session or unknown - handle locally
+          result = await executeFocus(session, actionType);
+        }
+
+        console.log(`Focus result for ${sessionId}/${actionType}:`, result);
+        if (!result.success) {
+          console.error(`Action ${actionType} failed:`, result.message);
+        }
+      } catch (error) {
+        console.error(`Background action ${actionType} error:`, error);
+      }
+    })();
   } catch (error) {
     console.error('Error handling Slack action:', error);
     ack();

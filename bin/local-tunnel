@@ -421,84 +421,8 @@ rotate_slack_token() {
     return 0
 }
 
-# Update Slack app's Request URLs (actions + events)
-update_slack_request_url() {
-    local actions_url="$1"
-    local events_url="${2:-}"  # Optional for backward compatibility
-
-    # Ensure token is valid
-    if is_token_expired; then
-        if ! rotate_slack_token; then
-            return 1
-        fi
-    fi
-
-    echo_info "Updating Slack Request URLs..."
-
-    # Export current manifest
-    local manifest_response
-    manifest_response=$(curl -s -X POST "https://slack.com/api/apps.manifest.export" \
-        -H "Authorization: Bearer ${SLACK_ACCESS_TOKEN}" \
-        -H "Content-Type: application/x-www-form-urlencoded" \
-        -d "app_id=${SLACK_APP_ID}")
-
-    local ok
-    ok=$(echo "$manifest_response" | jq -r '.ok // false')
-
-    if [[ "$ok" != "true" ]]; then
-        local error
-        error=$(echo "$manifest_response" | jq -r '.error // "unknown error"')
-        echo_error "Failed to export manifest: $error"
-        return 1
-    fi
-
-    # Update interactivity URL (for buttons) and optionally event_subscriptions URL (for thread replies)
-    local updated_manifest
-    if [[ -n "$events_url" ]]; then
-        updated_manifest=$(echo "$manifest_response" | jq --arg actions_url "$actions_url" --arg events_url "$events_url" '
-            .manifest.settings.interactivity.is_enabled = true |
-            .manifest.settings.interactivity.request_url = $actions_url |
-            .manifest.settings.event_subscriptions.request_url = $events_url |
-            .manifest
-        ')
-    else
-        updated_manifest=$(echo "$manifest_response" | jq --arg url "$actions_url" '
-            .manifest.settings.interactivity.is_enabled = true |
-            .manifest.settings.interactivity.request_url = $url |
-            .manifest
-        ')
-    fi
-
-    # Update the manifest
-    local update_response
-    update_response=$(curl -s -X POST "https://slack.com/api/apps.manifest.update" \
-        -H "Authorization: Bearer ${SLACK_ACCESS_TOKEN}" \
-        -H "Content-Type: application/json" \
-        -d "{\"app_id\": \"${SLACK_APP_ID}\", \"manifest\": ${updated_manifest}}")
-
-    ok=$(echo "$update_response" | jq -r '.ok // false')
-
-    if [[ "$ok" != "true" ]]; then
-        local error
-        error=$(echo "$update_response" | jq -r '.error // "unknown error"')
-        echo_error "Failed to update manifest: $error"
-
-        # Show more details if available
-        local errors
-        errors=$(echo "$update_response" | jq -r '.errors // empty')
-        if [[ -n "$errors" ]]; then
-            echo_error "Details: $errors"
-        fi
-        return 1
-    fi
-
-    echo_info "Slack URLs updated:"
-    echo_info "  Actions: $actions_url"
-    if [[ -n "$events_url" ]]; then
-        echo_info "  Events:  $events_url"
-    fi
-    return 0
-}
+# NOTE: Slack Request URL auto-update removed - Remote server is the canonical endpoint
+# Mac's local-tunnel provides /focus endpoint for Focus button forwarding only
 
 # =============================================================================
 # MCP server helpers
@@ -1139,17 +1063,9 @@ cmd_stable() {
     echo ""
     echo -e "${GREEN}Stable URL:${NC} ${CYAN}${tunnel_url}${NC}"
 
-    # Try to auto-update Slack if tokens exist
-    if load_slack_config && [[ -n "${SLACK_APP_ID:-}" ]]; then
-        if update_slack_request_url "${tunnel_url}/slack/actions" "${tunnel_url}/slack/events"; then
-            echo -e "  ${GREEN}✓${NC} Slack URLs updated"
-        fi
-    else
-        echo ""
-        echo -e "  Update Slack app manually:"
-        echo -e "    Interactivity: ${BOLD}${tunnel_url}/slack/actions${NC}"
-        echo -e "    Events:        ${BOLD}${tunnel_url}/slack/events${NC}"
-    fi
+    # Note: Remote server is the canonical Slack endpoint
+    # This Mac tunnel provides /focus endpoint for Focus button forwarding
+    echo -e "  ${DIM}This tunnel handles Focus button forwarding from remote${NC}"
 
     echo ""
     cmd_interactive
@@ -1252,13 +1168,8 @@ cmd_background() {
         start_tunnel_and_get_url "true"
     fi
 
-    # Update Slack Request URLs (actions + events)
-    if ! update_slack_request_url "${TUNNEL_URL}/slack/actions" "${TUNNEL_URL}/slack/events"; then
-        echo_warn "Failed to update Slack, but tunnel is running"
-        echo_warn "Manually set Request URLs:"
-        echo_warn "  Actions: ${TUNNEL_URL}/slack/actions"
-        echo_warn "  Events:  ${TUNNEL_URL}/slack/events"
-    fi
+    # Note: Remote server is the canonical Slack endpoint - no auto-update needed
+    # This Mac tunnel provides /focus endpoint for Focus button forwarding
 
     # Start idle watchdog
     start_watchdog
@@ -1510,23 +1421,17 @@ cmd_interactive() {
         fi
     fi
 
-    # Update Slack Request URLs
-    if update_slack_request_url "${TUNNEL_URL}/slack/actions" "${TUNNEL_URL}/slack/events"; then
-        echo ""
-        if [[ "$using_tailscale" == "true" ]]; then
-            echo -e "${GREEN}Tailscale Funnel connected${NC}"
-        else
-            echo -e "${GREEN}Localtunnel connected${NC}"
-        fi
-        echo -e "  URL: ${CYAN}${TUNNEL_URL}${NC}"
-        echo -e "  ${DIM}Slack URLs updated. Press Ctrl+C to stop.${NC}"
+    # Note: Remote server is the canonical Slack endpoint - no auto-update needed
+    # This Mac tunnel provides /focus endpoint for Focus button forwarding
+    echo ""
+    if [[ "$using_tailscale" == "true" ]]; then
+        echo -e "${GREEN}Tailscale Funnel connected${NC}"
     else
-        echo ""
-        echo_warn "Could not auto-update Slack"
-        echo -e "  Actions: ${CYAN}${TUNNEL_URL}/slack/actions${NC}"
-        echo -e "  Events:  ${CYAN}${TUNNEL_URL}/slack/events${NC}"
-        echo -e "  ${DIM}Press Ctrl+C to stop.${NC}"
+        echo -e "${GREEN}Localtunnel connected${NC}"
     fi
+    echo -e "  URL: ${CYAN}${TUNNEL_URL}${NC}"
+    echo -e "  ${DIM}Focus endpoint: ${TUNNEL_URL}/focus${NC}"
+    echo -e "  ${DIM}Press Ctrl+C to stop.${NC}"
     echo ""
 
     # Keep running

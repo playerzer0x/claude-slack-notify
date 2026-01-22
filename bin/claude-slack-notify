@@ -1099,10 +1099,17 @@ detect_terminal() {
             TERM_TARGET="${ITERM_SESSION_ID#*:}"
             FOCUS_URL="claude-focus://iterm2/${TERM_TARGET}"
         elif [[ "$__CFBundleIdentifier" == "com.apple.Terminal" || "$TERM_PROGRAM" == "Apple_Terminal" ]]; then
-            # Terminal.app - get TTY of current shell (works even in subshells)
+            # Terminal.app - get TTY of current shell
             local terminal_tty
             terminal_tty=$(tty 2>/dev/null)
-            if [[ -n "$terminal_tty" && "$terminal_tty" != "not a tty" ]]; then
+            # Fallback: when running as subprocess (e.g., from Claude), tty fails
+            # Use ps to find the controlling TTY of ancestor processes
+            if [[ -z "$terminal_tty" || "$terminal_tty" == "not a tty" ]]; then
+                # Find TTY from parent process chain (Claude -> shell -> this script)
+                terminal_tty=$(ps -o tty= -p $PPID 2>/dev/null | grep -v '?' | head -1)
+                [[ -n "$terminal_tty" && "$terminal_tty" != "??" ]] && terminal_tty="/dev/$terminal_tty"
+            fi
+            if [[ -n "$terminal_tty" && "$terminal_tty" != "not a tty" && "$terminal_tty" != "/dev/" ]]; then
                 TERM_TYPE="terminal"
                 TERM_TARGET="$terminal_tty"
                 FOCUS_URL="claude-focus://terminal/$(url_encode "$terminal_tty")"

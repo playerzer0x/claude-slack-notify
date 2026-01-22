@@ -99,6 +99,17 @@ start_tailscale_funnel() {
     local background="${1:-false}"
     local retry="${2:-false}"
 
+    # Check if nginx/caddy is already on port 443 (can intercept funnel traffic)
+    local port_443_process
+    port_443_process=$(ss -tlnp 2>/dev/null | grep ":443 " | grep -v tailscale | head -1)
+    if [[ -n "$port_443_process" ]]; then
+        echo_warn "Another process is listening on port 443:"
+        echo "        $port_443_process"
+        echo_warn "This may intercept Tailscale Funnel traffic."
+        echo_warn "If Focus button doesn't work, stop nginx/caddy or add a proxy rule."
+        echo ""
+    fi
+
     if ! has_tailscale; then
         echo_error "Tailscale not installed"
         return 1

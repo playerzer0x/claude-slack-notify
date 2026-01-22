@@ -62,6 +62,25 @@ The `bin/mcp-server` script **prioritizes the installed copy**. After rebuilding
 
 The `focus-helper` script reads link files to find the local terminal info for focusing.
 
+### 4. Terminal.app Detection Fails (No Buttons on Mac)
+
+**Symptom**: Running `/slack-notify` in Claude on Mac Terminal.app shows notification but no buttons.
+
+**Root cause**: Claude Code runs scripts as subprocesses without a controlling TTY. The `tty` command returns "not a tty" and terminal detection fails, resulting in `term_type: "unknown"` and empty `focus_url`.
+
+**Why iTerm2 works**: iTerm2 exposes `$ITERM_SESSION_ID` environment variable which persists across subprocesses.
+
+**Solution** (implemented): `detect_terminal()` in `bin/claude-slack-notify` uses a fallback chain:
+1. Try `tty` command directly
+2. If that fails, try `ps -o tty= -p $PPID` to get parent's TTY
+3. If that also fails, use `frontmost` as a special value
+
+The `frontmost` value tells `focus-helper` to just activate Terminal.app without looking for a specific tab. This works because Claude is typically running in the user's active terminal window.
+
+**Files involved**:
+- `bin/claude-slack-notify` - `detect_terminal()` function (~line 1101)
+- `bin/focus-helper` - `switch_terminal_tab()` and `send_terminal_input()` handle `frontmost`
+
 ## Development Workflow
 
 ### Making MCP Server Changes

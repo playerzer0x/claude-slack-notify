@@ -154,7 +154,8 @@ When bot token is configured (`local-tunnel --setup` → enable thread replies):
 Local terminals:
   claude-focus://iterm2/{session_uuid}
   claude-focus://iterm-tmux/{tty}/{tmux_target}
-  claude-focus://terminal/{tty}
+  claude-focus://terminal/{tty}              # TTY like /dev/ttys001
+  claude-focus://terminal/frontmost          # Fallback: focus frontmost window
   claude-focus://terminal-tmux/{tty}/{tmux_target}
   claude-focus://tmux/{tmux_target}
 
@@ -163,6 +164,19 @@ SSH sessions:
   claude-focus://ssh-tmux/{host}/{user}/{port}/{tmux_target}
   claude-focus://jupyter-tmux/{link_id}/{host}/{user}/{port}/{tmux_target}
 ```
+
+## Terminal Detection & TTY Gotchas
+
+**Problem:** When Claude Code runs `/slack-notify`, it executes the script as a subprocess without a controlling TTY. This causes `tty` to return "not a tty" and terminal detection fails.
+
+**Solution:** The `detect_terminal()` function in `bin/claude-slack-notify` uses a fallback chain:
+1. Try `tty` command directly
+2. If that fails, try `ps -o tty= -p $PPID` to get parent's TTY
+3. If that also fails (Claude's process tree is fully detached), fall back to `frontmost`
+
+The `frontmost` special value tells `focus-helper` to just activate Terminal.app without looking for a specific tab. This works because Claude is typically running in the user's active terminal window anyway.
+
+**Why iTerm2 doesn't have this problem:** iTerm2 exposes `$ITERM_SESSION_ID` which persists across subprocesses, so detection always works.
 
 ## Testing Commands
 

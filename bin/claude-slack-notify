@@ -57,6 +57,10 @@ sanitize_hostname() {
 
 # Acquire an exclusive lock for session operations on a host
 # Args: $1 = host directory path
+# Global lock state for release function
+_LOCK_TYPE=""
+_LOCK_DIR=""
+
 # Returns: 0 on success, exits on failure
 acquire_session_lock() {
     local host_dir="$1"
@@ -66,6 +70,7 @@ acquire_session_lock() {
     # Cross-platform locking: use flock if available, mkdir-based otherwise
     if command -v flock &>/dev/null; then
         # Linux (and some other systems): use flock
+        _LOCK_TYPE="flock"
         exec 200>"$lockfile"
         if ! flock -n 200; then
             echo "Another remote command is running for this host. Please wait." >&2
@@ -73,20 +78,21 @@ acquire_session_lock() {
         fi
     else
         # macOS, Windows (Git Bash/MSYS2), others: use mkdir-based locking
-        local lockdir="$host_dir/.lockdir"
-        if ! mkdir "$lockdir" 2>/dev/null; then
+        _LOCK_TYPE="mkdir"
+        _LOCK_DIR="$host_dir/.lockdir"
+        if ! mkdir "$_LOCK_DIR" 2>/dev/null; then
             # Check if lock is stale (older than 1 hour)
-            if [[ -d "$lockdir" ]]; then
+            if [[ -d "$_LOCK_DIR" ]]; then
                 local lock_age
                 # stat syntax differs: -f %m for macOS/BSD, -c %Y for GNU
                 if [[ "$(uname)" == "Darwin" ]]; then
-                    lock_age=$(($(date +%s) - $(stat -f %m "$lockdir" 2>/dev/null || echo 0)))
+                    lock_age=$(($(date +%s) - $(stat -f %m "$_LOCK_DIR" 2>/dev/null || echo 0)))
                 else
-                    lock_age=$(($(date +%s) - $(stat -c %Y "$lockdir" 2>/dev/null || echo 0)))
+                    lock_age=$(($(date +%s) - $(stat -c %Y "$_LOCK_DIR" 2>/dev/null || echo 0)))
                 fi
                 if [[ $lock_age -gt 3600 ]]; then
-                    rm -rf "$lockdir"
-                    mkdir "$lockdir" 2>/dev/null || {
+                    rm -rf "$_LOCK_DIR"
+                    mkdir "$_LOCK_DIR" 2>/dev/null || {
                         echo "Another remote command is running for this host. Please wait." >&2
                         exit 1
                     }
@@ -96,9 +102,23 @@ acquire_session_lock() {
                 fi
             fi
         fi
-        # Set up cleanup trap
-        trap 'rm -rf "$lockdir" 2>/dev/null' EXIT
+        # Set up cleanup trap (backup, release_session_lock is preferred)
+        trap 'rm -rf "$_LOCK_DIR" 2>/dev/null' EXIT
     fi
+}
+
+# Release the session lock (call before exec to avoid holding lock during SSH)
+release_session_lock() {
+    if [[ "$_LOCK_TYPE" == "flock" ]]; then
+        # Close the file descriptor to release flock
+        exec 200>&-
+    elif [[ "$_LOCK_TYPE" == "mkdir" && -n "$_LOCK_DIR" ]]; then
+        rm -rf "$_LOCK_DIR" 2>/dev/null
+        # Clear trap since we've already cleaned up
+        trap - EXIT
+    fi
+    _LOCK_TYPE=""
+    _LOCK_DIR=""
 }
 
 # Migrate from old single-file format to new directory format
@@ -1001,6 +1021,9 @@ EOF
         if [[ -n "${DEAD_SESSIONS_TO_CLEAN+x}" && ${#DEAD_SESSIONS_TO_CLEAN[@]} -gt 0 ]]; then
             cleanup_dead_sessions "$HOST_DIR" "${DEAD_SESSIONS_TO_CLEAN[@]}"
         fi
+
+        # Release lock before exec (allows multiple windows to same host)
+        release_session_lock
 
         # SSH and attach-or-create tmux session with all required env vars for Focus button
         # -A flag: attach to existing session if it exists, create new if not

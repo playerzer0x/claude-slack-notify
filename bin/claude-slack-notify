@@ -309,7 +309,9 @@ interactive_menu() {
 
         case "$key" in
             $'\x1b')  # Escape sequence (arrow keys)
-                read -rsn2 -t 0.1 rest
+                # Note: -t 0.1 not supported on bash 3.x (macOS default)
+                # Suppress stderr and use fallback for compatibility
+                read -rsn2 -t 0.1 rest 2>/dev/null || read -rsn2 rest
                 case "$rest" in
                     '[A')  # Up arrow
                         ((selected > 0)) && ((selected--))
@@ -435,6 +437,9 @@ show_session_menu() {
         menu_items+=("${session}|${last_connected_str}")
     done
 
+    # Add "New session" as the last option
+    menu_items+=("New session|start a fresh session")
+
     # Display header
     echo "" >&2
     printf '%sSessions on %s%s%s:%s\n' "$MENU_BOLD" "$MENU_DIM" "$hostname" "$MENU_RESET" "$MENU_RESET" >&2
@@ -444,6 +449,9 @@ show_session_menu() {
     local choice
     choice=$(interactive_menu "${menu_items[@]}")
 
+    # "New session" is the last item in menu_items (index = number of sessions)
+    local new_session_index=${#sorted_sessions[@]}
+
     case "$choice" in
         new)
             echo "" >&2
@@ -452,6 +460,11 @@ show_session_menu() {
         quit)
             echo "" >&2
             exit 0
+            ;;
+        "$new_session_index")
+            # Selected "New session" from the menu
+            echo "" >&2
+            return 1  # Signal to create new session
             ;;
         *)
             # Return selected session name on stdout

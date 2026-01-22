@@ -61,10 +61,43 @@ sanitize_hostname() {
 acquire_session_lock() {
     local host_dir="$1"
     mkdir -p "$host_dir"
-    exec 200>"$host_dir/.lock"
-    if ! flock -n 200; then
-        echo "Another remote command is running for this host. Please wait." >&2
-        exit 1
+    local lockfile="$host_dir/.lock"
+
+    # Cross-platform locking: use flock if available, mkdir-based otherwise
+    if command -v flock &>/dev/null; then
+        # Linux (and some other systems): use flock
+        exec 200>"$lockfile"
+        if ! flock -n 200; then
+            echo "Another remote command is running for this host. Please wait." >&2
+            exit 1
+        fi
+    else
+        # macOS, Windows (Git Bash/MSYS2), others: use mkdir-based locking
+        local lockdir="$host_dir/.lockdir"
+        if ! mkdir "$lockdir" 2>/dev/null; then
+            # Check if lock is stale (older than 1 hour)
+            if [[ -d "$lockdir" ]]; then
+                local lock_age
+                # stat syntax differs: -f %m for macOS/BSD, -c %Y for GNU
+                if [[ "$(uname)" == "Darwin" ]]; then
+                    lock_age=$(($(date +%s) - $(stat -f %m "$lockdir" 2>/dev/null || echo 0)))
+                else
+                    lock_age=$(($(date +%s) - $(stat -c %Y "$lockdir" 2>/dev/null || echo 0)))
+                fi
+                if [[ $lock_age -gt 3600 ]]; then
+                    rm -rf "$lockdir"
+                    mkdir "$lockdir" 2>/dev/null || {
+                        echo "Another remote command is running for this host. Please wait." >&2
+                        exit 1
+                    }
+                else
+                    echo "Another remote command is running for this host. Please wait." >&2
+                    exit 1
+                fi
+            fi
+        fi
+        # Set up cleanup trap
+        trap 'rm -rf "$lockdir" 2>/dev/null' EXIT
     fi
 }
 

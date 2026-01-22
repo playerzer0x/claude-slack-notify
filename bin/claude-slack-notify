@@ -445,13 +445,9 @@ ENVEOF"
         echo "│  Next Steps (in JupyterLab terminal)                        │"
         echo "╰─────────────────────────────────────────────────────────────╯"
         echo ""
-        echo "  1. source ~/.claude/jupyter-env"
-        echo "  2. tmux new -s '$INSTANCE_NAME' \\\\; \\"
-        echo "        set-environment CLAUDE_LINK_ID \"\$CLAUDE_LINK_ID\" \\\\; \\"
-        echo "        set-environment CLAUDE_SSH_HOST \"\$CLAUDE_SSH_HOST\" \\\\; \\"
-        echo "        set-environment CLAUDE_INSTANCE_NAME \"\$CLAUDE_INSTANCE_NAME\""
-        echo "  3. claude"
-        echo "  4. /slack-notify"
+        echo "  1. claude-slack-notify jupyter-start"
+        echo "  2. claude"
+        echo "  3. /slack-notify"
         echo ""
         exit 0
     fi
@@ -798,6 +794,62 @@ if [[ "$1" == "remote" ]]; then
 
     # Re-execute as register command
     exec "$0" register "$OPTIONAL_NAME"
+fi
+
+# -----------------------------------------------------------------------------
+# Jupyter-start command - simplified JupyterLab tmux setup
+# Usage: claude-slack-notify jupyter-start
+# Run this in a JupyterLab terminal after running `link --jupyter` on Mac
+# -----------------------------------------------------------------------------
+if [[ "$1" == "jupyter-start" ]]; then
+    JUPYTER_ENV_FILE="$CLAUDE_DIR/jupyter-env"
+
+    if [[ ! -f "$JUPYTER_ENV_FILE" ]]; then
+        echo "Error: jupyter-env file not found at $JUPYTER_ENV_FILE" >&2
+        echo "" >&2
+        echo "First run on your Mac:" >&2
+        echo "  claude-slack-notify link --jupyter --host <remote>" >&2
+        exit 1
+    fi
+
+    # Source the environment file to get CLAUDE_LINK_ID etc.
+    source "$JUPYTER_ENV_FILE"
+
+    if [[ -z "$CLAUDE_LINK_ID" ]]; then
+        echo "Error: CLAUDE_LINK_ID not set in jupyter-env" >&2
+        exit 1
+    fi
+
+    SESSION_NAME="${CLAUDE_INSTANCE_NAME:-jupyter}"
+
+    # Check if already in tmux
+    if [[ -n "$TMUX" ]]; then
+        echo "Already in tmux. Setting environment variables..."
+        tmux set-environment CLAUDE_LINK_ID "$CLAUDE_LINK_ID"
+        tmux set-environment CLAUDE_SSH_HOST "$CLAUDE_SSH_HOST"
+        tmux set-environment CLAUDE_INSTANCE_NAME "$CLAUDE_INSTANCE_NAME"
+        echo "Done. Now run: claude"
+        exit 0
+    fi
+
+    # Check if session already exists
+    if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+        echo "Attaching to existing session: $SESSION_NAME"
+        # Update environment in existing session
+        tmux set-environment -t "$SESSION_NAME" CLAUDE_LINK_ID "$CLAUDE_LINK_ID"
+        tmux set-environment -t "$SESSION_NAME" CLAUDE_SSH_HOST "$CLAUDE_SSH_HOST"
+        tmux set-environment -t "$SESSION_NAME" CLAUDE_INSTANCE_NAME "$CLAUDE_INSTANCE_NAME"
+        exec tmux attach -t "$SESSION_NAME"
+    fi
+
+    echo "Starting tmux session: $SESSION_NAME"
+
+    # Create new session with environment variables
+    # The \; syntax runs multiple tmux commands
+    exec tmux new-session -s "$SESSION_NAME" \; \
+         set-environment CLAUDE_LINK_ID "$CLAUDE_LINK_ID" \; \
+         set-environment CLAUDE_SSH_HOST "$CLAUDE_SSH_HOST" \; \
+         set-environment CLAUDE_INSTANCE_NAME "$CLAUDE_INSTANCE_NAME"
 fi
 
 # -----------------------------------------------------------------------------

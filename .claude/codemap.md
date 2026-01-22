@@ -6,30 +6,33 @@ Slack notifications for Claude Code with clickable buttons that work from mobile
 
 ## Architecture
 
+**Remote is the canonical Slack endpoint.** All button clicks go to Remote first.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                           USER SCENARIOS                                 │
+│                     CANONICAL ARCHITECTURE                              │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│  Mac-Based (local-tunnel on Mac)                                        │
-│  ─────────────────────────────────────────────────────────────────────  │
-│  Phone/Slack → cloudflared (Mac) → MCP server (Mac) → focus-helper     │
-│                                         ↓                               │
-│                               ┌─────────┴─────────┐                     │
-│                               ↓                   ↓                     │
-│                         Local terminal      SSH → tmux (Linux)          │
-│                         (iTerm2/Terminal)                               │
+│  Phone/Slack → Remote tunnel → MCP server (Remote)                     │
+│                                      ↓                                  │
+│                    ┌─────────────────┴─────────────────┐                │
+│                    ↓                                   ↓                │
+│           Input Actions                        Focus Action             │
+│       (1, 2, continue, push)                  (focus terminal)          │
+│                    ↓                                   ↓                │
+│         tmux send-keys                    Forward to Mac tunnel         │
+│          (handled locally)                (~/.claude/.mac-tunnel-url)   │
+│                                                        ↓                │
+│                                              Mac MCP /focus endpoint    │
+│                                                        ↓                │
+│                                                  focus-helper           │
+│                                                        ↓                │
+│                                           Focus Mac terminal window     │
 │                                                                         │
-│  Remote-Only (remote-tunnel on Linux, Mac closed)                       │
-│  ─────────────────────────────────────────────────────────────────────  │
-│  Phone/Slack → cloudflared (Linux) → remote-relay (Linux)              │
-│                                            ↓                            │
-│                              ┌─────────────┴─────────────┐              │
-│                              ↓                           ↓              │
-│                    Mac reachable?               Mac unreachable?        │
-│                              ↓                           ↓              │
-│                    Proxy to Mac MCP           Direct tmux send-keys     │
-│                    (Focus works)              (input only)              │
+│  Benefits:                                                              │
+│  • Buttons work even when Mac is off (input actions)                   │
+│  • Fast response (Remote ACKs Slack immediately)                       │
+│  • Focus still works when Mac is reachable                             │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -82,8 +85,8 @@ claude-slack-notify/
 | File | Purpose | Platform |
 |------|---------|----------|
 | `claude-slack-notify` | Main CLI - register sessions, send notifications, create SSH links | All |
-| `local-tunnel` | Start cloudflared + MCP server, update Slack Request URL | macOS |
-| `remote-tunnel` | Start cloudflared + remote-relay for Mac-less operation | Linux |
+| `local-tunnel` | Start tunnel + MCP server with /focus endpoint for forwarding | macOS |
+| `remote-tunnel` | Start tunnel + MCP server (canonical Slack endpoint) | Linux |
 | `focus-helper` | Handle `claude-focus://` URLs, switch terminals, send input | macOS |
 | `mcp-server` | Launcher script for the Node.js MCP server | All |
 
@@ -93,7 +96,7 @@ claude-slack-notify/
 |------|---------|
 | `server.ts` | Express app with MCP endpoints and Slack routes |
 | `remote-relay.ts` | Standalone webhook receiver for Linux (port 8464) |
-| `routes/slack.ts` | Handle Slack button clicks, parse action values |
+| `routes/slack.ts` | Handle Slack button clicks, /focus endpoint, smart routing |
 | `lib/focus-executor.ts` | Execute focus-helper with focus URLs |
 | `lib/slack-verify.ts` | Verify Slack request signatures |
 | `lib/session-store.ts` | Read session JSON files |
@@ -213,22 +216,26 @@ remote-tunnel --use-localtunnel  # Force Localtunnel
 ```
 
 ## Current Focus
-> Last updated: 2026-01-21
+> Last updated: 2026-01-22
 
 ### Recent Changes
-- **Simplified setup output**: Streamlined `install.sh` and `local-tunnel --setup` output to reduce verbosity while keeping essential setup instructions
-- **`/slack-notify stop`**: New subcommand to unregister session and stop tunnel
-- **`update` command**: Quick script update from repo via `claude-slack-notify update`
+- **Remote as canonical endpoint**: Remote server now receives all Slack button clicks
+  - Input actions (1, 2, continue, push) handled locally on Remote
+  - Focus action forwarded to Mac's `/focus` endpoint
+  - Buttons work even when Mac is offline (input only)
+- **Instant button response**: ACK Slack immediately, process in background
+- **Mac tunnel URL sync**: `link --host` stores Mac's tunnel URL on remote
+- **Removed Slack URL auto-update**: `local-tunnel` no longer changes Slack Request URL
 
 ### Previous Changes
-- `/slack-notify local|remote|clean` subcommands for simplified workflow
-- Tunnel status helper functions for robust detection
-- Remote-only tmux command support in `remote-relay.ts`
-- Auto-enable Tailscale Funnel with API key prompt
-- Tailscale Funnel as default tunnel backend
+- **Simplified setup output**: Streamlined `install.sh` and `local-tunnel --setup`
+- **`/slack-notify stop`**: Unregister session and stop tunnel
+- **`update` command**: Quick script update from repo
+- **`status` command**: Show system overview
 
 ### Runtime Files Added
 | File | Purpose |
 |------|---------|
+| `~/.claude/.mac-tunnel-url` | Mac's tunnel URL for Focus forwarding (on remote) |
 | `~/.claude/.env` | Tailscale API key (never copied to remotes) |
 | `.claudeignore` | Prevents Claude from reading credentials |

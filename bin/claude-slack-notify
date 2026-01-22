@@ -856,12 +856,8 @@ if [[ "$1" == "remote" ]]; then
             if [[ ${#live_sessions[@]} -eq 0 ]]; then
                 # No live sessions - create new
                 INSTANCE_NAME=$(generate_instance_name)
-            elif [[ ${#live_sessions[@]} -eq 1 ]]; then
-                # Exactly one live session - use it directly
-                INSTANCE_NAME="${live_sessions[0]}"
-                RECONNECT_MODE="1"
             else
-                # Multiple live sessions - show menu
+                # One or more live sessions - show menu
                 if [[ ! -t 0 ]]; then
                     echo "Error: Session selection requires interactive terminal." >&2
                     echo "Use: claude-slack-notify remote --session NAME $REMOTE_HOST" >&2

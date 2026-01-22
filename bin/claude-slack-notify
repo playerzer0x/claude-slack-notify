@@ -442,7 +442,7 @@ if [[ "$1" == "remote" ]]; then
     REMOTE_HOST_FILE="${CLAUDE_DIR}/.remote-host"
 
     # -------------------------------------------------------------------------
-    # Mac behavior: SSH to remote server
+    # Mac behavior: SSH to remote server with Focus button support
     # -------------------------------------------------------------------------
     if [[ "$(uname)" == "Darwin" ]]; then
         # Get remote hostname from arg, config file, or prompt
@@ -473,8 +473,70 @@ if [[ "$1" == "remote" ]]; then
             echo "$REMOTE_HOST" > "$REMOTE_HOST_FILE"
         fi
 
-        # Generate 4-word instance name for tmux session
+        # Generate unique link ID and instance name
+        mkdir -p "$LINKS_DIR"
+        LINK_ID=$(head -c 12 /dev/urandom | base64 | tr -dc 'a-z0-9' | head -c 8)
         INSTANCE_NAME=$(generate_instance_name)
+
+        # Detect local terminal for Focus button
+        LINK_TERM_TYPE="unknown"
+        LINK_TERM_TARGET=""
+        LINK_FOCUS_URL=""
+
+        if [[ -n "$TMUX" ]]; then
+            local_session=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+            local_window=$(tmux display-message -p '#{window_index}' 2>/dev/null)
+            local_pane=$(tmux display-message -p '#{pane_index}' 2>/dev/null)
+            local_tmux_target="${local_session}:${local_window}.${local_pane}"
+            local_client_tty=$(tmux display-message -p '#{client_tty}' 2>/dev/null)
+            local_client_termtype=$(tmux display-message -p '#{client_termtype}' 2>/dev/null)
+
+            if [[ "$local_client_termtype" == *"iTerm"* ]] || [[ -n "$ITERM_SESSION_ID" ]]; then
+                term_app="iterm"
+            else
+                term_app="terminal"
+            fi
+
+            if [[ -n "$local_client_tty" ]]; then
+                LINK_TERM_TYPE="${term_app}-tmux"
+                LINK_TERM_TARGET="${local_client_tty}|${local_tmux_target}"
+                LINK_FOCUS_URL="claude-focus://${term_app}-tmux/$(url_encode "$local_client_tty")/$(url_encode "$local_tmux_target")"
+            else
+                LINK_TERM_TYPE="tmux"
+                LINK_TERM_TARGET="$local_tmux_target"
+                LINK_FOCUS_URL="claude-focus://tmux/$(url_encode "$local_tmux_target")"
+            fi
+        elif [[ -n "$ITERM_SESSION_ID" ]]; then
+            LINK_TERM_TYPE="iterm2"
+            LINK_TERM_TARGET="${ITERM_SESSION_ID#*:}"
+            LINK_FOCUS_URL="claude-focus://iterm2/${LINK_TERM_TARGET}"
+        elif [[ "$__CFBundleIdentifier" == "com.apple.Terminal" || "$TERM_PROGRAM" == "Apple_Terminal" ]]; then
+            local_terminal_tty=$(tty 2>/dev/null)
+            if [[ -n "$local_terminal_tty" && "$local_terminal_tty" != "not a tty" ]]; then
+                LINK_TERM_TYPE="terminal"
+                LINK_TERM_TARGET="$local_terminal_tty"
+                LINK_FOCUS_URL="claude-focus://terminal/$(url_encode "$local_terminal_tty")"
+            fi
+        fi
+
+        # Get Mac's tunnel URL for Focus button routing
+        MAC_TUNNEL_URL=""
+        if [[ -f "$CLAUDE_DIR/.tunnel-url" ]]; then
+            MAC_TUNNEL_URL=$(cat "$CLAUDE_DIR/.tunnel-url" 2>/dev/null)
+        fi
+
+        # Save link file for Focus button
+        cat > "$LINKS_DIR/${LINK_ID}.json" << EOF
+{
+  "link_id": "${LINK_ID}",
+  "instance_name": "${INSTANCE_NAME}",
+  "term_type": "${LINK_TERM_TYPE}",
+  "term_target": "${LINK_TERM_TARGET}",
+  "focus_url": "${LINK_FOCUS_URL}",
+  "mac_tunnel_url": "${MAC_TUNNEL_URL}",
+  "created_at": "$(date -Iseconds)"
+}
+EOF
 
         # Sync Slack config on first run
         if [[ -n "$FIRST_RUN" && -f "$CLAUDE_DIR/.slack-config" ]]; then
@@ -492,9 +554,17 @@ if [[ "$1" == "remote" ]]; then
             fi
         fi
 
+        # Sync Mac tunnel URL to remote for Focus button routing
+        if [[ -n "$MAC_TUNNEL_URL" ]]; then
+            ssh "$REMOTE_HOST" "mkdir -p ~/.claude && echo '$MAC_TUNNEL_URL' > ~/.claude/.mac-tunnel-url" 2>/dev/null
+        fi
+
         echo ""
         echo "Remote: $REMOTE_HOST"
         echo "Session: $INSTANCE_NAME"
+        if [[ "$LINK_TERM_TYPE" != "unknown" ]]; then
+            echo "Focus: $LINK_TERM_TYPE"
+        fi
         echo ""
         echo "Run in Claude: /slack-notify"
         echo ""
@@ -502,9 +572,11 @@ if [[ "$1" == "remote" ]]; then
         read -r
         echo ""
 
-        # SSH and create tmux session with CLAUDE_INSTANCE_NAME set
+        # SSH and create tmux session with all required env vars for Focus button
         exec ssh -t "$REMOTE_HOST" \
             "tmux new-session -s '$INSTANCE_NAME' \\; \
+             set-environment CLAUDE_LINK_ID '$LINK_ID' \\; \
+             set-environment CLAUDE_SSH_HOST '$REMOTE_HOST' \\; \
              set-environment CLAUDE_INSTANCE_NAME '$INSTANCE_NAME'"
     fi
 

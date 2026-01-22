@@ -118,14 +118,8 @@ claude                                        # Start Claude on remote
 ### JupyterLab
 
 ```bash
-# On your Mac (keep running):
-local-tunnel
-
-# From another Mac terminal (with JupyterLab open in Chrome):
-claude-slack-notify link --jupyter --host user@jupyter-server
-
 # In JupyterLab terminal:
-source ~/.claude/jupyter-env && tmux new -s claude
+claude-slack-notify jupyter    # First run prompts for URL, starts tmux
 claude
 /slack-notify
 ```

@@ -313,8 +313,10 @@ rm ~/.claude/.mac-tunnel-url  # On Mac
 ### Recent Changes
 - **Simplified `remote` command**: On Mac, `claude-slack-notify remote` now:
   - First run: prompts for hostname, saves to `~/.claude/.remote-host`, syncs Slack config
-  - Subsequent runs: shows instructions, press Enter to SSH + tmux
-  - Removed complex `link --host` command (~320 lines deleted)
+  - Creates link file and detects local terminal for Focus button support
+  - Passes `CLAUDE_LINK_ID`, `CLAUDE_SSH_HOST`, `CLAUDE_INSTANCE_NAME` to remote tmux
+  - Syncs Mac tunnel URL to remote for button routing
+  - Removed verbose `link --host` output (~250 lines simplified)
 - **v1.0.2**: Port 443 conflict warning in `remote-tunnel`
 - **v1.0.1**: Fixed Mac MCP server self-loop bug
 - **Remote as canonical endpoint**: Remote server now receives all Slack button clicks

@@ -1,0 +1,37 @@
+#!/bin/bash
+# Background watcher for stale Claude responses
+# Spawned when Claude finishes and is waiting for user input
+# Notifies after DELAY seconds if user hasn't responded
+
+INSTANCE_ID="$1"
+WAIT_FILE="$2"
+CONTEXT_FILE="$3"
+DELAY="${CLAUDE_NOTIFY_STALE_SECONDS:-30}"
+
+# Validate INSTANCE_ID
+if [[ ! "$INSTANCE_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    exit 1
+fi
+
+# Sleep for the delay period
+sleep "$DELAY"
+
+# Check if the wait file still exists (user hasn't responded yet)
+if [[ -f "$WAIT_FILE" ]]; then
+    # Read context if available
+    CONTEXT=""
+    if [[ -f "$CONTEXT_FILE" ]]; then
+        CONTEXT=$(cat "$CONTEXT_FILE" 2>/dev/null)
+        rm -f "$CONTEXT_FILE"
+    fi
+
+    # Clean up wait file
+    rm -f "$WAIT_FILE"
+
+    # Send the notification
+    if [[ -n "$CONTEXT" ]]; then
+        CLAUDE_INSTANCE_ID="$INSTANCE_ID" "$HOME/.claude/bin/claude-slack-notify" "Waiting for your response (${DELAY}s)" "waiting" "$CONTEXT"
+    else
+        CLAUDE_INSTANCE_ID="$INSTANCE_ID" "$HOME/.claude/bin/claude-slack-notify" "Waiting for your response (${DELAY}s)" "waiting"
+    fi
+fi

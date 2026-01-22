@@ -1,5 +1,7 @@
 #!/bin/bash
-# Hook wrapper for UserPromptSubmit - starts timing a task
+# Hook wrapper for UserPromptSubmit - user is sending input
+# 1. Cancels any pending "stale response" watcher (user is no longer idle)
+# 2. Starts timing for the current task
 # Extracts session_id from stdin JSON (provided by Claude Code hooks) to use as instance ID
 
 STDIN_DATA=$(cat)
@@ -12,6 +14,28 @@ else
     SESSION_ID=$(echo "$STDIN_DATA" | grep -o '"session_id":"[^"]*"' | sed 's/"session_id":"//;s/"$//' 2>/dev/null)
 fi
 
+INSTANCE_ID="${SESSION_ID:-$PPID}"
+
+# Cancel any pending stale-response watcher (user responded, no need to notify)
+if [[ "$INSTANCE_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    WAIT_FILE="/tmp/claude-waiting-${INSTANCE_ID}"
+    CONTEXT_FILE="/tmp/claude-waiting-ctx-${INSTANCE_ID}"
+    WATCHER_PID_FILE="/tmp/claude-watcher-pid-${INSTANCE_ID}"
+
+    # Remove wait marker (signals watcher to not notify)
+    rm -f "$WAIT_FILE" "$CONTEXT_FILE"
+
+    # Kill watcher process if still running
+    if [[ -f "$WATCHER_PID_FILE" ]]; then
+        WATCHER_PID=$(cat "$WATCHER_PID_FILE" 2>/dev/null)
+        if [[ -n "$WATCHER_PID" ]] && kill -0 "$WATCHER_PID" 2>/dev/null; then
+            kill "$WATCHER_PID" 2>/dev/null
+        fi
+        rm -f "$WATCHER_PID_FILE"
+    fi
+fi
+
+# Start timing this task
 if [[ -n "$SESSION_ID" ]]; then
     CLAUDE_INSTANCE_ID="$SESSION_ID" exec "$HOME/.claude/bin/claude-slack-notify" start
 else

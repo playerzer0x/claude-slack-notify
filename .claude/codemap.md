@@ -47,8 +47,10 @@ claude-slack-notify/
 │   ├── remote-tunnel             # Linux: Start tunnel + relay when Mac is closed
 │   ├── focus-helper              # Mac: Handle claude-focus:// URLs
 │   ├── mcp-server                # Launcher script for MCP server
-│   ├── slack-notify-start        # Hook: Start timing on user prompt
-│   ├── slack-notify-check        # Hook: Check elapsed time and notify
+│   ├── slack-notify-start        # Hook: Cancel stale watcher + start task timing
+│   ├── slack-notify-waiting      # Hook: Start 30s stale-response watcher
+│   ├── slack-notify-stale-watcher # Background: Sleep 30s then notify if still waiting
+│   ├── slack-notify-check        # Hook: Check elapsed time (legacy, for Stop events)
 │   └── get-session-id            # Get Claude session ID
 │
 ├── mcp-server/                   # Node.js MCP server
@@ -313,6 +315,13 @@ rm ~/.claude/.mac-tunnel-url  # On Mac
 > Last updated: 2026-01-22
 
 ### Recent Changes
+- **Stale response notifications (30s idle watcher)**: Notify when Claude's response has been sitting unanswered for 30s
+  - `slack-notify-waiting`: Starts background watcher on idle_prompt/permission_prompt/elicitation_dialog
+  - `slack-notify-stale-watcher`: Sleeps 30s, sends notification if user hasn't responded
+  - `slack-notify-start`: Updated to cancel pending watchers when user sends input
+  - Hooks: Notification events now use waiting mechanism instead of immediate notify
+  - Env: `CLAUDE_NOTIFY_STALE_SECONDS` to customize delay (default: 30)
+
 - **Interactive session menu with arrow navigation**: The `remote` command now uses a clean, interactive menu:
   - Up/Down arrow keys (or j/k vim keys) for navigation
   - Enter to select, 'n' for new session, 'q' to quit

@@ -1,0 +1,102 @@
+#!/bin/bash
+# Hook wrapper for when Claude is waiting for user input
+# Starts a background watcher that notifies after 30s if user doesn't respond
+# Called on: Stop, SubagentStop, Notification (idle_prompt), PermissionRequest
+
+STDIN_DATA=$(cat)
+CLAUDE_DIR="${HOME}/.claude"
+INSTANCES_DIR="${CLAUDE_DIR}/instances"
+
+# Extract session_id from hook data
+if command -v jq &>/dev/null; then
+    SESSION_ID=$(echo "$STDIN_DATA" | jq -r '.session_id // empty' 2>/dev/null)
+else
+    SESSION_ID=$(echo "$STDIN_DATA" | grep -o '"session_id":"[^"]*"' | sed 's/"session_id":"//;s/"$//' 2>/dev/null)
+fi
+
+# Use session ID or fall back to PPID
+INSTANCE_ID="${SESSION_ID:-$PPID}"
+
+# Validate INSTANCE_ID
+if [[ ! "$INSTANCE_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    exit 0
+fi
+
+INSTANCE_FILE="${INSTANCES_DIR}/${INSTANCE_ID}.json"
+WAIT_FILE="/tmp/claude-waiting-${INSTANCE_ID}"
+CONTEXT_FILE="/tmp/claude-waiting-ctx-${INSTANCE_ID}"
+
+# Only work for registered instances
+if [[ ! -f "$INSTANCE_FILE" ]]; then
+    exit 0
+fi
+
+# Kill any existing watcher for this instance (prevents stacking)
+WATCHER_PID_FILE="/tmp/claude-watcher-pid-${INSTANCE_ID}"
+if [[ -f "$WATCHER_PID_FILE" ]]; then
+    OLD_PID=$(cat "$WATCHER_PID_FILE" 2>/dev/null)
+    if [[ -n "$OLD_PID" ]] && kill -0 "$OLD_PID" 2>/dev/null; then
+        kill "$OLD_PID" 2>/dev/null
+    fi
+    rm -f "$WATCHER_PID_FILE"
+fi
+
+# Clean up old files
+rm -f "$WAIT_FILE" "$CONTEXT_FILE"
+
+# Extract context from the hook event
+CONTEXT=""
+if command -v jq &>/dev/null && [[ -n "$STDIN_DATA" ]]; then
+    HOOK_EVENT=$(echo "$STDIN_DATA" | jq -r '.hook_event_name // empty' 2>/dev/null)
+
+    # Try to get context from notification message
+    NOTIF_MSG=$(echo "$STDIN_DATA" | jq -r '.message // empty' 2>/dev/null)
+
+    # Try to get tool info for permission requests
+    TOOL_NAME=$(echo "$STDIN_DATA" | jq -r '.tool_name // empty' 2>/dev/null)
+    if [[ -n "$TOOL_NAME" ]]; then
+        TOOL_INPUT=$(echo "$STDIN_DATA" | jq -c '.tool_input // {}' 2>/dev/null)
+        CONTEXT="Waiting for permission: $TOOL_NAME"
+        if [[ "$TOOL_NAME" == "Bash" ]]; then
+            CMD=$(echo "$TOOL_INPUT" | jq -r '.command // empty' 2>/dev/null | head -c 100)
+            [[ -n "$CMD" ]] && CONTEXT="Waiting for permission: Bash - $CMD"
+        fi
+    elif [[ -n "$NOTIF_MSG" ]]; then
+        CONTEXT="$NOTIF_MSG"
+    fi
+
+    # Get last assistant message from transcript for additional context
+    TRANSCRIPT_PATH=$(echo "$STDIN_DATA" | jq -r '.transcript_path // empty' 2>/dev/null)
+    if [[ -n "$TRANSCRIPT_PATH" && -f "$TRANSCRIPT_PATH" && -z "$CONTEXT" ]]; then
+        # Get last few lines of assistant text
+        CONTEXT=$(tac "$TRANSCRIPT_PATH" 2>/dev/null | while read -r line; do
+            MSG_TYPE=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
+            if [[ "$MSG_TYPE" == "assistant" ]]; then
+                TEXT=$(echo "$line" | jq -r '
+                    if .message.content then
+                        [.message.content[] | select(.type == "text") | .text] | join("\n") | .[0:300]
+                    else empty end
+                ' 2>/dev/null)
+                if [[ -n "$TEXT" ]]; then
+                    echo "$TEXT"
+                    break
+                fi
+            fi
+        done)
+    fi
+fi
+
+# Create wait file marker
+date +%s > "$WAIT_FILE"
+
+# Save context if we have any
+if [[ -n "$CONTEXT" ]]; then
+    echo "$CONTEXT" > "$CONTEXT_FILE"
+fi
+
+# Start the background watcher
+nohup "$HOME/.claude/bin/slack-notify-stale-watcher" "$INSTANCE_ID" "$WAIT_FILE" "$CONTEXT_FILE" </dev/null >/dev/null 2>&1 &
+WATCHER_PID=$!
+echo "$WATCHER_PID" > "$WATCHER_PID_FILE"
+
+exit 0

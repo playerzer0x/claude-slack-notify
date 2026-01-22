@@ -476,11 +476,61 @@ switch_terminal_tab() {
     local target_tty="$1"
     echo "$(date): Looking for Terminal.app tab with tty=$target_tty" >> $LOG_FILE
 
-    # Special case: "frontmost" just activates Terminal.app
+    # Special case: "frontmost" - find a tab that's NOT running local-tunnel/mcp-server
     if [[ "$target_tty" == "frontmost" ]]; then
-        osascript -e 'tell application "Terminal" to activate'
-        osascript -e 'tell application "System Events" to set frontmost of process "Terminal" to true'
-        echo "$(date): Terminal.app activated (frontmost)" >> $LOG_FILE
+        # Get TTY of current process (MCP server) to exclude it
+        local exclude_tty
+        exclude_tty=$(tty 2>/dev/null || echo "")
+
+        local result
+        result=$(osascript << APPLESCRIPT 2>&1
+set excludeTty to "$exclude_tty"
+tell application "Terminal"
+    set foundTab to false
+
+    -- First pass: find a tab that's NOT the MCP server
+    repeat with w in windows
+        repeat with t in tabs of w
+            set tabTty to tty of t
+            -- Skip tabs matching the excluded TTY (MCP server)
+            if tabTty is not equal to excludeTty and tabTty is not equal to "" then
+                -- Check if this tab is running something Claude-related
+                -- by looking at the processes (avoiding local-tunnel/node tabs)
+                try
+                    set tabProcs to processes of t
+                    set isServerTab to false
+                    repeat with p in tabProcs
+                        if p contains "local-tunnel" or p contains "mcp-server" or p contains "cloudflared" then
+                            set isServerTab to true
+                            exit repeat
+                        end if
+                    end repeat
+
+                    if not isServerTab then
+                        set frontmost of w to true
+                        set selected tab of w to t
+                        activate
+                        tell application "System Events"
+                            set frontmost of process "Terminal" to true
+                        end tell
+                        set foundTab to true
+                        return "Focused tab with tty " & tabTty
+                    end if
+                end try
+            end if
+        end repeat
+        if foundTab then exit repeat
+    end repeat
+
+    -- Fallback: just activate Terminal if no suitable tab found
+    if not foundTab then
+        activate
+        return "No suitable tab found, activated Terminal"
+    end if
+end tell
+APPLESCRIPT
+)
+        echo "$(date): Terminal.app frontmost result: $result" >> $LOG_FILE
         return
     fi
 

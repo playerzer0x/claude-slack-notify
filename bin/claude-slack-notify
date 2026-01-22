@@ -1717,9 +1717,24 @@ detect_terminal() {
 if [[ "$1" == "register" ]]; then
     mkdir -p "$INSTANCES_DIR"
 
-    # Clean up old session files for this terminal (prevents stale session IDs)
-    # We detect terminal first to know what to clean up
+    # Detect terminal first to know what to clean up and what name to preserve
     detect_terminal
+
+    # PHASE 1: Extract existing name from files matching TERM_TARGET BEFORE cleanup
+    # This preserves the instance name on re-registration (same terminal, different PID)
+    PRESERVED_NAME=""
+    if [[ -n "$TERM_TARGET" ]]; then
+        for old_file in "$INSTANCES_DIR"/*.json; do
+            [[ -f "$old_file" ]] || continue
+            old_target=$(grep -o '"term_target": *"[^"]*"' "$old_file" 2>/dev/null | cut -d'"' -f4)
+            if [[ "$old_target" == "$TERM_TARGET" ]]; then
+                PRESERVED_NAME=$(grep -o '"name": *"[^"]*"' "$old_file" 2>/dev/null | cut -d'"' -f4)
+                break  # Use first match
+            fi
+        done
+    fi
+
+    # PHASE 2: Clean up old session files for this terminal (prevents stale session IDs)
     if [[ -n "$TERM_TARGET" ]]; then
         for old_file in "$INSTANCES_DIR"/*.json; do
             [[ -f "$old_file" ]] || continue
@@ -1730,13 +1745,17 @@ if [[ "$1" == "register" ]]; then
         done
     fi
 
-    # Priority for instance name:
-    # 1. Command line argument (explicit override)
+    # PHASE 3: Determine instance name with priority:
+    # 1. Command line argument (explicit override, e.g., --force-new-name behavior)
     # 2. CLAUDE_INSTANCE_NAME env var (set by remote command for 1:1 tmux correspondence)
-    # 3. Generate a new random name
+    # 3. PRESERVED_NAME from existing instance file (maintains identity on re-register)
+    # 4. Generate a new random name
     INSTANCE_NAME="$2"
     if [[ -z "$INSTANCE_NAME" && -n "$CLAUDE_INSTANCE_NAME" ]]; then
         INSTANCE_NAME="$CLAUDE_INSTANCE_NAME"
+    fi
+    if [[ -z "$INSTANCE_NAME" && -n "$PRESERVED_NAME" ]]; then
+        INSTANCE_NAME="$PRESERVED_NAME"
     fi
     if [[ -z "$INSTANCE_NAME" ]]; then
         INSTANCE_NAME=$(generate_instance_name)

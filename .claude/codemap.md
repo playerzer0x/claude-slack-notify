@@ -315,6 +315,15 @@ rm ~/.claude/.mac-tunnel-url  # On Mac
 > Last updated: 2026-01-22
 
 ### Recent Changes
+- **Fixed instance name preservation on re-registration**: Instance names now persist when `/slack-notify register` runs multiple times
+  - Root cause: Cleanup logic deleted instance files BEFORE checking for existing names
+  - Fix: Restructured registration into 3 phases:
+    1. Extract existing name from files matching `$TERM_TARGET` (before cleanup)
+    2. Clean up old session files for this terminal
+    3. Use preserved name or generate new if none found
+  - Key insight: Lookup by `$TERM_TARGET` (stable) not `$INSTANCE_ID` (which is `$PPID`, unstable)
+  - Location: `bin/claude-slack-notify` lines ~1717-1760
+
 - **Stale response notifications (30s idle watcher)**: Notify when Claude's response has been sitting unanswered for 30s
   - `slack-notify-waiting`: Starts background watcher on idle_prompt/permission_prompt/elicitation_dialog
   - `slack-notify-stale-watcher`: Sleeps 30s, sends notification if user hasn't responded

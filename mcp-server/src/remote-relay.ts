@@ -51,6 +51,15 @@ function getActionInput(action: FocusAction): string {
   }
 }
 
+// Check if focus URL is for a remote session (handled locally on this server)
+// vs Mac session (should be proxied to Mac)
+function isRemoteSessionUrl(focusUrl: string): boolean {
+  const remoteTypes = ['ssh-linked', 'ssh-tmux', 'jupyter-tmux', 'linux-tmux', 'tmux'];
+  const path = focusUrl.replace('claude-focus://', '');
+  const urlType = path.split('/')[0];
+  return remoteTypes.includes(urlType);
+}
+
 // Extract tmux target from focus URL
 // Supported formats:
 // - claude-focus://ssh-linked/LINK_ID/HOST/USER/PORT/TMUX_TARGET
@@ -453,10 +462,21 @@ app.post('/slack/events', async (req: Request, res: Response) => {
           return;
         }
 
-        // Check if Mac is reachable and proxy if so
+        // For remote session URLs (ssh-linked, ssh-tmux, etc.), handle locally
+        // Thread files are on this server, and tmux is here too
+        // Only proxy to Mac for Mac-native URLs (iterm2, terminal)
+        if (isRemoteSessionUrl(threadInfo.focus_url)) {
+          console.log('Remote session URL, handling locally');
+          const result = await sendTmuxInput(tmuxTarget, messageText);
+          console.log('Thread reply sent to tmux:', result);
+          res.status(200).send();
+          return;
+        }
+
+        // For Mac session URLs, proxy to Mac if reachable
         const macUrl = await checkMacReachable();
         if (macUrl) {
-          console.log('Mac is reachable, proxying event...');
+          console.log('Mac session URL, proxying event...');
           try {
             const proxyResponse = await fetch(`${macUrl}/slack/events`, {
               method: 'POST',
@@ -468,15 +488,13 @@ app.post('/slack/events', async (req: Request, res: Response) => {
               res.status(200).send();
               return;
             }
-            console.log('Proxy response not ok, falling back to local handling');
+            console.log('Proxy response not ok, cannot deliver to Mac session');
           } catch (proxyError) {
-            console.log('Proxy failed, falling back to local handling:', proxyError);
+            console.log('Proxy to Mac failed:', proxyError);
           }
+        } else {
+          console.log('Mac not reachable, cannot deliver to Mac session');
         }
-
-        // Send text to tmux (only if Mac proxy failed or Mac not reachable)
-        const result = await sendTmuxInput(tmuxTarget, messageText);
-        console.log('Thread reply sent to tmux:', result);
       }
 
       // Always acknowledge quickly

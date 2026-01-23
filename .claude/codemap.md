@@ -371,6 +371,7 @@ rm ~/.claude/.mac-tunnel-url  # On Mac
 
 | Version | Changes |
 |---------|---------|
+| v1.0.6 | Fix thread reply routing for remote sessions (handle locally instead of proxying to Mac) |
 | v1.0.5 | Dynamic Slack buttons for AskUserQuestion, removed Escape key interrupt |
 | v1.0.4 | Fixed cross-session notification pollution, URL-first buttons |
 | v1.0.3 | Cross-platform session locking (macOS, Windows Git Bash/MSYS2 support) |
@@ -382,6 +383,15 @@ rm ~/.claude/.mac-tunnel-url  # On Mac
 > Last updated: 2026-01-23
 
 ### Recent Changes
+
+- **v1.0.6: Fix thread reply routing for remote sessions** (2026-01-23)
+  - **Bug**: Slack thread replies weren't reaching remote tmux sessions
+  - **Root cause**: `remote-relay.ts` proxied ALL events to Mac, but thread files only exist on the remote server (where notification was sent). Mac's `/slack/events` couldn't find the thread mapping.
+  - **Fix**: Added `isRemoteSessionUrl()` helper to detect ssh-linked/ssh-tmux/jupyter-tmux/linux-tmux/tmux URLs
+  - **New behavior**:
+    - Remote session URLs → handle locally via `sendTmuxInput()` (thread files are here)
+    - Mac session URLs (iterm2/terminal) → proxy to Mac (thread files are there)
+  - **Files changed**: `mcp-server/src/remote-relay.ts`
 
 - **v1.0.5: Dynamic Slack buttons for AskUserQuestion** (2026-01-23)
   - **Feature**: Slack notifications now show the actual question options as buttons

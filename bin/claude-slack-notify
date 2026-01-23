@@ -2200,6 +2200,19 @@ def format_tool:
         "● Entering plan mode"
     elif .name == "ExitPlanMode" then
         "● Exiting plan mode"
+    elif .name == "TaskCreate" then
+        "● TaskCreate: " + (.input.subject // "new task")
+    elif .name == "TaskUpdate" then
+        "● TaskUpdate: " + (.input.taskId // "") +
+        (if (.input.status // "") != "" then " → " + .input.status else "" end)
+    elif .name == "TaskGet" then
+        "● TaskGet: " + (.input.taskId // "")
+    elif .name == "TaskList" then
+        "● TaskList"
+    elif .name == "TaskOutput" then
+        "● TaskOutput: " + (.input.task_id // "")
+    elif .name == "KillShell" then
+        "● KillShell: " + (.input.shell_id // "")
     elif (.name | startswith("mcp__")) then
         # MCP tools: mcp__server__tool format
         "● MCP: " + ((.name | split("__") | .[1:] | join("/")) // .name) +
@@ -2261,6 +2274,19 @@ def format_tool_waiting:
         "⏳ Entering plan mode"
     elif .name == "ExitPlanMode" then
         "⏳ Exiting plan mode - awaiting approval"
+    elif .name == "TaskCreate" then
+        "⏳ TaskCreate: " + (.input.subject // "new task")
+    elif .name == "TaskUpdate" then
+        "⏳ TaskUpdate: " + (.input.taskId // "") +
+        (if (.input.status // "") != "" then " → " + .input.status else "" end)
+    elif .name == "TaskGet" then
+        "⏳ TaskGet: " + (.input.taskId // "")
+    elif .name == "TaskList" then
+        "⏳ TaskList"
+    elif .name == "TaskOutput" then
+        "⏳ TaskOutput: " + (.input.task_id // "")
+    elif .name == "KillShell" then
+        "⏳ KillShell: " + (.input.shell_id // "")
     elif (.name | startswith("mcp__")) then
         "⏳ MCP: " + ((.name | split("__") | .[1:] | join("/")) // .name) +
         (if (.input | keys | length) > 0 then

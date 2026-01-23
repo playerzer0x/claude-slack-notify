@@ -85,10 +85,35 @@ def format_tool:
         "⏳ WebFetch: " + (.input.url // "")
     elif .name == "WebSearch" then
         "⏳ WebSearch: " + (.input.query // "")
+    elif .name == "Skill" then
+        "⏳ Skill: /" + (.input.skill // "")
     elif .name == "EnterPlanMode" then
         "⏳ Entering plan mode"
     elif .name == "ExitPlanMode" then
         "⏳ Exiting plan mode - awaiting approval"
+    elif .name == "NotebookEdit" then
+        "⏳ NotebookEdit: " + (.input.notebook_path // "") +
+        (if (.input.edit_mode // "") != "" then " (" + .input.edit_mode + ")" else "" end)
+    elif .name == "TodoWrite" then
+        "⏳ TodoWrite: " + (
+            [.input.todos[]? | select(.status == "in_progress") | .content] |
+            if length > 0 then "Working on: " + (.[0] // "")
+            else ([.input.todos[]?.content] | length | tostring) + " tasks"
+            end
+        )
+    elif .name == "TaskCreate" then
+        "⏳ TaskCreate: " + (.input.subject // "new task")
+    elif .name == "TaskUpdate" then
+        "⏳ TaskUpdate: " + (.input.taskId // "") +
+        (if (.input.status // "") != "" then " → " + .input.status else "" end)
+    elif .name == "TaskGet" then
+        "⏳ TaskGet: " + (.input.taskId // "")
+    elif .name == "TaskList" then
+        "⏳ TaskList"
+    elif .name == "TaskOutput" then
+        "⏳ TaskOutput: " + (.input.task_id // "")
+    elif .name == "KillShell" then
+        "⏳ KillShell: " + (.input.shell_id // "")
     elif (.name | startswith("mcp__")) then
         "⏳ MCP: " + ((.name | split("__") | .[1:] | join("/")) // .name) +
         (if (.input | keys | length) > 0 then

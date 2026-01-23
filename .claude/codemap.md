@@ -324,9 +324,13 @@ rm ~/.claude/.mac-tunnel-url  # On Mac
   - Key insight: Lookup by `$TERM_TARGET` (stable) not `$INSTANCE_ID` (which is `$PPID`, unstable)
   - Location: `bin/claude-slack-notify` lines ~1717-1760
 
-- **Stale response notifications (30s idle watcher)**: Notify when Claude's response has been sitting unanswered for 30s
-  - `slack-notify-waiting`: Starts background watcher on idle_prompt/permission_prompt/elicitation_dialog
-  - `slack-notify-stale-watcher`: Sleeps 30s, sends notification if user hasn't responded
+- **Stale response notifications with rich context**: Notify when Claude's response has been sitting unanswered for 30s
+  - `slack-notify-waiting`: Starts background watcher, extracts full assistant message context
+    - Uses `TOOL_FORMATTER` jq filter to format tool calls richly
+    - `AskUserQuestion`: Shows questions with numbered options and descriptions
+    - `Bash`: Shows command with description
+    - Other tools: Shows relevant context (file path, pattern, URL, etc.)
+  - `slack-notify-stale-watcher`: Sleeps 30s, sends notification with extracted context if user hasn't responded
   - `slack-notify-start`: Updated to cancel pending watchers when user sends input
   - Hooks: Notification events now use waiting mechanism instead of immediate notify
   - Env: `CLAUDE_NOTIFY_STALE_SECONDS` to customize delay (default: 30)

@@ -44,6 +44,56 @@ fi
 # Clean up old files
 rm -f "$WAIT_FILE" "$CONTEXT_FILE"
 
+# Tool formatter for rich context extraction (matches claude-slack-notify)
+TOOL_FORMATTER='
+def format_tool:
+    if .name == "Bash" then
+        "⏳ Bash: " + ((.input.command // "") | split("\n")[0] | .[0:80]) +
+        (if (.input.description // "") != "" then " (" + .input.description + ")" else "" end)
+    elif .name == "Edit" then
+        "⏳ Edit: " + (.input.file_path // "") +
+        (if (.input.old_string // "") != "" then " (replacing " + ((.input.old_string // "") | .[0:30]) + "...)" else "" end)
+    elif .name == "Write" then
+        "⏳ Write: " + (.input.file_path // "")
+    elif .name == "Read" then
+        "⏳ Read: " + (.input.file_path // "")
+    elif .name == "Glob" then
+        "⏳ Glob: " + (.input.pattern // "")
+    elif .name == "Grep" then
+        "⏳ Grep: " + (.input.pattern // "")
+    elif .name == "AskUserQuestion" then
+        [.input.questions[] |
+            "❓ " + .question + "\n" +
+            ([.options // [] | to_entries[] |
+                "   " + ((.key + 1) | tostring) + ". " + .value.label +
+                (if (.value.description // "") != "" then " - " + .value.description else "" end)
+            ] | join("\n"))
+        ] | join("\n\n")
+    elif .name == "Task" then
+        "⏳ Task (" + (.input.subagent_type // "agent") + "): " +
+        (if (.input.description // "") != "" then .input.description
+         elif (.input.prompt // "") != "" then ((.input.prompt // "") | .[0:100])
+         else "running subagent" end)
+    elif .name == "WebFetch" then
+        "⏳ WebFetch: " + (.input.url // "")
+    elif .name == "WebSearch" then
+        "⏳ WebSearch: " + (.input.query // "")
+    elif .name == "EnterPlanMode" then
+        "⏳ Entering plan mode"
+    elif .name == "ExitPlanMode" then
+        "⏳ Exiting plan mode - awaiting approval"
+    elif (.name | startswith("mcp__")) then
+        "⏳ MCP: " + ((.name | split("__") | .[1:] | join("/")) // .name)
+    else
+        "⏳ " + .name +
+        (if (.input.description // "") != "" then ": " + .input.description
+         elif (.input.file_path // "") != "" then ": " + .input.file_path
+         elif (.input.prompt // "") != "" then ": " + ((.input.prompt // "") | .[0:80])
+         else "" end)
+    end;
+format_tool
+'
+
 # Extract context from the hook event
 CONTEXT=""
 if command -v jq &>/dev/null && [[ -n "$STDIN_DATA" ]]; then
@@ -52,37 +102,64 @@ if command -v jq &>/dev/null && [[ -n "$STDIN_DATA" ]]; then
     # Try to get context from notification message
     NOTIF_MSG=$(echo "$STDIN_DATA" | jq -r '.message // empty' 2>/dev/null)
 
-    # Try to get tool info for permission requests
+    # Try to get tool info for permission requests (direct from hook data)
     TOOL_NAME=$(echo "$STDIN_DATA" | jq -r '.tool_name // empty' 2>/dev/null)
     if [[ -n "$TOOL_NAME" ]]; then
-        TOOL_INPUT=$(echo "$STDIN_DATA" | jq -c '.tool_input // {}' 2>/dev/null)
-        CONTEXT="Waiting for permission: $TOOL_NAME"
-        if [[ "$TOOL_NAME" == "Bash" ]]; then
-            CMD=$(echo "$TOOL_INPUT" | jq -r '.command // empty' 2>/dev/null | head -c 100)
-            [[ -n "$CMD" ]] && CONTEXT="Waiting for permission: Bash - $CMD"
-        fi
-    elif [[ -n "$NOTIF_MSG" ]]; then
-        CONTEXT="$NOTIF_MSG"
+        # Use the full tool formatter for rich context
+        CONTEXT=$(echo "$STDIN_DATA" | jq -r '{name: .tool_name, input: .tool_input} | '"$TOOL_FORMATTER" 2>/dev/null)
     fi
 
-    # Get last assistant message from transcript for additional context
+    # Get context from transcript (for Stop/SubagentStop events or when no direct tool info)
     TRANSCRIPT_PATH=$(echo "$STDIN_DATA" | jq -r '.transcript_path // empty' 2>/dev/null)
-    if [[ -n "$TRANSCRIPT_PATH" && -f "$TRANSCRIPT_PATH" && -z "$CONTEXT" ]]; then
-        # Get last few lines of assistant text
-        CONTEXT=$(tac "$TRANSCRIPT_PATH" 2>/dev/null | while read -r line; do
+    if [[ -n "$TRANSCRIPT_PATH" && -f "$TRANSCRIPT_PATH" ]]; then
+        # Extract full assistant message content (text + tool calls with rich formatting)
+        TRANSCRIPT_CONTEXT=$(tac "$TRANSCRIPT_PATH" 2>/dev/null | while read -r line; do
             MSG_TYPE=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
             if [[ "$MSG_TYPE" == "assistant" ]]; then
-                TEXT=$(echo "$line" | jq -r '
+                # Build full content: text blocks + formatted tool descriptions
+                FULL_CONTENT=$(echo "$line" | jq -r '
                     if .message.content then
-                        [.message.content[] | select(.type == "text") | .text] | join("\n") | .[0:300]
-                    else empty end
+                        [.message.content[] |
+                            if .type == "text" then
+                                .text
+                            elif .type == "tool_use" then
+                                {name: .name, input: .input} | '"$TOOL_FORMATTER"'
+                            else
+                                empty
+                            end
+                        ] | map(select(. != null and . != "")) | join("\n\n") | .[0:1000]
+                    else
+                        empty
+                    end
                 ' 2>/dev/null)
-                if [[ -n "$TEXT" ]]; then
-                    echo "$TEXT"
+                if [[ -n "$FULL_CONTENT" ]]; then
+                    echo "$FULL_CONTENT"
                     break
                 fi
             fi
         done)
+
+        # Use transcript context if we don't have direct tool context, or append it
+        if [[ -z "$CONTEXT" && -n "$TRANSCRIPT_CONTEXT" ]]; then
+            CONTEXT="$TRANSCRIPT_CONTEXT"
+        elif [[ -n "$CONTEXT" && -n "$TRANSCRIPT_CONTEXT" && "$CONTEXT" != "$TRANSCRIPT_CONTEXT" ]]; then
+            # If we have both, prefer the more detailed one (transcript usually has more context)
+            if [[ ${#TRANSCRIPT_CONTEXT} -gt ${#CONTEXT} ]]; then
+                CONTEXT="$TRANSCRIPT_CONTEXT"
+            fi
+        fi
+    fi
+
+    # Append notification message if present and different from context
+    if [[ -n "$NOTIF_MSG" && "$CONTEXT" != *"$NOTIF_MSG"* ]]; then
+        if [[ -n "$CONTEXT" ]]; then
+            CONTEXT="${CONTEXT}
+
+---
+_${NOTIF_MSG}_"
+        else
+            CONTEXT="$NOTIF_MSG"
+        fi
     fi
 fi
 

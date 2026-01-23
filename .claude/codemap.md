@@ -50,6 +50,7 @@ claude-slack-notify/
 │   ├── slack-notify-start        # Hook: Cancel stale watcher + start task timing
 │   ├── slack-notify-waiting      # Hook: Start 30s stale-response watcher
 │   ├── slack-notify-stale-watcher # Background: Sleep 30s then notify if still waiting
+│   ├── extract-question-opts     # Python: Extract AskUserQuestion from transcript
 │   ├── slack-notify-check        # Hook: Check elapsed time (legacy, for Stop events)
 │   └── get-session-id            # Get Claude session ID
 │
@@ -370,15 +371,30 @@ rm ~/.claude/.mac-tunnel-url  # On Mac
 
 | Version | Changes |
 |---------|---------|
+| v1.0.5 | Dynamic Slack buttons for AskUserQuestion, removed Escape key interrupt |
+| v1.0.4 | Fixed cross-session notification pollution, URL-first buttons |
 | v1.0.3 | Cross-platform session locking (macOS, Windows Git Bash/MSYS2 support) |
 | v1.0.2 | Add port 443 conflict warning in `remote-tunnel` |
 | v1.0.1 | Fix Focus button self-loop bug on Mac (platform check + correct endpoint) |
 | v1.0.0 | Initial release with remote-as-canonical architecture |
 
 ## Current Focus
-> Last updated: 2026-01-22 (evening)
+> Last updated: 2026-01-23
 
 ### Recent Changes
+
+- **v1.0.5: Dynamic Slack buttons for AskUserQuestion** (2026-01-23)
+  - **Feature**: Slack notifications now show the actual question options as buttons
+  - **Implementation**:
+    - `bin/extract-question-opts`: Python helper for robust JSON extraction (jq fails on long lines)
+    - `bin/slack-notify-stale-watcher`: Extracts question options from transcript after 30s wait
+    - `bin/slack-notify-waiting`: Saves transcript path for stale watcher
+    - `bin/claude-slack-notify`: Builds dynamic buttons from extracted options
+  - **Search window**: 500 lines (transcripts grow during 30s wait)
+  - **Fix**: Removed Escape key from all input paths (was interrupting Claude)
+    - `bin/focus-helper`: Removed from local/SSH tmux input
+    - `mcp-server/src/remote-relay.ts`: Removed from relay input
+  - **Tool handlers added**: Playwright browser tools, TaskCreate/Update/Get/List, KillShell, TaskOutput
 
 - **v1.0.4: Fixed cross-session notification pollution** (2026-01-22)
   - **Root cause**: Multiple Claude sessions sharing same project directory caused wrong instance names in Slack

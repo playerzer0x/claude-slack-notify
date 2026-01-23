@@ -60,11 +60,14 @@ def format_tool:
     elif .name == "Write" then
         "⏳ Write: " + (.input.file_path // "")
     elif .name == "Read" then
-        "⏳ Read: " + (.input.file_path // "")
-    elif .name == "Glob" then
-        "⏳ Glob: " + (.input.pattern // "")
+        "⏳ Read: " + (.input.file_path // "") +
+        (if (.input.offset // 0) > 0 then " (from line " + ((.input.offset // 0) | tostring) + ")" else "" end)
+    elif .name == "Glob" or .name == "Search" then
+        "⏳ " + .name + ": " + (.input.pattern // "") +
+        (if (.input.path // "") != "" then " in " + .input.path else "" end)
     elif .name == "Grep" then
-        "⏳ Grep: " + (.input.pattern // "")
+        "⏳ Grep: " + (.input.pattern // "") +
+        (if (.input.path // "") != "" then " in " + .input.path else "" end)
     elif .name == "AskUserQuestion" then
         [.input.questions[] |
             "❓ " + .question + "\n" +
@@ -87,12 +90,17 @@ def format_tool:
     elif .name == "ExitPlanMode" then
         "⏳ Exiting plan mode - awaiting approval"
     elif (.name | startswith("mcp__")) then
-        "⏳ MCP: " + ((.name | split("__") | .[1:] | join("/")) // .name)
+        "⏳ MCP: " + ((.name | split("__") | .[1:] | join("/")) // .name) +
+        (if (.input | keys | length) > 0 then
+            " (" + ([.input | to_entries[] | select(.value != null and .value != "") | .key + "=" + (.value | tostring | .[0:30])] | .[0:3] | join(", ")) + ")"
+         else "" end)
     else
         "⏳ " + .name +
         (if (.input.description // "") != "" then ": " + .input.description
          elif (.input.file_path // "") != "" then ": " + .input.file_path
+         elif (.input.pattern // "") != "" then ": " + .input.pattern + (if (.input.path // "") != "" then " in " + .input.path else "" end)
          elif (.input.prompt // "") != "" then ": " + ((.input.prompt // "") | .[0:80])
+         elif (.input | keys | length) > 0 then ": " + ([.input | to_entries[] | select(.value != null and .value != "") | .key + "=" + (.value | tostring | .[0:30])] | .[0:2] | join(", "))
          else "" end)
     end;
 format_tool

@@ -55,12 +55,25 @@ The user runs tunnels on machines they control. Slack sends webhooks directly to
 ### How Thread Replies Work
 
 1. **Slack Event Subscriptions Request URL** points to: `https://time-machine.singapura-sargas.ts.net/slack/events`
-2. Notification is sent → `~/.claude/threads/{thread_ts}.json` is created
+2. Notification is sent → `~/.claude/threads/{thread_ts}.json` is created **on the machine that sent the notification**
 3. User replies in Slack thread
-4. Slack POSTs event to remote-relay
-5. remote-relay looks up thread → finds focus_url
-6. Extracts tmux target from focus_url
-7. Sends text to tmux via `tmux send-keys`
+4. Slack POSTs event to remote-relay on Linux
+5. remote-relay looks up thread:
+   - **Found locally** (Linux session): Handle via `tmux send-keys`
+   - **Not found locally** (Mac session): Forward to Mac's MCP server
+6. Target machine extracts focus_url from thread info
+7. Sends text to terminal
+
+### Thread File Location (Critical!)
+
+Thread files are stored **on the machine that sent the notification**:
+
+| Notification sent from | Thread file location | Reply handling |
+|------------------------|---------------------|----------------|
+| Linux (ssh-linked, tmux) | Linux `~/.claude/threads/` | Linux handles locally |
+| Mac (iTerm2, Terminal.app) | Mac `~/.claude/threads/` | Linux forwards to Mac |
+
+**This is why Mac session replies require forwarding** - the thread mapping only exists on Mac.
 
 ### Key Files
 
@@ -222,6 +235,78 @@ A centralized relay service that routes Slack webhooks to wherever the user's tu
 4. **Check if events arrive:**
    - Remote-relay logs should show "Thread reply received"
    - If no logs appear, Slack isn't sending events (config issue)
+
+---
+
+## Terminal Input Handling (Mac)
+
+When sending text to Mac terminals (thread replies or button inputs), proper session targeting is critical.
+
+### iTerm2 Session Targeting
+
+The session UUID from `$ITERM_SESSION_ID` uniquely identifies the exact tab:
+
+```
+claude-focus://iterm2/w0t0p0:3A7B9C2D-E4F5-6789-ABCD-EF0123456789
+                      └─────────────────────────────────────────┘
+                                    Session UUID
+```
+
+**focus-helper** uses this UUID to target the exact session:
+
+```applescript
+tell application "iTerm2"
+    repeat with s in sessions of t
+        if (id of s) is "w0t0p0:3A7B9C2D..." then
+            -- 1. Select this specific session
+            select s
+            -- 2. Bring window to front
+            set index of w to 1
+            -- 3. Activate iTerm2
+            activate
+            -- 4. Wait for focus to settle
+            delay 0.15
+            -- 5. Send text (without newline)
+            tell s to write text "user input" newline NO
+            -- 6. Wait for text to appear
+            delay 0.1
+            -- 7. Send Return via System Events (now correctly targeted)
+            tell application "System Events"
+                key code 36
+            end tell
+        end if
+    end repeat
+end tell
+```
+
+**Why this sequence matters:**
+- `write text` alone with `& return` sends a newline character, which Claude Code doesn't interpret as "submit"
+- System Events `key code 36` sends a proper Return keypress, but goes to the **frontmost app**
+- We must ensure the correct session is frontmost before sending the keystroke
+
+### Terminal.app Handling
+
+Similar approach - select the correct tab by TTY before sending keystrokes:
+
+```applescript
+tell application "Terminal"
+    repeat with t in tabs of w
+        if (tty of t) is "/dev/ttys001" then
+            set frontmost of w to true
+            set selected of t to true
+            activate
+            delay 0.1
+            -- Now System Events goes to the right place
+        end if
+    end repeat
+end tell
+```
+
+### Common Pitfalls
+
+1. **Text appears but doesn't submit**: Using `write text` with newline character instead of System Events Return
+2. **Wrong window receives input**: Not waiting for focus to settle (`delay 0.15`) before System Events
+3. **Input goes to wrong app**: Not activating the terminal app before System Events keystroke
 
 ---
 

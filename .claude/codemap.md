@@ -371,6 +371,7 @@ rm ~/.claude/.mac-tunnel-url  # On Mac
 
 | Version | Changes |
 |---------|---------|
+| v1.0.7 | Fix Mac session thread replies + iTerm2/Terminal input handling |
 | v1.0.6 | Fix thread reply routing for remote sessions (handle locally instead of proxying to Mac) |
 | v1.0.5 | Dynamic Slack buttons for AskUserQuestion, removed Escape key interrupt |
 | v1.0.4 | Fixed cross-session notification pollution, URL-first buttons |
@@ -383,6 +384,23 @@ rm ~/.claude/.mac-tunnel-url  # On Mac
 > Last updated: 2026-01-23
 
 ### Recent Changes
+
+- **v1.0.7: Fix Mac session thread replies + iTerm2/Terminal input** (2026-01-23)
+  - **Bug 1**: Thread replies to Mac sessions (iTerm2/Terminal.app) weren't delivered
+  - **Root cause**: Thread files for Mac sessions are stored on Mac, but Slack events go to Linux. Linux couldn't find the thread mapping.
+  - **Fix**: `remote-relay.ts` now forwards unknown thread events to Mac's MCP server
+  - **Bug 2**: iTerm2 input sent text but didn't press Enter, or pressed Enter in wrong window
+  - **Root cause**: Used System Events `key code 36` which goes to frontmost app, not the target session
+  - **Fix**: `focus-helper` now:
+    1. `select s` - Select the specific iTerm2 session
+    2. `set index of w to 1` - Bring window to front
+    3. `activate` - Activate iTerm2
+    4. `delay 0.15` - Wait for focus to settle
+    5. `write text` - Send text without newline
+    6. `key code 36` via System Events - Now correctly targeted
+  - **Terminal.app**: Similar fix - select tab and bring window to front before keystrokes
+  - **Key insight**: Session UUID from `$ITERM_SESSION_ID` uniquely identifies the exact tab
+  - **Files changed**: `mcp-server/src/remote-relay.ts`, `bin/focus-helper`
 
 - **v1.0.6: Fix thread reply routing for remote sessions** (2026-01-23)
   - **Bug**: Slack thread replies weren't reaching remote tmux sessions

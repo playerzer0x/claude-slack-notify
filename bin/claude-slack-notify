@@ -1166,8 +1166,8 @@ EOF
 }
 EOF
 
-        # Sync Slack config on first run
-        if [[ -n "$FIRST_RUN" && -f "$CLAUDE_DIR/.slack-config" ]]; then
+        # Sync Slack config (always, to pick up token updates)
+        if [[ -f "$CLAUDE_DIR/.slack-config" ]]; then
             echo ""
             echo "Syncing Slack config to $REMOTE_HOST..."
             scp -q "$CLAUDE_DIR/.slack-config" "$REMOTE_HOST:~/.claude/" 2>/dev/null && \

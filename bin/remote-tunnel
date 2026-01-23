@@ -37,6 +37,13 @@ IDLE_TIMEOUT="${CLAUDE_RELAY_IDLE_TIMEOUT:-0}"  # 0 = disabled
 LOCALTUNNEL_SUBDOMAIN_FILE="$CLAUDE_DIR/.remote-localtunnel-subdomain"
 ENV_FILE="$CLAUDE_DIR/.env"
 
+# Public relay configuration
+PUBLIC_RELAY_URL_FILE="$CLAUDE_DIR/.public-relay-url"
+PUBLIC_RELAY_KEY_FILE="$CLAUDE_DIR/.public-relay-key"
+RELAY_TUNNEL_SECRET_FILE="$CLAUDE_DIR/.relay-tunnel-secret"
+HEARTBEAT_PID_FILE="$CLAUDE_DIR/.relay-heartbeat.pid"
+USE_PUBLIC_RELAY=false
+
 # Tunnel type: "tailscale" or "localtunnel" (set by --use-* flags)
 TUNNEL_TYPE=""
 
@@ -52,6 +59,216 @@ NC='\033[0m'
 echo_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 echo_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 echo_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+# =============================================================================
+# Public Relay helpers
+# =============================================================================
+
+# Check if public relay is configured
+has_public_relay() {
+    [[ -f "$PUBLIC_RELAY_URL_FILE" ]] && [[ -f "$PUBLIC_RELAY_KEY_FILE" ]]
+}
+
+# Load public relay configuration
+load_public_relay_config() {
+    if [[ ! -f "$PUBLIC_RELAY_URL_FILE" ]]; then
+        return 1
+    fi
+    PUBLIC_RELAY_URL=$(cat "$PUBLIC_RELAY_URL_FILE" 2>/dev/null)
+    if [[ -z "$PUBLIC_RELAY_URL" ]]; then
+        return 1
+    fi
+    if [[ ! -f "$PUBLIC_RELAY_KEY_FILE" ]]; then
+        return 1
+    fi
+    PUBLIC_RELAY_KEY=$(cat "$PUBLIC_RELAY_KEY_FILE" 2>/dev/null)
+    if [[ -z "$PUBLIC_RELAY_KEY" ]]; then
+        return 1
+    fi
+    return 0
+}
+
+# Generate or load tunnel secret for relay-to-tunnel auth
+get_or_create_tunnel_secret() {
+    if [[ -f "$RELAY_TUNNEL_SECRET_FILE" ]]; then
+        cat "$RELAY_TUNNEL_SECRET_FILE"
+    else
+        # Generate a random 32-byte hex secret
+        local secret
+        secret="ts_$(openssl rand -hex 16)"
+        echo "$secret" > "$RELAY_TUNNEL_SECRET_FILE"
+        chmod 600 "$RELAY_TUNNEL_SECRET_FILE"
+        echo "$secret"
+    fi
+}
+
+# Register with public relay
+register_with_public_relay() {
+    local tunnel_url="$1"
+
+    if ! load_public_relay_config; then
+        echo_error "Public relay not configured"
+        return 1
+    fi
+
+    if ! load_slack_config; then
+        echo_error "Slack not configured (need App ID)"
+        return 1
+    fi
+
+    local tunnel_secret
+    tunnel_secret=$(get_or_create_tunnel_secret)
+    local hostname
+    hostname=$(hostname)
+
+    echo_info "Registering with public relay..."
+
+    local response
+    response=$(curl -s --max-time 10 -X POST "${PUBLIC_RELAY_URL}/register" \
+        -H "Authorization: Bearer ${PUBLIC_RELAY_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"app_id\": \"${SLACK_APP_ID}\",
+            \"tunnel_url\": \"${tunnel_url}\",
+            \"tunnel_secret\": \"${tunnel_secret}\",
+            \"hostname\": \"${hostname}\",
+            \"instance_name\": \"remote-tunnel\"
+        }")
+
+    if echo "$response" | grep -q '"success":true'; then
+        echo_info "Registered with public relay"
+        return 0
+    else
+        local error
+        error=$(echo "$response" | grep -oP '"error":"[^"]+"' | cut -d'"' -f4)
+        echo_error "Failed to register: ${error:-$response}"
+        return 1
+    fi
+}
+
+# Send heartbeat to public relay
+send_relay_heartbeat() {
+    if ! load_public_relay_config; then
+        return 1
+    fi
+
+    if ! load_slack_config; then
+        return 1
+    fi
+
+    curl -s --max-time 5 -X POST "${PUBLIC_RELAY_URL}/register/heartbeat" \
+        -H "Authorization: Bearer ${PUBLIC_RELAY_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{\"app_id\": \"${SLACK_APP_ID}\"}" >/dev/null 2>&1
+}
+
+# Start heartbeat background process
+start_relay_heartbeat() {
+    if [[ "$USE_PUBLIC_RELAY" != "true" ]]; then
+        return 0
+    fi
+
+    # Stop any existing heartbeat
+    stop_relay_heartbeat
+
+    (
+        while true; do
+            # Add jitter: 30s base + 0-5s random
+            local jitter=$((RANDOM % 5))
+            sleep $((30 + jitter))
+            send_relay_heartbeat
+        done
+    ) &
+    local pid=$!
+    echo "$pid" > "$HEARTBEAT_PID_FILE"
+    echo_info "Relay heartbeat started (PID: $pid)"
+}
+
+# Stop heartbeat background process
+stop_relay_heartbeat() {
+    if [[ -f "$HEARTBEAT_PID_FILE" ]]; then
+        local pid
+        pid=$(cat "$HEARTBEAT_PID_FILE")
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+        fi
+        rm -f "$HEARTBEAT_PID_FILE"
+    fi
+}
+
+# Unregister from public relay
+unregister_from_public_relay() {
+    if [[ "$USE_PUBLIC_RELAY" != "true" ]]; then
+        return 0
+    fi
+
+    if ! load_public_relay_config; then
+        return 1
+    fi
+
+    if ! load_slack_config; then
+        return 1
+    fi
+
+    curl -s --max-time 5 -X DELETE "${PUBLIC_RELAY_URL}/register" \
+        -H "Authorization: Bearer ${PUBLIC_RELAY_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{\"app_id\": \"${SLACK_APP_ID}\"}" >/dev/null 2>&1
+
+    echo_info "Unregistered from public relay"
+}
+
+# Setup public relay configuration
+cmd_public_relay_setup() {
+    echo ""
+    echo -e "${BOLD}Public Relay Setup${NC}"
+    echo ""
+    echo -e "  Enter the URL of your public relay server."
+    echo -e "  ${DIM}Example: https://claude-relay.railway.app${NC}"
+    echo ""
+    echo -ne "  ${YELLOW}?${NC} Relay URL: "
+    read -r relay_url
+
+    if [[ -z "$relay_url" ]]; then
+        echo_error "Relay URL is required"
+        exit 1
+    fi
+
+    # Remove trailing slash
+    relay_url="${relay_url%/}"
+
+    # Test the relay is reachable
+    echo_info "Testing connection to relay..."
+    if ! curl -s --max-time 5 "${relay_url}/health" | grep -q '"status":"ok"'; then
+        echo_error "Could not reach relay at $relay_url"
+        echo_error "Make sure the URL is correct and the relay is running"
+        exit 1
+    fi
+    echo -e "  ${GREEN}✓${NC} Relay is reachable"
+
+    echo ""
+    echo -e "  Enter your API key for the relay."
+    echo -e "  ${DIM}Contact the relay administrator to get a key.${NC}"
+    echo ""
+    echo -ne "  ${YELLOW}?${NC} API Key: "
+    read -r api_key
+
+    if [[ -z "$api_key" ]]; then
+        echo_error "API key is required"
+        exit 1
+    fi
+
+    # Save configuration
+    echo "$relay_url" > "$PUBLIC_RELAY_URL_FILE"
+    chmod 600 "$PUBLIC_RELAY_URL_FILE"
+    echo "$api_key" > "$PUBLIC_RELAY_KEY_FILE"
+    chmod 600 "$PUBLIC_RELAY_KEY_FILE"
+
+    echo ""
+    echo -e "${GREEN}Public relay configured!${NC}"
+    echo -e "  Run ${BOLD}remote-tunnel --public-relay${NC} to use it."
+    echo ""
+}
 
 # =============================================================================
 # Platform check - Linux only
@@ -1377,6 +1594,8 @@ cmd_interactive() {
     cleanup() {
         echo ""
         echo_info "Shutting down..."
+        stop_relay_heartbeat
+        unregister_from_public_relay
         # Stop Tailscale Funnel if active
         stop_tailscale_funnel 2>/dev/null || true
         # Stop Localtunnel if running
@@ -1416,6 +1635,15 @@ cmd_interactive() {
             echo -e "  ${CYAN}2.${NC} Run ${BOLD}remote-tunnel --stable${NC} to setup Localtunnel"
             echo ""
             exit 1
+        fi
+    fi
+
+    # Register with public relay if enabled
+    if [[ "$USE_PUBLIC_RELAY" == "true" ]]; then
+        if register_with_public_relay "$TUNNEL_URL"; then
+            start_relay_heartbeat
+        else
+            echo_warn "Could not register with public relay - continuing without it"
         fi
     fi
 
@@ -1488,6 +1716,26 @@ case "${1:-}" in
     --status)
         cmd_status
         ;;
+    --public-relay)
+        shift
+        case "${1:-}" in
+            --setup)
+                cmd_public_relay_setup
+                ;;
+            --background)
+                USE_PUBLIC_RELAY=true
+                cmd_background
+                ;;
+            "")
+                USE_PUBLIC_RELAY=true
+                cmd_interactive
+                ;;
+            *)
+                echo_error "Unknown command after --public-relay: $1"
+                exit 1
+                ;;
+        esac
+        ;;
     --use-tailscale)
         TUNNEL_TYPE="tailscale"
         shift
@@ -1519,6 +1767,11 @@ case "${1:-}" in
         echo "Backend options:"
         echo "  --use-tailscale    Force Tailscale Funnel"
         echo "  --use-localtunnel  Force Localtunnel"
+        echo ""
+        echo "Public relay options:"
+        echo "  --public-relay           Start with public relay registration"
+        echo "  --public-relay --setup   Configure public relay URL and API key"
+        echo "  --public-relay --background  Run in background with public relay"
         echo ""
         echo "Environment variables:"
         echo "  CLAUDE_RELAY_IDLE_TIMEOUT  Enable auto-shutdown after N seconds idle (default: disabled)"

@@ -12,6 +12,10 @@ const CLAUDE_DIR = join(homedir(), '.claude');
 const THREADS_DIR = join(CLAUDE_DIR, 'threads');
 const SLACK_DOWNLOADS_DIR = join(CLAUDE_DIR, 'slack-downloads');
 const SLACK_CONFIG_PATH = join(CLAUDE_DIR, '.slack-config');
+const RELAY_TUNNEL_SECRET_PATH = join(CLAUDE_DIR, '.relay-tunnel-secret');
+
+// Relay verification constants
+const RELAY_TIMESTAMP_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
 
 // Load thread info by thread_ts
 interface ThreadInfo {
@@ -56,6 +60,61 @@ function loadBotToken(): string | null {
   } catch {
     return null;
   }
+}
+
+// Load relay tunnel secret for relay-to-tunnel authentication
+function loadRelayTunnelSecret(): string | null {
+  if (!existsSync(RELAY_TUNNEL_SECRET_PATH)) {
+    return null;
+  }
+  try {
+    return readFileSync(RELAY_TUNNEL_SECRET_PATH, 'utf-8').trim();
+  } catch {
+    return null;
+  }
+}
+
+// Verify request came from the public relay (if configured)
+// Returns true if:
+// 1. No relay secret is configured (direct Slack requests allowed)
+// 2. Request has valid X-Relay-Secret and recent X-Relay-Timestamp
+function verifyRelayRequest(req: Request): { valid: boolean; reason?: string } {
+  const expectedSecret = loadRelayTunnelSecret();
+
+  // If no relay secret configured, allow all requests (direct Slack mode)
+  if (!expectedSecret) {
+    return { valid: true };
+  }
+
+  const secret = req.headers['x-relay-secret'] as string | undefined;
+  const timestamp = req.headers['x-relay-timestamp'] as string | undefined;
+
+  // Check if this is a relay request
+  if (!secret || !timestamp) {
+    // No relay headers - allow direct Slack requests even when relay is configured
+    // The Slack signature verification will handle auth for direct requests
+    return { valid: true };
+  }
+
+  // Verify secret matches
+  if (secret !== expectedSecret) {
+    console.log('Relay verification failed: secret mismatch');
+    return { valid: false, reason: 'Invalid relay secret' };
+  }
+
+  // Check timestamp (5 min window)
+  const ts = parseInt(timestamp, 10);
+  if (isNaN(ts)) {
+    return { valid: false, reason: 'Invalid relay timestamp format' };
+  }
+
+  const now = Date.now();
+  if (Math.abs(now - ts) > RELAY_TIMESTAMP_MAX_AGE_MS) {
+    console.log(`Relay verification failed: timestamp too old (delta: ${Math.abs(now - ts)}ms)`);
+    return { valid: false, reason: 'Relay timestamp too old' };
+  }
+
+  return { valid: true };
 }
 
 // Download file from Slack and save locally
@@ -269,6 +328,14 @@ router.post('/actions', verifySlackSignature, async (req: Request, res: Response
   // Touch activity file to reset idle timeout
   touchActivityFile();
 
+  // Verify relay request if relay authentication is configured
+  const relayCheck = verifyRelayRequest(req);
+  if (!relayCheck.valid) {
+    console.log(`Relay verification failed: ${relayCheck.reason}`);
+    res.status(401).send(relayCheck.reason || 'Unauthorized');
+    return;
+  }
+
   // Always return 200 to acknowledge receipt and prevent Slack retries
   const ack = () => res.status(200).send();
 
@@ -414,6 +481,14 @@ router.post('/actions', verifySlackSignature, async (req: Request, res: Response
 // POST /slack/events - Handle Slack Events (thread replies)
 router.post('/events', async (req: Request, res: Response) => {
   touchActivityFile();
+
+  // Verify relay request if relay authentication is configured
+  const relayCheck = verifyRelayRequest(req);
+  if (!relayCheck.valid) {
+    console.log(`Relay verification failed: ${relayCheck.reason}`);
+    res.status(401).send(relayCheck.reason || 'Unauthorized');
+    return;
+  }
 
   try {
     const body = req.body;

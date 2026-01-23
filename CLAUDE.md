@@ -21,6 +21,54 @@ Local Mac                              Remote Server (time-machine)
 
 **Key insight**: For linked SSH sessions, the session file is on the **remote**, but the MCP server runs on the **local** Mac.
 
+## Public Relay Architecture (Optional)
+
+For users who don't want to run their own tunnel, a public relay service can route Slack webhooks:
+
+```
+                    PUBLIC RELAY (Railway/Fly.io)
+                    ────────────────────────────────
+Slack App ─────────► POST /slack/actions ─────────►
+                           │
+                           │ Extract app_id
+                           │ Lookup tunnel URL
+                           │
+                    ┌──────▼────────────────────────┐
+                    │ User A (Mac):   User B (Linux):
+                    │ local-tunnel    remote-tunnel
+                    │ registers URL   registers URL
+                    │ with relay      with relay
+                    └───────────────────────────────┘
+```
+
+### Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `~/.claude/.public-relay-url` | Public relay server URL |
+| `~/.claude/.public-relay-key` | API key for registration |
+| `~/.claude/.relay-tunnel-secret` | Secret for relay-to-tunnel auth |
+
+### Usage
+
+```bash
+# Setup public relay
+local-tunnel --public-relay --setup
+
+# Start with public relay registration
+local-tunnel --public-relay
+
+# Or in background
+local-tunnel --public-relay --background
+```
+
+### Security
+
+1. **API Keys**: Each user gets a unique key tied to their Slack App ID
+2. **Tunnel Secret**: Auto-generated, used to authenticate relay-to-tunnel requests
+3. **SSRF Protection**: Relay validates tunnel URLs (HTTPS only, no private IPs)
+4. **Timestamp Validation**: 5-minute window to prevent replay attacks
+
 ## Common Pitfalls
 
 ### 1. Button Clicks Not Working for SSH-Linked Sessions
@@ -214,10 +262,16 @@ If buttons aren't working:
 |------|---------|
 | `bin/claude-slack-notify` | Main CLI - register, notify, remote commands |
 | `bin/local-tunnel` | Starts tunnel (Tailscale/Localtunnel) + MCP server for button support |
+| `bin/remote-tunnel` | Linux server relay for button handling when Mac is closed |
 | `bin/focus-helper` | Handles `claude-focus://` URLs, switches terminals |
 | `bin/mcp-server` | Launcher script for MCP server |
 | `mcp-server/src/routes/slack.ts` | Handles Slack button click webhooks |
 | `mcp-server/src/lib/focus-executor.ts` | Executes focus-helper with URLs |
 | `mcp-server/src/lib/session-store.ts` | Reads session files from ~/.claude/instances/ |
+| `public-relay/` | Public relay server for routing webhooks to user tunnels |
+| `public-relay/src/relay.ts` | Express app with forwarding logic |
+| `public-relay/src/redis.ts` | Redis client for tenant registry |
+| `public-relay/src/validation.ts` | SSRF protection for tunnel URLs |
 | `~/.claude/instances/*.json` | Session registration (on machine running Claude) |
 | `~/.claude/links/*.json` | Link info for SSH sessions (on local Mac only) |
+| `~/.claude/.relay-tunnel-secret` | Secret for relay-to-tunnel authentication |

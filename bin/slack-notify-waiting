@@ -208,24 +208,25 @@ if command -v jq &>/dev/null && [[ -n "$STDIN_DATA" ]]; then
         done)
 
         # Also extract AskUserQuestion options from transcript if not already extracted
+        # Use a more robust method that handles long JSON lines properly
         if [[ ! -f "$QUESTION_OPTS_FILE" ]]; then
-            tac "$TRANSCRIPT_PATH" 2>/dev/null | while read -r line; do
-                MSG_TYPE=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
-                if [[ "$MSG_TYPE" == "assistant" ]]; then
-                    # Look for AskUserQuestion tool_use in content
-                    QUESTION_DATA=$(echo "$line" | jq -c '[.message.content[]? | select(.type == "tool_use" and .name == "AskUserQuestion") | .input.questions[]? | {
+            # Only check last 50 lines for efficiency, slurp and find last assistant with AskUserQuestion
+            QUESTION_DATA=$(tail -50 "$TRANSCRIPT_PATH" 2>/dev/null | jq -s -c '
+                [.[] | select(.type == "assistant")] | last |
+                if . then
+                    [.message.content[]? | select(.type == "tool_use" and .name == "AskUserQuestion") | .input.questions[]? | {
                         question: .question,
                         header: .header,
                         multiSelect: .multiSelect,
                         options: [.options[]? | {label: .label, description: .description}]
-                    }]' 2>/dev/null)
-                    if [[ -n "$QUESTION_DATA" && "$QUESTION_DATA" != "[]" ]]; then
-                        echo "$QUESTION_DATA" > "$QUESTION_OPTS_FILE"
-                        break
-                    fi
-                    break  # Only check the last assistant message
-                fi
-            done
+                    }]
+                else
+                    []
+                end
+            ' 2>/dev/null)
+            if [[ -n "$QUESTION_DATA" && "$QUESTION_DATA" != "[]" && "$QUESTION_DATA" != "null" ]]; then
+                echo "$QUESTION_DATA" > "$QUESTION_OPTS_FILE"
+            fi
         fi
 
         # Use transcript context if we don't have direct tool context, or append it

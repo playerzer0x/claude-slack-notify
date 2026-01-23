@@ -386,11 +386,10 @@ rm ~/.claude/.mac-tunnel-url  # On Mac
 - **v1.0.5: Dynamic Slack buttons for AskUserQuestion** (2026-01-23)
   - **Feature**: Slack notifications now show the actual question options as buttons
   - **Implementation**:
-    - `bin/extract-question-opts`: Python helper for robust JSON extraction (jq fails on long lines)
-    - `bin/slack-notify-stale-watcher`: Extracts question options from transcript after 30s wait
-    - `bin/slack-notify-waiting`: Saves transcript path for stale watcher
+    - `bin/extract-question-opts`: Python helper - extracts from MOST RECENT assistant message only (prevents stale buttons)
+    - `bin/slack-notify-waiting`: Extracts options IMMEDIATELY when hook fires (100 lines search)
+    - `bin/slack-notify-stale-watcher`: Uses pre-saved options, fallback extraction (500 lines)
     - `bin/claude-slack-notify`: Builds dynamic buttons from extracted options
-  - **Search window**: 500 lines (transcripts grow during 30s wait)
   - **Fix**: Removed Escape key from all input paths (was interrupting Claude)
     - `bin/focus-helper`: Removed from local/SSH tmux input
     - `mcp-server/src/remote-relay.ts`: Removed from relay input

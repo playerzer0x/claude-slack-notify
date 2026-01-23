@@ -4,10 +4,10 @@ import json
 import sys
 
 def extract_question_opts(transcript_path, num_lines=500):
-    """Extract question options from the LAST AskUserQuestion in the last N lines.
+    """Extract question options ONLY from the MOST RECENT assistant message.
 
-    Default increased to 500 lines because transcripts can grow significantly
-    during the 30-second stale wait period.
+    Returns questions only if the latest assistant message contains AskUserQuestion.
+    This prevents showing stale buttons from old questions in the transcript history.
     """
     try:
         with open(transcript_path, 'r') as f:
@@ -15,17 +15,17 @@ def extract_question_opts(transcript_path, num_lines=500):
     except Exception:
         return []
 
-    # Find the LAST assistant message with AskUserQuestion (iterate in reverse)
+    # Find the MOST RECENT assistant message (first one when iterating in reverse)
     for line in reversed(lines):
         try:
             obj = json.loads(line.strip())
             if obj.get('type') != 'assistant':
                 continue
+            # This is the most recent assistant message - check if it has AskUserQuestion
             content = obj.get('message', {}).get('content', [])
             for item in content:
                 if item.get('type') == 'tool_use' and item.get('name') == 'AskUserQuestion':
                     questions = item.get('input', {}).get('questions', [])
-                    # Return the questions from the LAST AskUserQuestion found
                     return [{
                         'question': q.get('question', ''),
                         'header': q.get('header', ''),
@@ -35,6 +35,8 @@ def extract_question_opts(transcript_path, num_lines=500):
                             for opt in q.get('options', [])
                         ]
                     } for q in questions]
+            # Most recent assistant message doesn't have AskUserQuestion - return empty
+            return []
         except json.JSONDecodeError:
             continue
 

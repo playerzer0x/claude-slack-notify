@@ -300,11 +300,19 @@ interactive_menu() {
     local total=${#items[@]}
     local selected=0
 
+    # Save terminal settings and ensure proper mode for arrow key reading
+    # This fixes issues after SSH disconnect where terminal state is corrupted
+    local saved_stty
+    saved_stty=$(stty -g 2>/dev/null)
+    # Reset terminal to sane state first, then configure for raw input
+    stty sane 2>/dev/null
+    stty -icanon -echo min 1 2>/dev/null  # Disable line buffering, echo; read 1 char at a time
+
     # Hide cursor
     printf '\033[?25l' >&2
 
-    # Ensure cursor is restored on exit
-    trap 'printf "\033[?25h" >&2' RETURN
+    # Ensure cursor and terminal settings are restored on exit
+    trap 'printf "\033[?25h" >&2; stty "$saved_stty" 2>/dev/null' RETURN
 
     # Initial draw
     MENU_DRAWN=""

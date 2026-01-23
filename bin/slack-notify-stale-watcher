@@ -7,6 +7,7 @@ INSTANCE_ID="$1"
 WAIT_FILE="$2"
 CONTEXT_FILE="$3"
 DELAY="${CLAUDE_NOTIFY_STALE_SECONDS:-30}"
+QUESTION_OPTS_FILE="/tmp/claude-question-opts-${INSTANCE_ID}.json"
 
 # Validate INSTANCE_ID
 if [[ ! "$INSTANCE_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
@@ -28,10 +29,20 @@ if [[ -f "$WAIT_FILE" ]]; then
     # Clean up wait file
     rm -f "$WAIT_FILE"
 
+    # Check for question options file (for dynamic buttons)
+    QUESTION_OPTS=""
+    if [[ -f "$QUESTION_OPTS_FILE" ]]; then
+        QUESTION_OPTS="$QUESTION_OPTS_FILE"
+        # Don't delete yet - claude-slack-notify will use it
+    fi
+
     # Send the notification
     if [[ -n "$CONTEXT" ]]; then
-        CLAUDE_INSTANCE_ID="$INSTANCE_ID" "$HOME/.claude/bin/claude-slack-notify" "Waiting for your response (${DELAY}s)" "waiting" "$CONTEXT"
+        CLAUDE_INSTANCE_ID="$INSTANCE_ID" CLAUDE_QUESTION_OPTS_FILE="$QUESTION_OPTS" "$HOME/.claude/bin/claude-slack-notify" "Waiting for your response (${DELAY}s)" "waiting" "$CONTEXT"
     else
-        CLAUDE_INSTANCE_ID="$INSTANCE_ID" "$HOME/.claude/bin/claude-slack-notify" "Waiting for your response (${DELAY}s)" "waiting"
+        CLAUDE_INSTANCE_ID="$INSTANCE_ID" CLAUDE_QUESTION_OPTS_FILE="$QUESTION_OPTS" "$HOME/.claude/bin/claude-slack-notify" "Waiting for your response (${DELAY}s)" "waiting"
     fi
+
+    # Clean up question opts file after notification sent
+    rm -f "$QUESTION_OPTS_FILE"
 fi

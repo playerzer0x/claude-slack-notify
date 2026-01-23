@@ -2718,9 +2718,25 @@ if [[ -n "$FOCUS_URL" ]]; then
         MCP_SERVER_RUNNING="1"
     fi
 
+    # Check for dynamic question options (from AskUserQuestion)
+    DYNAMIC_BUTTONS=""
+    if [[ -n "$CLAUDE_QUESTION_OPTS_FILE" && -f "$CLAUDE_QUESTION_OPTS_FILE" ]]; then
+        # Extract options from the question file and build button config
+        # Format: label|action (action is the 1-indexed option number)
+        DYNAMIC_BUTTONS=$(jq -r '
+            .[0].options // [] |
+            to_entries |
+            map("\(.value.label)|\(.key + 1)") |
+            .[]
+        ' "$CLAUDE_QUESTION_OPTS_FILE" 2>/dev/null)
+    fi
+
     # Read button config or use defaults
     BUTTON_CONFIG="$CLAUDE_DIR/button-config"
-    if [[ ! -f "$BUTTON_CONFIG" ]]; then
+    if [[ -n "$DYNAMIC_BUTTONS" ]]; then
+        # Use dynamic buttons from AskUserQuestion
+        BUTTON_CONFIG_CONTENT="$DYNAMIC_BUTTONS"
+    elif [[ ! -f "$BUTTON_CONFIG" ]]; then
         # Default buttons if no config exists
         BUTTON_CONFIG_CONTENT="1|1
 2|2

@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Extract AskUserQuestion options from Claude transcript for Slack buttons."""
+import json
+import sys
+
+def extract_question_opts(transcript_path, num_lines=100):
+    """Extract question options from the LAST AskUserQuestion in the last N lines."""
+    try:
+        with open(transcript_path, 'r') as f:
+            lines = f.readlines()[-num_lines:]
+    except Exception:
+        return []
+
+    # Find the LAST assistant message with AskUserQuestion (iterate in reverse)
+    for line in reversed(lines):
+        try:
+            obj = json.loads(line.strip())
+            if obj.get('type') != 'assistant':
+                continue
+            content = obj.get('message', {}).get('content', [])
+            for item in content:
+                if item.get('type') == 'tool_use' and item.get('name') == 'AskUserQuestion':
+                    questions = item.get('input', {}).get('questions', [])
+                    # Return the questions from the LAST AskUserQuestion found
+                    return [{
+                        'question': q.get('question', ''),
+                        'header': q.get('header', ''),
+                        'multiSelect': q.get('multiSelect', False),
+                        'options': [
+                            {'label': opt.get('label', ''), 'description': opt.get('description', '')}
+                            for opt in q.get('options', [])
+                        ]
+                    } for q in questions]
+        except json.JSONDecodeError:
+            continue
+
+    return []
+
+if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        print("[]")
+        sys.exit(0)
+
+    transcript_path = sys.argv[1]
+    num_lines = int(sys.argv[2]) if len(sys.argv) > 2 else 100
+
+    result = extract_question_opts(transcript_path, num_lines)
+    print(json.dumps(result))

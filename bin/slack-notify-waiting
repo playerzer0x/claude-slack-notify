@@ -30,6 +30,7 @@ INSTANCE_FILE="${INSTANCES_DIR}/${INSTANCE_ID}.json"
 WAIT_FILE="/tmp/claude-waiting-${INSTANCE_ID}"
 CONTEXT_FILE="/tmp/claude-waiting-ctx-${INSTANCE_ID}"
 QUESTION_OPTS_FILE="/tmp/claude-question-opts-${INSTANCE_ID}.json"
+TRANSCRIPT_PATH_FILE="/tmp/claude-transcript-path-${INSTANCE_ID}"
 
 # Only work for registered instances
 if [[ ! -f "$INSTANCE_FILE" ]]; then
@@ -47,7 +48,7 @@ if [[ -f "$WATCHER_PID_FILE" ]]; then
 fi
 
 # Clean up old files
-rm -f "$WAIT_FILE" "$CONTEXT_FILE" "$QUESTION_OPTS_FILE"
+rm -f "$WAIT_FILE" "$CONTEXT_FILE" "$QUESTION_OPTS_FILE" "$TRANSCRIPT_PATH_FILE"
 
 # Tool formatter for rich context extraction (matches claude-slack-notify)
 TOOL_FORMATTER='
@@ -180,6 +181,8 @@ if command -v jq &>/dev/null && [[ -n "$STDIN_DATA" ]]; then
     # Get context from transcript (for Stop/SubagentStop events or when no direct tool info)
     TRANSCRIPT_PATH=$(echo "$STDIN_DATA" | jq -r '.transcript_path // empty' 2>/dev/null)
     if [[ -n "$TRANSCRIPT_PATH" && -f "$TRANSCRIPT_PATH" ]]; then
+        # Save transcript path for stale watcher to use
+        echo "$TRANSCRIPT_PATH" > "$TRANSCRIPT_PATH_FILE"
         # Extract full assistant message content (text + tool calls with rich formatting)
         TRANSCRIPT_CONTEXT=$(tac "$TRANSCRIPT_PATH" 2>/dev/null | while read -r line; do
             MSG_TYPE=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
@@ -207,27 +210,9 @@ if command -v jq &>/dev/null && [[ -n "$STDIN_DATA" ]]; then
             fi
         done)
 
-        # Also extract AskUserQuestion options from transcript if not already extracted
-        # Use a more robust method that handles long JSON lines properly
-        if [[ ! -f "$QUESTION_OPTS_FILE" ]]; then
-            # Only check last 50 lines for efficiency, slurp and find last assistant with AskUserQuestion
-            QUESTION_DATA=$(tail -50 "$TRANSCRIPT_PATH" 2>/dev/null | jq -s -c '
-                [.[] | select(.type == "assistant")] | last |
-                if . then
-                    [.message.content[]? | select(.type == "tool_use" and .name == "AskUserQuestion") | .input.questions[]? | {
-                        question: .question,
-                        header: .header,
-                        multiSelect: .multiSelect,
-                        options: [.options[]? | {label: .label, description: .description}]
-                    }]
-                else
-                    []
-                end
-            ' 2>/dev/null)
-            if [[ -n "$QUESTION_DATA" && "$QUESTION_DATA" != "[]" && "$QUESTION_DATA" != "null" ]]; then
-                echo "$QUESTION_DATA" > "$QUESTION_OPTS_FILE"
-            fi
-        fi
+        # NOTE: Don't extract AskUserQuestion here - the transcript may not be updated yet
+        # when the Stop hook fires. The stale watcher will extract 30s later when
+        # the transcript is definitely updated.
 
         # Use transcript context if we don't have direct tool context, or append it
         if [[ -z "$CONTEXT" && -n "$TRANSCRIPT_CONTEXT" ]]; then

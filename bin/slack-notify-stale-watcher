@@ -8,6 +8,7 @@ WAIT_FILE="$2"
 CONTEXT_FILE="$3"
 DELAY="${CLAUDE_NOTIFY_STALE_SECONDS:-30}"
 QUESTION_OPTS_FILE="/tmp/claude-question-opts-${INSTANCE_ID}.json"
+TRANSCRIPT_PATH_FILE="/tmp/claude-transcript-path-${INSTANCE_ID}"
 
 # Validate INSTANCE_ID
 if [[ ! "$INSTANCE_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
@@ -33,36 +34,21 @@ if [[ -f "$WAIT_FILE" ]]; then
     # If not already created, try to extract from transcript now
     QUESTION_OPTS=""
     if [[ ! -f "$QUESTION_OPTS_FILE" ]]; then
-        # Find transcript for this session
-        INSTANCES_DIR="$HOME/.claude/instances"
-        INSTANCE_FILE="$INSTANCES_DIR/${INSTANCE_ID}.json"
-        if [[ -f "$INSTANCE_FILE" ]]; then
-            # Get project path from instance to find transcript
-            PROJECT_PATH=$(grep -o '"cwd": *"[^"]*"' "$INSTANCE_FILE" 2>/dev/null | head -1 | cut -d'"' -f4)
-            if [[ -n "$PROJECT_PATH" ]]; then
-                # Convert path to Claude's project directory format
-                SAFE_PATH=$(echo "$PROJECT_PATH" | sed 's|/|-|g; s|^-||')
-                TRANSCRIPT=$(ls -t "$HOME/.claude/projects/${SAFE_PATH}"/*.jsonl 2>/dev/null | head -1)
-                if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
-                    # Extract AskUserQuestion from last 50 lines of transcript
-                    QUESTION_DATA=$(tail -50 "$TRANSCRIPT" 2>/dev/null | jq -s -c '
-                        [.[] | select(.type == "assistant")] |
-                        [.[] | .message.content[]? | select(.type == "tool_use" and .name == "AskUserQuestion")] | last |
-                        if . then
-                            [.input.questions[]? | {
-                                question: .question,
-                                header: .header,
-                                multiSelect: .multiSelect,
-                                options: [.options[]? | {label: .label, description: .description}]
-                            }]
-                        else
-                            []
-                        end
-                    ' 2>/dev/null)
-                    if [[ -n "$QUESTION_DATA" && "$QUESTION_DATA" != "[]" && "$QUESTION_DATA" != "null" ]]; then
-                        echo "$QUESTION_DATA" > "$QUESTION_OPTS_FILE"
-                    fi
-                fi
+        # Read transcript path from file (saved by slack-notify-waiting)
+        TRANSCRIPT=""
+        if [[ -f "$TRANSCRIPT_PATH_FILE" ]]; then
+            TRANSCRIPT=$(cat "$TRANSCRIPT_PATH_FILE" 2>/dev/null)
+            rm -f "$TRANSCRIPT_PATH_FILE"
+        fi
+        # Fallback: find most recently modified transcript in this project
+        if [[ -z "$TRANSCRIPT" || ! -f "$TRANSCRIPT" ]]; then
+            TRANSCRIPT=$(ls -t "$HOME/.claude/projects"/*/*.jsonl 2>/dev/null | head -1)
+        fi
+        if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
+            # Use python helper for robust extraction (jq fails on long JSON lines)
+            QUESTION_DATA=$("$HOME/.claude/bin/extract-question-opts" "$TRANSCRIPT" 100 2>/dev/null)
+            if [[ -n "$QUESTION_DATA" && "$QUESTION_DATA" != "[]" && "$QUESTION_DATA" != "null" ]]; then
+                echo "$QUESTION_DATA" > "$QUESTION_OPTS_FILE"
             fi
         fi
     fi

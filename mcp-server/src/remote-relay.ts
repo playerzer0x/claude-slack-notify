@@ -417,7 +417,30 @@ app.post('/slack/events', async (req: Request, res: Response) => {
         // Look up thread info
         const threadInfo = loadThreadInfo(threadTs);
         if (!threadInfo) {
-          console.log(`No thread mapping found for ${threadTs}`);
+          console.log(`No thread mapping found for ${threadTs}, trying Mac...`);
+
+          // Try to forward to Mac - it might have the thread mapping
+          const macUrl = await checkMacReachable();
+          if (macUrl) {
+            try {
+              console.log(`Forwarding event to Mac: ${macUrl}/slack/events`);
+              const proxyResponse = await fetch(`${macUrl}/slack/events`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+              });
+              if (proxyResponse.ok) {
+                console.log('Successfully forwarded event to Mac');
+              } else {
+                console.log(`Mac returned ${proxyResponse.status}`);
+              }
+            } catch (proxyError) {
+              console.log('Failed to forward to Mac:', proxyError);
+            }
+          } else {
+            console.log('Mac not reachable, cannot deliver thread reply');
+          }
+
           res.status(200).send();
           return;
         }

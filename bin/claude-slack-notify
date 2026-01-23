@@ -2399,7 +2399,18 @@ _…[truncated - see terminal for full output]_"
         MESSAGE="Task completed (${ELAPSED}s)"
     fi
 else
-    MESSAGE="${1:-Ready for input}"
+    # Direct call with arguments: $1=title, $2=status, $3=context (optional)
+    TITLE="${1:-Ready for input}"
+    CONTEXT_ARG="${3:-}"
+
+    if [[ -n "$CONTEXT_ARG" ]]; then
+        # If context provided as $3, use it with title as header
+        MESSAGE="${TITLE}
+
+${CONTEXT_ARG}"
+    else
+        MESSAGE="$TITLE"
+    fi
 fi
 
 STATUS="${2:-waiting}"

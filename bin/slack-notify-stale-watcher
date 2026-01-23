@@ -31,7 +31,8 @@ if [[ -f "$WAIT_FILE" ]]; then
     rm -f "$WAIT_FILE"
 
     # Check for question options file (for dynamic buttons)
-    # If not already created, try to extract from transcript now
+    # The file should already exist (created by slack-notify-waiting when hook fired)
+    # This is a fallback in case it wasn't created
     QUESTION_OPTS=""
     if [[ ! -f "$QUESTION_OPTS_FILE" ]]; then
         # Read transcript path from file (saved by slack-notify-waiting)

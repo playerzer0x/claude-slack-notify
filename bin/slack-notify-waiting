@@ -210,9 +210,14 @@ if command -v jq &>/dev/null && [[ -n "$STDIN_DATA" ]]; then
             fi
         done)
 
-        # NOTE: Don't extract AskUserQuestion here - the transcript may not be updated yet
-        # when the Stop hook fires. The stale watcher will extract 30s later when
-        # the transcript is definitely updated.
+        # Extract AskUserQuestion options IMMEDIATELY while context is fresh
+        # This avoids the problem of searching through hundreds of lines 30s later
+        if [[ ! -f "$QUESTION_OPTS_FILE" ]]; then
+            QUESTION_DATA=$("$HOME/.claude/bin/extract-question-opts" "$TRANSCRIPT_PATH" 100 2>/dev/null)
+            if [[ -n "$QUESTION_DATA" && "$QUESTION_DATA" != "[]" && "$QUESTION_DATA" != "null" ]]; then
+                echo "$QUESTION_DATA" > "$QUESTION_OPTS_FILE"
+            fi
+        fi
 
         # Use transcript context if we don't have direct tool context, or append it
         if [[ -z "$CONTEXT" && -n "$TRANSCRIPT_CONTEXT" ]]; then

@@ -46,7 +46,8 @@ if [[ -f "$WAIT_FILE" ]]; then
         fi
         if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
             # Use python helper for robust extraction (jq fails on long JSON lines)
-            QUESTION_DATA=$("$HOME/.claude/bin/extract-question-opts" "$TRANSCRIPT" 100 2>/dev/null)
+            # Use 500 lines because transcript can grow during 30s stale wait
+            QUESTION_DATA=$("$HOME/.claude/bin/extract-question-opts" "$TRANSCRIPT" 500 2>/dev/null)
             if [[ -n "$QUESTION_DATA" && "$QUESTION_DATA" != "[]" && "$QUESTION_DATA" != "null" ]]; then
                 echo "$QUESTION_DATA" > "$QUESTION_OPTS_FILE"
             fi

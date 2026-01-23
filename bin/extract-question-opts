@@ -3,8 +3,12 @@
 import json
 import sys
 
-def extract_question_opts(transcript_path, num_lines=100):
-    """Extract question options from the LAST AskUserQuestion in the last N lines."""
+def extract_question_opts(transcript_path, num_lines=500):
+    """Extract question options from the LAST AskUserQuestion in the last N lines.
+
+    Default increased to 500 lines because transcripts can grow significantly
+    during the 30-second stale wait period.
+    """
     try:
         with open(transcript_path, 'r') as f:
             lines = f.readlines()[-num_lines:]

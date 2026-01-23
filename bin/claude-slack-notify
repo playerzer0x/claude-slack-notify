@@ -535,6 +535,17 @@ json_escape() {
     echo "$str"
 }
 
+# Convert standard markdown to Slack mrkdwn format
+# - **bold** → *bold* (Slack uses single asterisk for bold)
+# - Preserves _italic_ (same in both formats)
+# - Preserves `code` (same in both formats)
+markdown_to_mrkdwn() {
+    local str="$1"
+    # Convert **bold** to *bold* (standard markdown bold → slack bold)
+    # Uses sed with extended regex
+    echo "$str" | sed -E 's/\*\*([^*]+)\*\*/*\1*/g'
+}
+
 # Check if MCP server is running (for hybrid button support)
 # Checks: 1) PID file with valid process, 2) Health endpoint responds
 is_mcp_server_running() {
@@ -2709,7 +2720,8 @@ fi
 SAFE_INSTANCE_NAME=$(json_escape "$INSTANCE_NAME")
 SAFE_HOSTNAME=$(json_escape "$HOSTNAME")
 SAFE_LOCATION=$(json_escape "$LOCATION")
-SAFE_MESSAGE=$(json_escape "$MESSAGE")
+# Convert standard markdown to Slack mrkdwn format, then escape for JSON
+SAFE_MESSAGE=$(json_escape "$(markdown_to_mrkdwn "$MESSAGE")")
 SAFE_FOCUS_URL=$(json_escape "$FOCUS_URL")
 
 # Build button block if we have a focus URL

@@ -557,8 +557,12 @@ case "$TYPE" in
         ;;
     iterm2)
         # Pure iTerm2 - ARG1 is the session UUID
-        switch_iterm_session "id" "$ARG1"
-        send_iterm_input "id" "$ARG1" "$ACTION_INPUT"
+        focus_result=$(switch_iterm_session "id" "$ARG1")
+        if [[ "$focus_result" == SUCCESS* ]]; then
+            send_iterm_input "id" "$ARG1" "$ACTION_INPUT"
+        else
+            echo "$(date): Skipping input - focus failed: $focus_result" >> $LOG_FILE
+        fi
         ;;
     terminal-tmux)
         # Terminal.app running tmux - send input first, then focus

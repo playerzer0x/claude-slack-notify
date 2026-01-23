@@ -31,7 +31,9 @@ TUNNEL_TYPE_FILE="$CLAUDE_DIR/.remote-tunnel-type"
 WATCHDOG_PID_FILE="$CLAUDE_DIR/.remote-tunnel-watchdog.pid"
 ACTIVITY_FILE="$CLAUDE_DIR/.relay-last-activity"
 TUNNEL_LOG="$CLAUDE_DIR/remote-tunnel.log"
-IDLE_TIMEOUT=3600  # 1 hour in seconds
+# Watchdog disabled by default - relay is lightweight and should persist for overnight tasks
+# Set CLAUDE_RELAY_IDLE_TIMEOUT to enable auto-shutdown (e.g., 3600 for 1 hour)
+IDLE_TIMEOUT="${CLAUDE_RELAY_IDLE_TIMEOUT:-0}"  # 0 = disabled
 LOCALTUNNEL_SUBDOMAIN_FILE="$CLAUDE_DIR/.remote-localtunnel-subdomain"
 ENV_FILE="$CLAUDE_DIR/.env"
 
@@ -635,6 +637,12 @@ stop_relay() {
 # =============================================================================
 
 start_watchdog() {
+    # Skip watchdog if timeout is disabled (0 or empty)
+    if [[ -z "$IDLE_TIMEOUT" || "$IDLE_TIMEOUT" -le 0 ]]; then
+        echo_info "Idle watchdog disabled (relay will persist until manually stopped)"
+        return 0
+    fi
+
     touch "$ACTIVITY_FILE"
 
     (
@@ -1292,11 +1300,13 @@ cmd_status() {
     fi
 
     # Check watchdog
-    if [[ -f "$WATCHDOG_PID_FILE" ]]; then
+    if [[ -z "$IDLE_TIMEOUT" || "$IDLE_TIMEOUT" -le 0 ]]; then
+        echo -e "  Watchdog:   ${DIM}Disabled (relay persists until stopped)${NC}"
+    elif [[ -f "$WATCHDOG_PID_FILE" ]]; then
         local pid
         pid=$(cat "$WATCHDOG_PID_FILE")
         if kill -0 "$pid" 2>/dev/null; then
-            echo -e "  Watchdog:   ${GREEN}Running${NC}"
+            echo -e "  Watchdog:   ${GREEN}Running${NC} (timeout: ${IDLE_TIMEOUT}s)"
         else
             echo -e "  Watchdog:   ${YELLOW}Stopped${NC}"
         fi
@@ -1311,8 +1321,8 @@ cmd_status() {
         echo -e "  Mac URL:    ${DIM}$mac_url${NC}"
     fi
 
-    # Check last activity
-    if [[ -f "$ACTIVITY_FILE" ]]; then
+    # Check last activity (only if watchdog is enabled)
+    if [[ -n "$IDLE_TIMEOUT" && "$IDLE_TIMEOUT" -gt 0 && -f "$ACTIVITY_FILE" ]]; then
         local last now elapsed
         last=$(stat -c %Y "$ACTIVITY_FILE" 2>/dev/null || echo 0)
         now=$(date +%s)
@@ -1502,13 +1512,17 @@ case "${1:-}" in
         echo "Commands:"
         echo "  (none)         Start tunnel (Tailscale if available, else Localtunnel)"
         echo "  --setup        Configure Slack tokens (for auto-URL updates)"
-        echo "  --background   Start tunnel in background"
+        echo "  --background   Start tunnel in background (persists for overnight tasks)"
         echo "  --stop         Stop background tunnel"
         echo "  --status       Check tunnel status"
         echo ""
         echo "Backend options:"
         echo "  --use-tailscale    Force Tailscale Funnel"
         echo "  --use-localtunnel  Force Localtunnel"
+        echo ""
+        echo "Environment variables:"
+        echo "  CLAUDE_RELAY_IDLE_TIMEOUT  Enable auto-shutdown after N seconds idle (default: disabled)"
+        echo "                             Example: CLAUDE_RELAY_IDLE_TIMEOUT=3600 for 1 hour"
         echo ""
         ;;
     --stable)

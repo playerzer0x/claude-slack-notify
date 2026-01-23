@@ -126,11 +126,9 @@ send_tmux_input() {
         # Step 2: Wait for paste to complete (tested requirement from gastown)
         sleep 0.2
 
-        # Step 3: Send Escape to exit vim INSERT mode if enabled (harmless in normal mode)
-        $TMUX_BIN -S "$TMUX_SOCKET" send-keys -t "$tmux_target" Escape 2>/dev/null
-        sleep 0.1
-
-        # Step 4: Send Enter as separate command (more reliable than appending)
+        # Step 3: Send Enter as separate command (more reliable than appending)
+        # NOTE: Removed Escape key - it was interrupting Claude Code.
+        # Vim mode users should manually exit insert mode before clicking buttons.
         result=$($TMUX_BIN -S "$TMUX_SOCKET" send-keys -t "$tmux_target" Enter 2>&1)
         echo "$(date): send-keys Enter result: $? - $result" >> $LOG_FILE
     fi
@@ -283,11 +281,9 @@ send_ssh_tmux_input() {
         # Step 2: Wait for paste to complete
         sleep 0.2
 
-        # Step 3: Send Escape to exit vim INSERT mode if enabled
-        $ssh_cmd "tmux send-keys -t '$tmux_target' Escape" 2>/dev/null
-        sleep 0.1
-
-        # Step 4: Send Enter
+        # Step 3: Send Enter
+        # NOTE: Removed Escape key - it was interrupting Claude Code.
+        # Vim mode users should manually exit insert mode before clicking buttons.
         result=$($ssh_cmd "tmux send-keys -t '$tmux_target' Enter" 2>&1)
         echo "$(date): SSH send-keys Enter result: $? - $result" >> $LOG_FILE
     fi

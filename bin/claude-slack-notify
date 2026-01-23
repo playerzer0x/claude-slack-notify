@@ -2099,9 +2099,10 @@ def format_tool:
         (if (.input.path // "") != "" then " in " + .input.path else "" end)
     elif .name == "AskUserQuestion" then
         [.input.questions[] |
-            "● " + .question + "\n" +
+            "❓ " + .question + "\n" +
             ([.options // [] | to_entries[] |
-                "  " + ((.key + 1) | tostring) + ". " + .value.label
+                "   " + ((.key + 1) | tostring) + ". " + .value.label +
+                (if (.value.description // "") != "" then " - " + .value.description else "" end)
             ] | join("\n"))
         ] | join("\n\n")
     elif .name == "Task" then
@@ -2147,7 +2148,7 @@ def format_tool:
 format_tool
 '
 
-# Waiting variant of tool formatter (with ⏳ prefix for pending permissions)
+# Waiting variant of tool formatter (with ⏳ prefix for pending permissions, ❓ for questions)
 TOOL_FORMATTER_WAITING='
 def format_tool_waiting:
     if .name == "Bash" then
@@ -2166,26 +2167,34 @@ def format_tool_waiting:
         "⏳ Grep: " + (.input.pattern // "")
     elif .name == "AskUserQuestion" then
         [.input.questions[] |
-            "⏳ " + .question + "\n" +
+            "❓ " + .question + "\n" +
             ([.options // [] | to_entries[] |
-                "  " + ((.key + 1) | tostring) + ". " + .value.label
+                "   " + ((.key + 1) | tostring) + ". " + .value.label +
+                (if (.value.description // "") != "" then " - " + .value.description else "" end)
             ] | join("\n"))
         ] | join("\n\n")
     elif .name == "Task" then
         "⏳ Task (" + (.input.subagent_type // "agent") + "): " +
-        (if (.input.description // "") != "" then .input.description else "running subagent" end)
+        (if (.input.description // "") != "" then .input.description
+         elif (.input.prompt // "") != "" then ((.input.prompt // "") | .[0:100])
+         else "running subagent" end)
     elif .name == "WebFetch" then
         "⏳ WebFetch: " + (.input.url // "")
     elif .name == "WebSearch" then
         "⏳ WebSearch: " + (.input.query // "")
     elif .name == "Skill" then
         "⏳ Skill: /" + (.input.skill // "")
+    elif .name == "EnterPlanMode" then
+        "⏳ Entering plan mode"
+    elif .name == "ExitPlanMode" then
+        "⏳ Exiting plan mode - awaiting approval"
     elif (.name | startswith("mcp__")) then
         "⏳ MCP: " + ((.name | split("__") | .[1:] | join("/")) // .name)
     else
         "⏳ " + .name +
         (if (.input.description // "") != "" then ": " + .input.description
          elif (.input.file_path // "") != "" then ": " + .input.file_path
+         elif (.input.prompt // "") != "" then ": " + ((.input.prompt // "") | .[0:80])
          else "" end)
     end;
 format_tool_waiting

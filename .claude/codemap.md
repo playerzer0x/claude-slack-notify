@@ -137,6 +137,69 @@ Direct URL (SSH/Jupyter sessions):
 
 The `url:` prefix tells MCP server to use the URL directly without session lookup.
 
+## Message Formatting (TOOL_FORMATTER)
+
+Slack notifications extract rich context from Claude's responses using jq-based formatters. Two variants exist:
+
+### Formatters
+| Name | Location | Prefix | Use Case |
+|------|----------|--------|----------|
+| `TOOL_FORMATTER` | `claude-slack-notify` | `●` / `❓` | Completed task summaries |
+| `TOOL_FORMATTER_WAITING` | `claude-slack-notify` | `⏳` / `❓` | Waiting/permission prompts |
+| `TOOL_FORMATTER` | `slack-notify-waiting` | `⏳` / `❓` | Stale response notifications |
+
+### Supported Tool Formats
+
+| Tool | Format Example |
+|------|----------------|
+| `AskUserQuestion` | `❓ Which database?\n   1. PostgreSQL - Relational DB\n   2. MongoDB - Document DB` |
+| `Bash` | `⏳ Bash: npm install (Install dependencies)` |
+| `Edit` | `⏳ Edit: src/index.ts (replacing old_code...)` |
+| `Write` | `⏳ Write: src/new-file.ts` |
+| `Read` | `⏳ Read: src/index.ts (from line 50)` |
+| `Glob` | `⏳ Glob: **/*.ts in src/` |
+| `Grep` | `⏳ Grep: TODO in src/` |
+| `Task` | `⏳ Task (Explore): Find database config` |
+| `WebFetch` | `⏳ WebFetch: https://example.com` |
+| `WebSearch` | `⏳ WebSearch: react hooks tutorial` |
+| `Skill` | `⏳ Skill: /commit` |
+| `EnterPlanMode` | `⏳ Entering plan mode` |
+| `ExitPlanMode` | `⏳ Exiting plan mode - awaiting approval` |
+| `mcp__*` | `⏳ MCP: server/tool (arg=value)` |
+
+### Context Extraction Flow
+
+```
+Hook Event (stdin JSON)
+    ↓
+┌─────────────────────────────────────┐
+│ 1. Direct tool info from hook data  │  (PermissionRequest, Notification)
+│    tool_name + tool_input → format  │
+└─────────────────────────────────────┘
+    ↓ (if no direct info)
+┌─────────────────────────────────────┐
+│ 2. Extract from transcript          │  (Stop, SubagentStop)
+│    transcript_path → read last      │
+│    assistant message → format       │
+│    text blocks + tool_use blocks    │
+└─────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────┐
+│ 3. Append notification message      │  (if present and different)
+│    "Claude needs your permission"   │
+└─────────────────────────────────────┘
+    ↓
+Slack Message Payload
+```
+
+### Adding New Tool Formats
+
+To add formatting for a new tool:
+1. Add `elif .name == "NewTool" then` block in both formatters
+2. Extract relevant fields from `.input`
+3. Use appropriate prefix (`⏳` for waiting, `●` for completed, `❓` for questions)
+4. Keep output concise (Slack has ~3000 char limit per block)
+
 ## Thread Replies
 
 When bot token is configured (`local-tunnel --setup` → enable thread replies):

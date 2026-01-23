@@ -14,7 +14,12 @@ else
     SESSION_ID=$(echo "$STDIN_DATA" | grep -o '"session_id":"[^"]*"' | sed 's/"session_id":"//;s/"$//' 2>/dev/null)
 fi
 
-INSTANCE_ID="${SESSION_ID:-$PPID}"
+# Require SESSION_ID - don't fall back to unreliable $PPID
+if [[ -z "$SESSION_ID" ]]; then
+    # No session_id means we can't reliably identify the session - skip silently
+    exit 0
+fi
+INSTANCE_ID="$SESSION_ID"
 
 # Cancel any pending stale-response watcher (user responded, no need to notify)
 if [[ "$INSTANCE_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
@@ -35,10 +40,5 @@ if [[ "$INSTANCE_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
     fi
 fi
 
-# Start timing this task
-if [[ -n "$SESSION_ID" ]]; then
-    CLAUDE_INSTANCE_ID="$SESSION_ID" exec "$HOME/.claude/bin/claude-slack-notify" start
-else
-    # Fallback to PPID if no session_id (shouldn't happen with properly configured hooks)
-    exec "$HOME/.claude/bin/claude-slack-notify" start
-fi
+# Start timing this task (SESSION_ID is guaranteed non-empty at this point)
+CLAUDE_INSTANCE_ID="$SESSION_ID" exec "$HOME/.claude/bin/claude-slack-notify" start

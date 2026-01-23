@@ -126,16 +126,17 @@ claude-slack-notify/
 Slack button values encode session info for the MCP server:
 
 ```
-Traditional (local sessions):
-  {session_id}|{action}
-  Example: abc123|continue
-
-Direct URL (SSH/Jupyter sessions):
+URL format (default for ALL sessions since v1.0.4):
   url:{focus_url}|{action}
   Example: url:claude-focus://ssh-linked/link123/host/user/22/main:0.0|push
+
+Legacy format (fallback only):
+  {session_id}|{action}
+  Example: abc123|continue
 ```
 
 The `url:` prefix tells MCP server to use the URL directly without session lookup.
+**v1.0.4**: URL format is now default for all sessions (more robust across project switches).
 
 ## Message Formatting (TOOL_FORMATTER)
 
@@ -375,9 +376,21 @@ rm ~/.claude/.mac-tunnel-url  # On Mac
 | v1.0.0 | Initial release with remote-as-canonical architecture |
 
 ## Current Focus
-> Last updated: 2026-01-22
+> Last updated: 2026-01-22 (evening)
 
 ### Recent Changes
+
+- **v1.0.4: Fixed cross-session notification pollution** (2026-01-22)
+  - **Root cause**: Multiple Claude sessions sharing same project directory caused wrong instance names in Slack
+  - **Problem flow**: `get-session-id` returned most recent transcript across ALL sessions in project; hooks received correct session_id but instance file lookup failed
+  - **Fixes implemented**:
+    1. **Removed `$PPID` fallback**: `CLAUDE_INSTANCE_ID` is now required, not guessed
+    2. **TERM_TARGET fallback lookup**: When session_id doesn't match, searches instances by tmux session name
+    3. **URL-first buttons**: All buttons now use `url:${FOCUS_URL}` format (eliminates session file lookup)
+    4. **Stale instance cleanup**: `/slack-notify clean` now removes instance files for dead tmux sessions
+  - **Files changed**: `bin/claude-slack-notify`, `bin/slack-notify-start`, `bin/slack-notify-waiting`
+  - **Key insight**: Session IDs change across project switches and conversation compaction; tmux session names are stable
+
 - **Fixed instance name preservation on re-registration**: Instance names now persist when `/slack-notify register` runs multiple times
   - Root cause: Cleanup logic deleted instance files BEFORE checking for existing names
   - Fix: Restructured registration into 3 phases:

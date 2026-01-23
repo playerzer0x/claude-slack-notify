@@ -9,17 +9,26 @@ INSTANCES_DIR="${CLAUDE_DIR}/instances"
 LINKS_DIR="${CLAUDE_DIR}/links"
 MIN_DURATION="${CLAUDE_NOTIFY_MIN_SECONDS:-30}"
 
-# Get instance ID - use parent PID to be consistent across hook calls
-INSTANCE_ID="${CLAUDE_INSTANCE_ID:-$PPID}"
+# Get instance ID - MUST be set by hooks via CLAUDE_INSTANCE_ID
+# Never fall back to $PPID as it's unreliable across sessions
+if [[ -z "$CLAUDE_INSTANCE_ID" ]]; then
+    # For commands that don't need instance ID (like 'update', 'status'), allow empty
+    # For notification/register commands, the calling hook must set CLAUDE_INSTANCE_ID
+    INSTANCE_ID=""
+else
+    INSTANCE_ID="$CLAUDE_INSTANCE_ID"
+fi
 
-# Validate INSTANCE_ID to prevent path traversal attacks
+# Validate INSTANCE_ID to prevent path traversal attacks (if set)
 # Only allow alphanumeric characters, underscore, and hyphen
-if [[ ! "$INSTANCE_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+if [[ -n "$INSTANCE_ID" && ! "$INSTANCE_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
     echo "Error: Invalid INSTANCE_ID format" >&2
     exit 1
 fi
 
-INSTANCE_FILE="${INSTANCES_DIR}/${INSTANCE_ID}.json"
+# Instance file path (may be empty if INSTANCE_ID not set)
+INSTANCE_FILE=""
+[[ -n "$INSTANCE_ID" ]] && INSTANCE_FILE="${INSTANCES_DIR}/${INSTANCE_ID}.json"
 TIMESTAMP_FILE="/tmp/claude-prompt-start-${INSTANCE_ID}"
 
 # -----------------------------------------------------------------------------
@@ -1420,6 +1429,38 @@ if [[ "$1" == "clean" ]]; then
 
     echo ""
     echo "Cleaned $CLEANED stale sessions, skipped $SKIPPED attached"
+
+    # Also clean up stale instance files (sessions that no longer exist)
+    INSTANCES_CLEANED=0
+    if [[ -d "$INSTANCES_DIR" ]]; then
+        for instance_file in "$INSTANCES_DIR"/*.json; do
+            [[ -f "$instance_file" ]] || continue
+
+            # Extract tmux session name from term_target
+            term_target=$(grep -o '"term_target": *"[^"]*"' "$instance_file" 2>/dev/null | cut -d'"' -f4)
+            [[ -z "$term_target" ]] && continue
+
+            # Get just the tmux part (after last |)
+            tmux_target="${term_target##*|}"
+            # Get session name (before :)
+            session_name="${tmux_target%%:*}"
+
+            [[ -z "$session_name" ]] && continue
+
+            # Check if tmux session exists
+            if ! tmux has-session -t "$session_name" 2>/dev/null; then
+                instance_name=$(grep -o '"name": *"[^"]*"' "$instance_file" 2>/dev/null | cut -d'"' -f4)
+                echo "Removing stale instance: $instance_name (tmux session '$session_name' not found)"
+                rm -f "$instance_file"
+                ((INSTANCES_CLEANED++))
+            fi
+        done
+    fi
+
+    if [[ $INSTANCES_CLEANED -gt 0 ]]; then
+        echo "Cleaned $INSTANCES_CLEANED stale instance files"
+    fi
+
     exit 0
 fi
 
@@ -2057,8 +2098,30 @@ fi
 # -----------------------------------------------------------------------------
 if [[ "$1" == "start" ]]; then
     # Only work for registered instances (prevents sub-agents from creating timers)
+    # First try direct INSTANCE_FILE lookup, then fall back to TERM_TARGET search
     if [[ ! -f "$INSTANCE_FILE" ]]; then
-        exit 0
+        detect_terminal
+        if [[ -n "$TERM_TARGET" ]]; then
+            for candidate_file in "$INSTANCES_DIR"/*.json; do
+                [[ -f "$candidate_file" ]] || continue
+                candidate_target=$(grep -o '"term_target": *"[^"]*"' "$candidate_file" 2>/dev/null | cut -d'"' -f4)
+                if [[ -n "$candidate_target" ]]; then
+                    our_tmux="${TERM_TARGET##*|}"
+                    our_session="${our_tmux%%:*}"
+                    cand_tmux="${candidate_target##*|}"
+                    cand_session="${cand_tmux%%:*}"
+                    if [[ "$our_session" == "$cand_session" ]]; then
+                        INSTANCE_FILE="$candidate_file"
+                        INSTANCE_ID=$(basename "$candidate_file" .json)
+                        TIMESTAMP_FILE="/tmp/claude-prompt-start-${INSTANCE_ID}"
+                        break
+                    fi
+                fi
+            done
+        fi
+        if [[ ! -f "$INSTANCE_FILE" ]]; then
+            exit 0
+        fi
     fi
 
     # Only start a new timer if one isn't already running
@@ -2202,8 +2265,31 @@ format_tool_waiting
 
 if [[ "$1" == "check" ]]; then
     # Only work for registered instances (prevents sub-agents from notifying)
+    # First try direct INSTANCE_FILE lookup, then fall back to TERM_TARGET search
     if [[ ! -f "$INSTANCE_FILE" ]]; then
-        exit 0
+        # Try TERM_TARGET fallback
+        detect_terminal
+        if [[ -n "$TERM_TARGET" ]]; then
+            for candidate_file in "$INSTANCES_DIR"/*.json; do
+                [[ -f "$candidate_file" ]] || continue
+                candidate_target=$(grep -o '"term_target": *"[^"]*"' "$candidate_file" 2>/dev/null | cut -d'"' -f4)
+                if [[ -n "$candidate_target" ]]; then
+                    our_tmux="${TERM_TARGET##*|}"
+                    our_session="${our_tmux%%:*}"
+                    cand_tmux="${candidate_target##*|}"
+                    cand_session="${cand_tmux%%:*}"
+                    if [[ "$our_session" == "$cand_session" ]]; then
+                        INSTANCE_FILE="$candidate_file"
+                        INSTANCE_ID=$(basename "$candidate_file" .json)
+                        break
+                    fi
+                fi
+            done
+        fi
+        # If still not found, exit
+        if [[ ! -f "$INSTANCE_FILE" ]]; then
+            exit 0
+        fi
     fi
 
     # Read stdin to get hook event data
@@ -2441,13 +2527,39 @@ fi
 INSTANCE_NAME="Claude"
 HOSTNAME=$(hostname -s 2>/dev/null || echo "unknown")
 
-if [[ -f "$INSTANCE_FILE" ]]; then
+# Dynamically detect current terminal first (needed for TERM_TARGET fallback)
+detect_terminal
+
+# Try to load instance by INSTANCE_ID first
+if [[ -n "$INSTANCE_FILE" && -f "$INSTANCE_FILE" ]]; then
     INSTANCE_NAME=$(grep -o '"name": *"[^"]*"' "$INSTANCE_FILE" | cut -d'"' -f4)
     HOSTNAME=$(grep -o '"hostname": *"[^"]*"' "$INSTANCE_FILE" | cut -d'"' -f4)
 fi
 
-# Dynamically detect current terminal (tmux window/pane can change)
-detect_terminal
+# FALLBACK: If INSTANCE_FILE not found but we have TERM_TARGET, search by terminal
+# This handles cases where session_id changed (project switch, conversation compaction)
+if [[ ! -f "$INSTANCE_FILE" && -n "$TERM_TARGET" ]]; then
+    for candidate_file in "$INSTANCES_DIR"/*.json; do
+        [[ -f "$candidate_file" ]] || continue
+        candidate_target=$(grep -o '"term_target": *"[^"]*"' "$candidate_file" 2>/dev/null | cut -d'"' -f4)
+        if [[ -n "$candidate_target" ]]; then
+            # Extract tmux session name from both targets for comparison
+            # TERM_TARGET format: tmux_session:window.pane or LINK_ID|HOST|USER|PORT|tmux_session:window.pane
+            our_tmux="${TERM_TARGET##*|}"      # Get part after last |
+            our_session="${our_tmux%%:*}"       # Get session name before :
+            cand_tmux="${candidate_target##*|}"
+            cand_session="${cand_tmux%%:*}"
+
+            if [[ "$our_session" == "$cand_session" ]]; then
+                INSTANCE_FILE="$candidate_file"
+                INSTANCE_ID=$(basename "$candidate_file" .json)
+                INSTANCE_NAME=$(grep -o '"name": *"[^"]*"' "$INSTANCE_FILE" | cut -d'"' -f4)
+                HOSTNAME=$(grep -o '"hostname": *"[^"]*"' "$INSTANCE_FILE" | cut -d'"' -f4)
+                break
+            fi
+        fi
+    done
+fi
 
 # Fallback to stored values if detection failed or FOCUS_URL is empty
 # This handles: Docker containers, SSH sessions where CLAUDE_LINK_ID isn't in hook env
@@ -2537,13 +2649,14 @@ Push|push"
         BUTTON_CONFIG_CONTENT=$(cat "$BUTTON_CONFIG")
     fi
 
-    # For remote sessions (ssh-linked, jupyter-tmux), embed the focus URL directly
-    # in the button value so the local MCP server doesn't need to look up the session
-    # (session file is on remote, MCP server is on local)
-    BUTTON_VALUE_PREFIX="${INSTANCE_ID}"
-    if [[ "$TERM_TYPE" == "ssh-linked" || "$TERM_TYPE" == "jupyter-tmux" ]]; then
-        # Use url: prefix so MCP server knows to use focus URL directly
+    # Always use URL-first format for button values (more robust)
+    # This embeds the focus URL directly, eliminating session file lookup
+    # Benefits: works across project switches, conversation compaction, etc.
+    if [[ -n "$FOCUS_URL" ]]; then
         BUTTON_VALUE_PREFIX="url:${FOCUS_URL}"
+    else
+        # Fallback to instance ID only if focus URL unavailable (shouldn't happen)
+        BUTTON_VALUE_PREFIX="${INSTANCE_ID}"
     fi
 
     # Build action buttons from config

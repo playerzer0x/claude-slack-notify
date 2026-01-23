@@ -1991,21 +1991,26 @@ if [[ "$1" == "status" ]]; then
         echo "    MCP Server: ✗ not running"
     fi
 
-    # Check ngrok tunnel
-    NGROK_URL=""
-    if [[ -f "${CLAUDE_DIR}/.ngrok.log" ]]; then
-        NGROK_URL=$(grep -o '"url":"https://[^"]*"' "${CLAUDE_DIR}/.ngrok.log" 2>/dev/null | tail -1 | cut -d'"' -f4)
+    # Check tunnel (Tailscale Funnel or Localtunnel)
+    TUNNEL_URL=""
+    TUNNEL_TYPE=""
+    if [[ -f "${CLAUDE_DIR}/.tunnel-url" ]]; then
+        TUNNEL_URL=$(cat "${CLAUDE_DIR}/.tunnel-url" 2>/dev/null)
+        TUNNEL_TYPE=$(cat "${CLAUDE_DIR}/.tunnel-type" 2>/dev/null || echo "unknown")
+    elif [[ -f "${CLAUDE_DIR}/.remote-tunnel-url" ]]; then
+        TUNNEL_URL=$(cat "${CLAUDE_DIR}/.remote-tunnel-url" 2>/dev/null)
+        TUNNEL_TYPE=$(cat "${CLAUDE_DIR}/.remote-tunnel-type" 2>/dev/null || echo "remote")
     fi
-    if [[ -n "$NGROK_URL" ]]; then
+    if [[ -n "$TUNNEL_URL" ]]; then
         # Verify tunnel is actually responding
-        if curl -sf "$NGROK_URL" --max-time 2 >/dev/null 2>&1; then
-            echo "    Ngrok Tunnel: ✓ $NGROK_URL"
+        if curl -sf "${TUNNEL_URL}/health" --max-time 2 >/dev/null 2>&1; then
+            echo "    Tunnel: ✓ $TUNNEL_URL ($TUNNEL_TYPE)"
         else
-            echo "    Ngrok Tunnel: ⚠ URL found but not responding"
-            echo "                  $NGROK_URL"
+            echo "    Tunnel: ⚠ URL found but not responding"
+            echo "            $TUNNEL_URL ($TUNNEL_TYPE)"
         fi
     else
-        echo "    Ngrok Tunnel: ✗ not running"
+        echo "    Tunnel: ✗ not running"
     fi
     echo ""
 
@@ -2628,7 +2633,7 @@ BUTTON_BLOCK=""
 if [[ -n "$FOCUS_URL" ]]; then
     # Check if MCP server is running for hybrid button support
     # For linked sessions (ssh-linked, jupyter-tmux), assume MCP server is on the local machine
-    # which we can't reach from here - use interactive buttons (they'll route through ngrok)
+    # which we can't reach from here - use interactive buttons (they'll route through the tunnel)
     MCP_SERVER_RUNNING=""
     if [[ "$TERM_TYPE" == "ssh-linked" || "$TERM_TYPE" == "jupyter-tmux" ]]; then
         # Linked session: MCP server is on local machine, use interactive buttons

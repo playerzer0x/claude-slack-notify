@@ -9,13 +9,15 @@ Local Mac                              Remote Server (time-machine)
 ─────────────                          ────────────────────────────
 ┌─────────────────┐                    ┌─────────────────┐
 │ local-tunnel    │                    │ Claude Code     │
-│  ├─ ngrok       │◄───── Slack ──────►│  └─ /slack-notify│
+│  ├─ Tailscale   │◄───── Slack ──────►│  └─ /slack-notify│
 │  └─ MCP server  │                    │     (hooks)     │
 ├─────────────────┤                    └─────────────────┘
 │ focus-helper    │◄─────────────────── SSH ──────────────
 │ ~/.claude/links/│                    │ ~/.claude/instances/
 └─────────────────┘                    └─────────────────┘
 ```
+
+**Tunneling**: Uses Tailscale Funnel by default, falls back to Localtunnel if unavailable.
 
 **Key insight**: For linked SSH sessions, the session file is on the **remote**, but the MCP server runs on the **local** Mac.
 
@@ -151,7 +153,7 @@ local-tunnel
 # - Rebuilds if source changed
 # - Copies to ~/.claude/mcp-server-dist/
 # - Restarts MCP server
-# - Starts ngrok
+# - Starts tunnel (Tailscale Funnel or Localtunnel)
 
 # 3. On remote, update the notification script:
 scp bin/claude-slack-notify remote:~/.claude/bin/
@@ -168,8 +170,8 @@ tail -f ~/.claude/mcp-server.log ~/.claude/logs/focus-debug.log
 # Check MCP server is running:
 curl http://localhost:8463/health
 
-# Check ngrok is tunneling:
-cat ~/.claude/.ngrok.log | grep '"url"'
+# Check tunnel URL:
+cat ~/.claude/.tunnel-url
 ```
 
 ### Debugging Checklist
@@ -188,9 +190,9 @@ If buttons aren't working:
    ls -la ./mcp-server/dist/routes/slack.js
    ```
 
-3. **Is ngrok URL correct in Slack app?**
+3. **Is tunnel URL correct in Slack app?**
    ```bash
-   cat ~/.claude/.ngrok.log | grep '"url"'
+   cat ~/.claude/.tunnel-url
    ```
    Then verify this matches the Request URL in Slack app settings.
 
@@ -211,7 +213,7 @@ If buttons aren't working:
 | File | Purpose |
 |------|---------|
 | `bin/claude-slack-notify` | Main CLI - register, notify, remote commands |
-| `bin/local-tunnel` | Starts ngrok + MCP server for button support |
+| `bin/local-tunnel` | Starts tunnel (Tailscale/Localtunnel) + MCP server for button support |
 | `bin/focus-helper` | Handles `claude-focus://` URLs, switches terminals |
 | `bin/mcp-server` | Launcher script for MCP server |
 | `mcp-server/src/routes/slack.ts` | Handles Slack button click webhooks |

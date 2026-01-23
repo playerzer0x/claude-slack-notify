@@ -135,8 +135,8 @@ send_tmux_input() {
 }
 
 # Send input to iTerm2 session (by TTY or ID)
-# Uses "write text" with carriage return character directly to iTerm2
-# (avoids System Events which requires focus)
+# Switches to the specific session first, then uses System Events for Return
+# (Claude Code/iTerm has quirks with newline characters, System Events is more reliable)
 send_iterm_input() {
     local property="$1"  # "tty" or "id"
     local target="$2"
@@ -149,8 +149,20 @@ tell application "iTerm2"
         repeat with t in tabs of w
             repeat with s in sessions of t
                 if ($property of s) is "$target" then
-                    -- Send text followed by Return (carriage return)
-                    tell s to write text "$input" & return
+                    -- First: switch to this specific session
+                    select s
+                    set index of w to 1
+                    activate
+                    -- Wait for focus to settle
+                    delay 0.15
+                    -- Send text without newline
+                    tell s to write text "$input" newline NO
+                    -- Wait for text to appear
+                    delay 0.1
+                    -- Use System Events for Return (now that correct session is frontmost)
+                    tell application "System Events"
+                        key code 36
+                    end tell
                     return
                 end if
             end repeat

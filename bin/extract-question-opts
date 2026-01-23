@@ -46,7 +46,7 @@ if __name__ == '__main__':
         sys.exit(0)
 
     transcript_path = sys.argv[1]
-    num_lines = int(sys.argv[2]) if len(sys.argv) > 2 else 100
+    num_lines = int(sys.argv[2]) if len(sys.argv) > 2 else 500
 
     result = extract_question_opts(transcript_path, num_lines)
     print(json.dumps(result))

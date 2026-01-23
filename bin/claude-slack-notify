@@ -2890,6 +2890,20 @@ if [[ -n "$USE_API" ]]; then
   "created": "$(date -Iseconds)"
 }
 EOF
+            # Register thread with Mac's MCP server (for SSH-linked sessions)
+            # This allows thread replies from Slack to be forwarded to this terminal
+            MAC_TUNNEL_URL=""
+            if [[ -f "${CLAUDE_DIR}/.mac-tunnel-url" ]]; then
+                MAC_TUNNEL_URL=$(cat "${CLAUDE_DIR}/.mac-tunnel-url" 2>/dev/null)
+            fi
+            if [[ -n "$MAC_TUNNEL_URL" && -n "$FOCUS_URL" ]]; then
+                # Register in background to not slow down notification
+                (curl -s -X POST \
+                    -H 'Content-type: application/json' \
+                    --data "{\"thread_ts\":\"$THREAD_TS\",\"session_id\":\"$INSTANCE_ID\",\"focus_url\":\"$FOCUS_URL\",\"instance_name\":\"$INSTANCE_NAME\"}" \
+                    "${MAC_TUNNEL_URL}/slack/register-thread" \
+                    --max-time 5 >/dev/null 2>&1) &
+            fi
         fi
     fi
 else

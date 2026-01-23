@@ -219,6 +219,51 @@ router.post('/focus', express.json(), async (req: Request, res: Response) => {
   }
 });
 
+// POST /register-thread - Register thread info from remote server
+// Allows remote servers to register thread mappings so replies can be forwarded
+router.post('/register-thread', express.json(), async (req: Request, res: Response) => {
+  touchActivityFile();
+
+  try {
+    const { thread_ts, session_id, focus_url, instance_name } = req.body as {
+      thread_ts?: string;
+      session_id?: string;
+      focus_url?: string;
+      instance_name?: string;
+    };
+
+    if (!thread_ts || !focus_url) {
+      res.status(400).json({ success: false, message: 'Missing required fields: thread_ts, focus_url' });
+      return;
+    }
+
+    // Ensure threads directory exists
+    if (!existsSync(THREADS_DIR)) {
+      mkdirSync(THREADS_DIR, { recursive: true });
+    }
+
+    // Save thread info
+    const threadFile = join(THREADS_DIR, `${thread_ts}.json`);
+    const threadInfo = {
+      thread_ts,
+      session_id: session_id || '',
+      focus_url,
+      instance_name: instance_name || '',
+      created: new Date().toISOString(),
+    };
+    writeFileSync(threadFile, JSON.stringify(threadInfo, null, 2));
+
+    console.log(`Registered thread: ${thread_ts} -> ${focus_url}`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error registering thread:', error);
+    res.status(500).json({
+      success: false,
+      message: error instanceof Error ? error.message : 'Internal server error',
+    });
+  }
+});
+
 // POST /slack/actions - Handle Slack interactive button clicks
 router.post('/actions', verifySlackSignature, async (req: Request, res: Response) => {
   // Touch activity file to reset idle timeout

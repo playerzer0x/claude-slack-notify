@@ -17,6 +17,28 @@ const RELAY_TUNNEL_SECRET_PATH = join(CLAUDE_DIR, '.relay-tunnel-secret');
 // Relay verification constants
 const RELAY_TIMESTAMP_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
 
+// Event deduplication - track recently processed event IDs to prevent Slack retries
+const processedEvents = new Map<string, number>();
+const EVENT_DEDUP_TTL_MS = 60000; // 1 minute
+
+function isDuplicateEvent(eventId: string): boolean {
+  const now = Date.now();
+
+  // Clean up old entries
+  for (const [id, timestamp] of processedEvents.entries()) {
+    if (now - timestamp > EVENT_DEDUP_TTL_MS) {
+      processedEvents.delete(id);
+    }
+  }
+
+  if (processedEvents.has(eventId)) {
+    return true;
+  }
+
+  processedEvents.set(eventId, now);
+  return false;
+}
+
 // Load thread info by thread_ts
 interface ThreadInfo {
   thread_ts: string;
@@ -501,6 +523,15 @@ router.post('/events', async (req: Request, res: Response) => {
 
     // Handle event callbacks
     if (body.type === 'event_callback') {
+      const eventId = body.event_id || `${body.event?.ts}-${body.event?.thread_ts}`;
+
+      // Check for duplicate events (Slack retries if we're slow)
+      if (isDuplicateEvent(eventId)) {
+        console.log(`Duplicate event ignored: ${eventId}`);
+        res.status(200).send();
+        return;
+      }
+
       const event = body.event;
 
       // Only handle message events in threads (replies), ignore bot messages
@@ -508,7 +539,7 @@ router.post('/events', async (req: Request, res: Response) => {
         const threadTs = event.thread_ts;
         let messageText = event.text || '';
 
-        console.log(`Thread reply received: thread_ts=${threadTs}, text="${messageText}", files=${event.files?.length || 0}`);
+        console.log(`Thread reply received: thread_ts=${threadTs}, text="${messageText}", eventId=${eventId}`);
 
         // Look up thread info
         const threadInfo = loadThreadInfo(threadTs);

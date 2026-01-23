@@ -2213,6 +2213,26 @@ def format_tool:
         "● TaskOutput: " + (.input.task_id // "")
     elif .name == "KillShell" then
         "● KillShell: " + (.input.shell_id // "")
+    elif (.name | contains("browser_navigate")) then
+        "● 🌐 Navigate: " + (.input.url // "")
+    elif (.name | contains("browser_click")) then
+        "● 🖱️ Click: " + (.input.element // "element")
+    elif (.name | contains("browser_type")) then
+        "● ⌨️ Type: " + ((.input.text // "") | .[0:40]) + (if (.input.element // "") != "" then " in " + .input.element else "" end)
+    elif (.name | contains("browser_snapshot")) then
+        "● 📸 Browser snapshot"
+    elif (.name | contains("browser_take_screenshot")) then
+        "● 📷 Screenshot" + (if (.input.element // "") != "" then ": " + .input.element else "" end)
+    elif (.name | contains("browser_fill_form")) then
+        "● 📝 Fill form: " + ((.input.fields // []) | length | tostring) + " fields"
+    elif (.name | contains("browser_select_option")) then
+        "● 📋 Select: " + ((.input.values // []) | join(", "))
+    elif (.name | contains("browser_hover")) then
+        "● 👆 Hover: " + (.input.element // "element")
+    elif (.name | contains("browser_press_key")) then
+        "● ⌨️ Press: " + (.input.key // "key")
+    elif (.name | contains("browser_wait_for")) then
+        "● ⏳ Wait: " + (if (.input.text // "") != "" then "\"" + .input.text + "\"" elif (.input.time // 0) > 0 then (.input.time | tostring) + "s" else "condition" end)
     elif (.name | startswith("mcp__")) then
         # MCP tools: mcp__server__tool format
         "● MCP: " + ((.name | split("__") | .[1:] | join("/")) // .name) +
@@ -2287,6 +2307,26 @@ def format_tool_waiting:
         "⏳ TaskOutput: " + (.input.task_id // "")
     elif .name == "KillShell" then
         "⏳ KillShell: " + (.input.shell_id // "")
+    elif (.name | contains("browser_navigate")) then
+        "⏳ 🌐 Navigate: " + (.input.url // "")
+    elif (.name | contains("browser_click")) then
+        "⏳ 🖱️ Click: " + (.input.element // "element")
+    elif (.name | contains("browser_type")) then
+        "⏳ ⌨️ Type: " + ((.input.text // "") | .[0:40]) + (if (.input.element // "") != "" then " in " + .input.element else "" end)
+    elif (.name | contains("browser_snapshot")) then
+        "⏳ 📸 Browser snapshot"
+    elif (.name | contains("browser_take_screenshot")) then
+        "⏳ 📷 Screenshot" + (if (.input.element // "") != "" then ": " + .input.element else "" end)
+    elif (.name | contains("browser_fill_form")) then
+        "⏳ 📝 Fill form: " + ((.input.fields // []) | length | tostring) + " fields"
+    elif (.name | contains("browser_select_option")) then
+        "⏳ 📋 Select: " + ((.input.values // []) | join(", "))
+    elif (.name | contains("browser_hover")) then
+        "⏳ 👆 Hover: " + (.input.element // "element")
+    elif (.name | contains("browser_press_key")) then
+        "⏳ ⌨️ Press: " + (.input.key // "key")
+    elif (.name | contains("browser_wait_for")) then
+        "⏳ ⏳ Wait: " + (if (.input.text // "") != "" then "\"" + .input.text + "\"" elif (.input.time // 0) > 0 then (.input.time | tostring) + "s" else "condition" end)
     elif (.name | startswith("mcp__")) then
         "⏳ MCP: " + ((.name | split("__") | .[1:] | join("/")) // .name) +
         (if (.input | keys | length) > 0 then

@@ -114,26 +114,18 @@ async function sendTmuxInput(tmuxTarget: string, input: string): Promise<{ succe
 
       // Step 2: Wait for paste to complete
       setTimeout(() => {
-        // Step 3: Send Escape to exit vim INSERT mode if enabled
-        const escape = spawn('tmux', ['send-keys', '-t', tmuxTarget, 'Escape'], { stdio: 'pipe' });
-        escape.on('close', () => {
-          setTimeout(() => {
-            // Step 4: Send Enter
-            const enter = spawn('tmux', ['send-keys', '-t', tmuxTarget, 'Enter'], { stdio: 'pipe' });
-            enter.on('close', (enterCode) => {
-              if (enterCode === 0) {
-                resolve({ success: true, message: `Sent "${input}" to tmux ${tmuxTarget}` });
-              } else {
-                resolve({ success: false, message: `tmux Enter failed with code ${enterCode}` });
-              }
-            });
-            enter.on('error', (err) => {
-              resolve({ success: false, message: `tmux Enter error: ${err.message}` });
-            });
-          }, 100);
+        // Step 3: Send Enter
+        // NOTE: Removed Escape key - it was interrupting Claude Code.
+        const enter = spawn('tmux', ['send-keys', '-t', tmuxTarget, 'Enter'], { stdio: 'pipe' });
+        enter.on('close', (enterCode) => {
+          if (enterCode === 0) {
+            resolve({ success: true, message: `Sent "${input}" to tmux ${tmuxTarget}` });
+          } else {
+            resolve({ success: false, message: `tmux Enter failed with code ${enterCode}` });
+          }
         });
-        escape.on('error', () => {
-          // Escape failed, continue anyway
+        enter.on('error', (err) => {
+          resolve({ success: false, message: `tmux Enter error: ${err.message}` });
         });
       }, 200);
     });

@@ -135,8 +135,8 @@ send_tmux_input() {
 }
 
 # Send input to iTerm2 session (by TTY or ID)
-# Switches to the specific session first, then uses System Events for Return
-# (Claude Code/iTerm has quirks with newline characters, System Events is more reliable)
+# Sends text + carriage return directly to the specific session
+# Does NOT require focus - works even if another window is active
 send_iterm_input() {
     local property="$1"  # "tty" or "id"
     local target="$2"
@@ -149,20 +149,9 @@ tell application "iTerm2"
         repeat with t in tabs of w
             repeat with s in sessions of t
                 if ($property of s) is "$target" then
-                    -- First: switch to this specific session
-                    select s
-                    set index of w to 1
-                    activate
-                    -- Wait for focus to settle
-                    delay 0.15
-                    -- Send text without newline
-                    tell s to write text "$input" newline NO
-                    -- Wait for text to appear
-                    delay 0.1
-                    -- Use System Events for Return (now that correct session is frontmost)
-                    tell application "System Events"
-                        key code 36
-                    end tell
+                    -- Send text followed by carriage return (ASCII 13)
+                    -- This goes directly to the session, no focus required
+                    tell s to write text "$input" & (ASCII character 13)
                     return
                 end if
             end repeat
@@ -557,12 +546,9 @@ case "$TYPE" in
         ;;
     iterm2)
         # Pure iTerm2 - ARG1 is the session UUID
-        focus_result=$(switch_iterm_session "id" "$ARG1")
-        if [[ "$focus_result" == SUCCESS* ]]; then
-            send_iterm_input "id" "$ARG1" "$ACTION_INPUT"
-        else
-            echo "$(date): Skipping input - focus failed: $focus_result" >> $LOG_FILE
-        fi
+        # Send input first (works without focus), then try to focus
+        send_iterm_input "id" "$ARG1" "$ACTION_INPUT"
+        switch_iterm_session "id" "$ARG1"
         ;;
     terminal-tmux)
         # Terminal.app running tmux - send input first, then focus

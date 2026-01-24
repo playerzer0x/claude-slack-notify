@@ -248,7 +248,7 @@ app.post('/slack/actions', async (req: Request, res: Response) => {
     }));
     res.json({
       response_type: 'ephemeral',
-      text: '⚠️ No active session found. Your tunnel may be offline.',
+      text: 'No active session found. Your tunnel may be offline.',
     });
     return;
   }
@@ -273,10 +273,10 @@ app.post('/slack/actions', async (req: Request, res: Response) => {
     // Forward the response from the tunnel
     res.status(result.status).send(result.body);
   } else {
-    // Tunnel unreachable
+    // Tunnel unreachable - return user-friendly ephemeral message
     res.json({
       response_type: 'ephemeral',
-      text: '⚠️ Session offline. Your Mac may be asleep or tunnel disconnected.',
+      text: 'Session offline. Your Mac may be asleep or the tunnel is disconnected.',
     });
   }
 });

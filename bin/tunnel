@@ -69,6 +69,80 @@ echo_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 echo_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # =============================================================================
+# PID file helpers - stale detection and cleanup
+# =============================================================================
+
+# Check if a PID file contains a valid running process
+# Returns 0 if process is running, 1 if stale/missing
+is_pid_running() {
+    local pid_file="$1"
+    if [[ ! -f "$pid_file" ]]; then
+        return 1
+    fi
+    local pid
+    pid=$(cat "$pid_file" 2>/dev/null)
+    if [[ -z "$pid" || ! "$pid" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    if kill -0 "$pid" 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+# Clean up a stale PID file (process not running)
+# Returns 0 if cleaned, 1 if file didn't exist or process still running
+cleanup_stale_pid() {
+    local pid_file="$1"
+    local label="${2:-process}"
+    if [[ ! -f "$pid_file" ]]; then
+        return 1
+    fi
+    local pid
+    pid=$(cat "$pid_file" 2>/dev/null)
+    if [[ -z "$pid" || ! "$pid" =~ ^[0-9]+$ ]]; then
+        # Invalid PID file content, remove it
+        rm -f "$pid_file"
+        echo_warn "Removed invalid PID file: $pid_file"
+        return 0
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+        # Process not running, stale PID file
+        rm -f "$pid_file"
+        echo_warn "Cleaned up stale $label PID file (was PID: $pid)"
+        return 0
+    fi
+    return 1
+}
+
+# Clean up all stale PID files before starting
+cleanup_all_stale_pids() {
+    local cleaned=false
+    if cleanup_stale_pid "$SERVER_PID_FILE" "server"; then
+        cleaned=true
+    fi
+    if cleanup_stale_pid "$TUNNEL_PID_FILE" "tunnel"; then
+        cleaned=true
+    fi
+    if cleanup_stale_pid "$WATCHDOG_PID_FILE" "watchdog"; then
+        cleaned=true
+    fi
+    if cleanup_stale_pid "$HEARTBEAT_PID_FILE" "heartbeat"; then
+        cleaned=true
+    fi
+    $cleaned && return 0 || return 1
+}
+
+# Global cleanup handler for signal traps
+cleanup_on_exit() {
+    # Remove PID files for processes we started
+    rm -f "$TUNNEL_PID_FILE" 2>/dev/null || true
+    rm -f "$SERVER_PID_FILE" 2>/dev/null || true
+    rm -f "$WATCHDOG_PID_FILE" 2>/dev/null || true
+    rm -f "$HEARTBEAT_PID_FILE" 2>/dev/null || true
+}
+
+# =============================================================================
 # Set mode-specific configuration
 # =============================================================================
 
@@ -206,6 +280,9 @@ start_relay_heartbeat() {
     stop_relay_heartbeat
 
     (
+        # Clean up PID file on heartbeat exit
+        trap 'rm -f "$HEARTBEAT_PID_FILE"' EXIT INT TERM
+
         while true; do
             local jitter=$((RANDOM % 5))
             sleep $((30 + jitter))
@@ -1022,6 +1099,9 @@ start_watchdog() {
     touch "$ACTIVITY_FILE"
 
     (
+        # Clean up PID file on watchdog exit
+        trap 'rm -f "$WATCHDOG_PID_FILE"' EXIT INT TERM
+
         while true; do
             sleep 300
 
@@ -1390,6 +1470,9 @@ cmd_background() {
         exit 1
     fi
 
+    # Clean up any stale PID files before starting
+    cleanup_all_stale_pids || true
+
     # Check if Tailscale Funnel is already running
     if is_tailscale_funnel_active; then
         echo_info "Tailscale Funnel already running"
@@ -1485,6 +1568,11 @@ cmd_background() {
 cmd_stop() {
     local stopped=false
 
+    # Clean up any stale PID files first
+    if cleanup_all_stale_pids 2>/dev/null; then
+        stopped=true
+    fi
+
     if [[ -f "$WATCHDOG_PID_FILE" ]]; then
         stop_watchdog
         stopped=true
@@ -1543,6 +1631,21 @@ cmd_status() {
     echo ""
     echo -e "${BOLD}Tunnel Status (${MODE} mode)${NC}"
     echo ""
+
+    # Clean up stale PID files automatically
+    local had_stale=false
+    if cleanup_stale_pid "$SERVER_PID_FILE" "server" 2>/dev/null; then
+        had_stale=true
+    fi
+    if cleanup_stale_pid "$TUNNEL_PID_FILE" "tunnel" 2>/dev/null; then
+        had_stale=true
+    fi
+    if cleanup_stale_pid "$WATCHDOG_PID_FILE" "watchdog" 2>/dev/null; then
+        had_stale=true
+    fi
+    if [[ "$had_stale" == "true" ]]; then
+        echo ""
+    fi
 
     # Check Tailscale availability and status
     if has_tailscale && is_tailscale_connected; then
@@ -1677,6 +1780,9 @@ cmd_interactive() {
     fi
     echo ""
 
+    # Clean up any stale PID files before starting
+    cleanup_all_stale_pids || true
+
     local using_tailscale=false
     local using_localtunnel=false
 
@@ -1703,7 +1809,7 @@ cmd_interactive() {
     fi
     start_server
 
-    # Cleanup on exit
+    # Cleanup on exit - remove PID files and stop processes
     cleanup() {
         echo ""
         echo_info "Shutting down..."
@@ -1712,11 +1818,12 @@ cmd_interactive() {
         stop_tailscale_funnel 2>/dev/null || true
         [[ -n "${TUNNEL_PID:-}" ]] && kill "$TUNNEL_PID" 2>/dev/null || true
         stop_server
+        # Clean up all PID and state files
         rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE" "$TUNNEL_TYPE_FILE"
+        rm -f "$SERVER_PID_FILE" "$WATCHDOG_PID_FILE" "$HEARTBEAT_PID_FILE"
         exit 0
     }
-    trap cleanup INT TERM
-    trap 'rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE" "$TUNNEL_TYPE_FILE"' EXIT
+    trap cleanup INT TERM EXIT
 
     # Try Tailscale Funnel first
     if [[ "$TUNNEL_TYPE" != "localtunnel" ]] && has_tailscale && is_tailscale_connected; then

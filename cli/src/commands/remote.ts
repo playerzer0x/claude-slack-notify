@@ -6,12 +6,19 @@
  */
 
 import { execSync, spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
 import { buildFocusUrl, getClaudeDir, getLinksDir, isMac, isLinux, isInsideTmux } from '../lib/index.js';
+
+// ANSI codes for menu styling
+const MENU_BOLD = '\x1b[1m';
+const MENU_DIM = '\x1b[2m';
+const MENU_RESET = '\x1b[0m';
+const MENU_HIGHLIGHT_BG = '\x1b[48;5;197m'; // Pink/magenta background
+const MENU_HIGHLIGHT_FG = '\x1b[38;5;231m'; // White text
 
 /** Word lists for generating memorable names */
 const ADJECTIVES = [
@@ -76,6 +83,286 @@ async function prompt(message: string): Promise<string> {
 /** Wait for user to press Enter */
 async function waitForEnter(message: string = 'Press Enter to continue...'): Promise<void> {
   await prompt(message);
+}
+
+/** Session info for menu display */
+interface SessionInfo {
+  name: string;
+  lastConnected: Date | null;
+  description: string;
+}
+
+/** Get remote tmux sessions via SSH */
+function getRemoteTmuxSessions(remoteHost: string): string[] {
+  try {
+    const result = execSync(
+      `ssh -o ConnectTimeout=5 -o BatchMode=yes "${remoteHost}" 'tmux list-sessions -F "#{session_name}" 2>/dev/null || echo ""'`,
+      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 15000 },
+    );
+    return result
+      .split('\n')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+/** Get host directory for session storage */
+function getHostDir(remoteHost: string): string {
+  const claudeDir = getClaudeDir();
+  const sessionsDir = join(claudeDir, '.remote-sessions');
+  const safeHost = sanitizeHostname(remoteHost);
+  return join(sessionsDir, safeHost);
+}
+
+/** Load session info from local storage */
+function loadSessionInfo(hostDir: string, sessionName: string): SessionInfo {
+  const sessionFile = join(hostDir, `${sessionName}.json`);
+  let lastConnected: Date | null = null;
+
+  if (existsSync(sessionFile)) {
+    try {
+      const data = JSON.parse(readFileSync(sessionFile, 'utf-8'));
+      if (data.last_connected) {
+        lastConnected = new Date(data.last_connected);
+      }
+    } catch {
+      // Ignore parse errors
+    }
+  }
+
+  // Format description
+  let description = '';
+  if (lastConnected) {
+    const now = new Date();
+    const diffMs = now.getTime() - lastConnected.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) {
+      description = 'connected just now';
+    } else if (diffMins < 60) {
+      description = `connected ${diffMins} minute${diffMins === 1 ? '' : 's'} ago`;
+    } else if (diffHours < 24) {
+      description = `connected ${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
+    } else {
+      description = `connected ${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
+    }
+  }
+
+  return { name: sessionName, lastConnected, description };
+}
+
+/** Save session info to local storage */
+function saveSessionInfo(hostDir: string, sessionName: string): void {
+  mkdirSync(hostDir, { recursive: true });
+  const sessionFile = join(hostDir, `${sessionName}.json`);
+  const data = {
+    session_name: sessionName,
+    last_connected: new Date().toISOString(),
+  };
+  writeFileSync(sessionFile, JSON.stringify(data, null, 2));
+}
+
+/** Clean up sessions that no longer exist on remote */
+function cleanupDeadSessions(hostDir: string, liveSessions: string[]): void {
+  if (!existsSync(hostDir)) return;
+
+  const liveSet = new Set(liveSessions);
+  const files = readdirSync(hostDir).filter((f) => f.endsWith('.json'));
+
+  for (const file of files) {
+    const sessionName = file.replace(/\.json$/, '');
+    if (!liveSet.has(sessionName)) {
+      try {
+        const { unlinkSync } = require('node:fs');
+        unlinkSync(join(hostDir, file));
+      } catch {
+        // Ignore
+      }
+    }
+  }
+}
+
+/** Draw the menu to stderr */
+function drawMenu(selected: number, items: SessionInfo[], hostname: string, isFirstDraw: boolean): void {
+  // Move cursor up to redraw (except first time)
+  if (!isFirstDraw) {
+    // Move up: items + header + footer = items.length + 3 lines
+    process.stderr.write(`\x1b[${items.length + 3}A`);
+  }
+
+  // Clear and draw header
+  process.stderr.write('\x1b[K'); // Clear line
+  process.stderr.write(`${MENU_BOLD}Sessions on ${hostname}:${MENU_RESET}\n`);
+  process.stderr.write('\x1b[K\n'); // Empty line
+
+  // Draw items
+  for (let i = 0; i < items.length; i++) {
+    process.stderr.write('\x1b[K'); // Clear line
+    const item = items[i];
+    const isSelected = i === selected;
+
+    if (isSelected) {
+      process.stderr.write(`${MENU_HIGHLIGHT_BG}${MENU_HIGHLIGHT_FG} > ${item.name} ${MENU_RESET}`);
+      if (item.description) {
+        process.stderr.write(` ${MENU_DIM}${item.description}${MENU_RESET}`);
+      }
+    } else {
+      process.stderr.write(`   ${item.name}`);
+      if (item.description) {
+        process.stderr.write(`  ${MENU_DIM}${item.description}${MENU_RESET}`);
+      }
+    }
+    process.stderr.write('\n');
+  }
+
+  // Footer
+  process.stderr.write('\x1b[K');
+  process.stderr.write(`${MENU_DIM}↑↓ navigate  enter select  n new${MENU_RESET}\n`);
+}
+
+/** Interactive menu with arrow key navigation */
+async function interactiveMenu(items: SessionInfo[], hostname: string): Promise<{ type: 'select'; index: number } | { type: 'new' } | { type: 'quit' }> {
+  // Check if stdin is a TTY
+  if (!process.stdin.isTTY) {
+    // Fallback to simple numbered menu
+    console.error('\nSessions:');
+    items.forEach((item, i) => {
+      console.error(`  ${i + 1}. ${item.name}${item.description ? ` (${item.description})` : ''}`);
+    });
+    console.error(`  n. New session`);
+    const answer = await prompt('Select (1-' + items.length + ' or n): ');
+    if (answer.toLowerCase() === 'n') {
+      return { type: 'new' };
+    }
+    const num = parseInt(answer, 10);
+    if (num >= 1 && num <= items.length) {
+      return { type: 'select', index: num - 1 };
+    }
+    return { type: 'new' };
+  }
+
+  let selected = 0;
+
+  // Save terminal settings and reset to sane state
+  // This fixes terminal corruption after SSH disconnect
+  // CRITICAL: Use 'inherit' for stdin so stty affects the actual terminal
+  let savedStty = '';
+  let usingStty = false;
+  try {
+    // Save current settings - inherit stdin so stty can read terminal state
+    savedStty = execSync('stty -g', { encoding: 'utf-8', stdio: ['inherit', 'pipe', 'pipe'] }).trim();
+    // Reset to sane state first (critical for corrupted terminals after SSH disconnect)
+    execSync('stty sane', { stdio: ['inherit', 'pipe', 'pipe'] });
+    // Configure raw mode with stty (like bash does) - more reliable than Node's setRawMode
+    execSync('stty -icanon -echo min 1', { stdio: ['inherit', 'pipe', 'pipe'] });
+    usingStty = true;
+  } catch {
+    // Fallback to Node's setRawMode if stty fails (e.g., not a real terminal)
+    try {
+      process.stdin.setRawMode(true);
+    } catch {
+      // Ignore - will fail if not a TTY
+    }
+  }
+
+  process.stdin.resume();
+
+  // Hide cursor
+  process.stderr.write('\x1b[?25l');
+
+  // Restore on exit
+  const cleanup = () => {
+    process.stderr.write('\x1b[?25h'); // Show cursor
+    if (savedStty && usingStty) {
+      try {
+        execSync(`stty '${savedStty}'`, { stdio: ['inherit', 'pipe', 'pipe'] });
+      } catch {
+        // Ignore restore errors
+      }
+    } else {
+      try {
+        process.stdin.setRawMode(false);
+      } catch {}
+    }
+  };
+
+  // Initial draw
+  drawMenu(selected, items, hostname, true);
+
+  return new Promise((resolve) => {
+    const onData = (data: Buffer) => {
+      const key = data.toString();
+
+      // Arrow keys come as escape sequences
+      if (key === '\x1b[A' || key === 'k' || key === 'K') {
+        // Up
+        if (selected > 0) selected--;
+        drawMenu(selected, items, hostname, false);
+      } else if (key === '\x1b[B' || key === 'j' || key === 'J') {
+        // Down
+        if (selected < items.length - 1) selected++;
+        drawMenu(selected, items, hostname, false);
+      } else if (key === '\r' || key === '\n') {
+        // Enter
+        cleanup();
+        process.stdin.removeListener('data', onData);
+        process.stderr.write('\n');
+        resolve({ type: 'select', index: selected });
+      } else if (key === 'n' || key === 'N') {
+        // New
+        cleanup();
+        process.stdin.removeListener('data', onData);
+        process.stderr.write('\n');
+        resolve({ type: 'new' });
+      } else if (key === 'q' || key === 'Q' || key === '\x03') {
+        // Quit (q or Ctrl+C)
+        cleanup();
+        process.stdin.removeListener('data', onData);
+        process.stderr.write('\n');
+        resolve({ type: 'quit' });
+      }
+    };
+
+    process.stdin.on('data', onData);
+  });
+}
+
+/** Show session selection menu */
+async function showSessionMenu(
+  hostDir: string,
+  remoteHost: string,
+  liveSessions: string[],
+): Promise<{ type: 'reconnect'; session: string } | { type: 'new' } | { type: 'quit' }> {
+  // Load info for each session
+  const sessions: SessionInfo[] = liveSessions.map((name) => loadSessionInfo(hostDir, name));
+
+  // Sort by last connected (most recent first)
+  sessions.sort((a, b) => {
+    if (!a.lastConnected && !b.lastConnected) return 0;
+    if (!a.lastConnected) return 1;
+    if (!b.lastConnected) return -1;
+    return b.lastConnected.getTime() - a.lastConnected.getTime();
+  });
+
+  // Limit to 10
+  const displaySessions = sessions.slice(0, 10);
+
+  // Add "New session" option
+  displaySessions.push({ name: 'New session', lastConnected: null, description: 'start a fresh session' });
+
+  const result = await interactiveMenu(displaySessions, remoteHost);
+
+  if (result.type === 'quit') {
+    return { type: 'quit' };
+  } else if (result.type === 'new' || result.index === displaySessions.length - 1) {
+    return { type: 'new' };
+  } else {
+    return { type: 'reconnect', session: displaySessions[result.index].name };
+  }
 }
 
 /** Detect local terminal for Focus button */
@@ -245,6 +532,7 @@ export interface RemoteOptions {
   host?: string;
   session?: string;
   new?: boolean;
+  auto?: boolean;
 }
 
 /**
@@ -280,11 +568,37 @@ async function remoteMac(options: RemoteOptions): Promise<void> {
   let reconnectMode = false;
 
   if (!instanceName && !options.new) {
-    // Could add session menu here for multiple sessions
-    instanceName = generateInstanceName();
+    // Check for existing sessions on remote
+    console.log('Checking remote sessions...');
+    const liveSessions = getRemoteTmuxSessions(remoteHost);
+    const hostDir = getHostDir(remoteHost);
+
+    // Clean up dead sessions from local storage
+    cleanupDeadSessions(hostDir, liveSessions);
+
+    if (liveSessions.length === 0) {
+      // No sessions - create new
+      instanceName = generateInstanceName();
+    } else {
+      // Show session menu
+      const menuResult = await showSessionMenu(hostDir, remoteHost, liveSessions);
+
+      if (menuResult.type === 'quit') {
+        process.exit(0);
+      } else if (menuResult.type === 'reconnect') {
+        instanceName = menuResult.session;
+        reconnectMode = true;
+      } else {
+        instanceName = generateInstanceName();
+      }
+    }
   } else if (!instanceName) {
     instanceName = generateInstanceName();
   }
+
+  // Save session info for next time
+  const hostDir = getHostDir(remoteHost);
+  saveSessionInfo(hostDir, instanceName);
 
   // Generate link ID
   const linkId = generateLinkId();
@@ -330,15 +644,31 @@ async function remoteMac(options: RemoteOptions): Promise<void> {
   if (localTerminal.type !== 'unknown') {
     console.log(`Focus: ${localTerminal.type}`);
   }
-  console.log('');
-  console.log('Run /slack-notify in Claude to enable buttons');
-  console.log('');
-
-  await waitForEnter('Press Enter to connect...');
+  if (!reconnectMode) {
+    console.log('');
+    console.log('Claude will start automatically with /slack-notify');
+  }
   console.log('');
 
   // SSH and attach tmux session
-  const sshCommand = `ssh -t "${remoteHost}" "tmux new-session -A -s '${instanceName}' \\; set-environment CLAUDE_LINK_ID '${linkId}' \\; set-environment CLAUDE_SSH_HOST '${remoteHost}' \\; set-environment CLAUDE_INSTANCE_NAME '${instanceName}'"`;
+  // For new sessions: run claude /slack-notify automatically
+  // For existing sessions: just attach
+  const remoteScript = `
+if tmux has-session -t '${instanceName}' 2>/dev/null; then
+  tmux set-environment -t '${instanceName}' CLAUDE_LINK_ID '${linkId}'
+  tmux set-environment -t '${instanceName}' CLAUDE_SSH_HOST '${remoteHost}'
+  tmux set-environment -t '${instanceName}' CLAUDE_INSTANCE_NAME '${instanceName}'
+  exec tmux attach-session -t '${instanceName}'
+else
+  exec tmux new-session -s '${instanceName}' \\
+    -e CLAUDE_LINK_ID='${linkId}' \\
+    -e CLAUDE_SSH_HOST='${remoteHost}' \\
+    -e CLAUDE_INSTANCE_NAME='${instanceName}' \\
+    'claude /slack-notify; exec $SHELL'
+fi
+`.trim();
+
+  const sshCommand = `ssh -t "${remoteHost}" "${remoteScript.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`;
 
   const result = spawnSync('sh', ['-c', sshCommand], {
     stdio: 'inherit',

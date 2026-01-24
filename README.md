@@ -43,7 +43,7 @@ And in Claude Code:
 /slack-notify
 ```
 
-> **Note**: The tunnel auto-terminates after 1 hour of inactivity. Run `local-tunnel --background` to restart it.
+> **Note**: The tunnel runs indefinitely by default, persisting through sleep/wake cycles for overnight tasks. To enable auto-shutdown, set `CLAUDE_TUNNEL_IDLE_TIMEOUT=3600` (seconds).
 
 ## Installation
 

@@ -23,6 +23,8 @@ This adds Slack notifications so you can step away while Claude works - get ping
 ## Quick Start
 
 ```bash
+git clone https://github.com/playerzer0x/claude-slack-notify.git
+cd claude-slack-notify
 ./install.sh
 ```
 
@@ -42,6 +44,80 @@ And in Claude Code:
 ```
 
 > **Note**: The tunnel auto-terminates after 1 hour of inactivity. Run `local-tunnel --background` to restart it.
+
+## Installation
+
+### Prerequisites
+
+- **[bun](https://bun.sh)** - Required to build the CLI binary
+  ```bash
+  curl -fsSL https://bun.sh/install | bash
+  ```
+
+- **Tailscale** (recommended) - For stable tunnel URLs
+  - macOS: `brew install tailscale`
+  - Linux: `curl -fsSL https://tailscale.com/install.sh | sh`
+
+### macOS
+
+```bash
+# Clone and install
+git clone https://github.com/playerzer0x/claude-slack-notify.git
+cd claude-slack-notify
+./install.sh
+
+# Verify CLI installed
+claude-notify --version  # Should show 1.1.0
+
+# Start tunnel
+local-tunnel
+```
+
+### Linux (Remote Server)
+
+```bash
+# Install bun first
+curl -fsSL https://bun.sh/install | bash
+source ~/.bashrc
+
+# Clone and install
+git clone https://github.com/playerzer0x/claude-slack-notify.git
+cd claude-slack-notify
+./install.sh
+
+# Verify CLI installed
+claude-notify --version  # Should show 1.1.0
+
+# Start tunnel (if running Claude directly on Linux)
+remote-tunnel
+```
+
+### Manual CLI Build
+
+If the installer didn't build the CLI (bun not found), build it manually:
+
+```bash
+cd cli
+bun install
+bun run build
+
+# Binary created at ../bin/claude-notify
+# Copy to PATH
+cp ../bin/claude-notify ~/.claude/bin/
+```
+
+### Verify Installation
+
+```bash
+# Check CLI version
+claude-notify --version
+
+# Check system status
+claude-notify status
+
+# List registered sessions
+ls ~/.claude/instances/
+```
 
 ## Tailscale Funnel Setup (Recommended)
 
@@ -98,7 +174,7 @@ Focus your local terminal while sending input to a remote Claude session.
 
 **On the remote server** (notifications only - no tunnel needed):
 ```bash
-git clone https://github.com/anthropics/claude-slack-notify.git
+git clone https://github.com/playerzer0x/claude-slack-notify.git
 cd claude-slack-notify
 ./install.sh
 ```

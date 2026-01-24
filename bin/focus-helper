@@ -407,13 +407,29 @@ tell application "iTerm2"
         set isFullscreen to false
     end try
 
-    -- Phase 2: Focus sequence with retry loop (up to 4 attempts for fullscreen)
+    -- Phase 2: Minimize other windows to prevent focus stealing
+    -- This is needed when other windows have active terminal sessions (e.g., SSH)
+    -- that can grab focus due to output activity
+    set minimizedWindows to {}
+    repeat with w in windows
+        if (id of w) is not targetWindowId then
+            if not (miniaturized of w) then
+                set end of minimizedWindows to w
+                set miniaturized of w to true
+            end if
+        end if
+    end repeat
+    delay 0.2
+
+    -- Phase 3: Focus sequence with retry loop (up to 4 attempts for fullscreen)
     set maxAttempts to 3
     if isFullscreen then set maxAttempts to 4
     set attemptNum to 0
     set focusSuccess to false
-    set baseDelay to 0.15
-    if isFullscreen then set baseDelay to 0.3
+    -- Use longer delays to prevent focus race conditions with other windows
+    -- (e.g., SSH sessions with terminal output can steal focus with short delays)
+    set baseDelay to 0.3
+    if isFullscreen then set baseDelay to 0.5
 
     repeat while attemptNum < maxAttempts and not focusSuccess
         set attemptNum to attemptNum + 1
@@ -434,11 +450,12 @@ tell application "iTerm2"
         -- Step 4: Activate iTerm2 - this triggers Space switch if needed
         activate
 
-        -- Longer delay for Space switching animation
+        -- Longer delay to let window manager settle and prevent focus stealing
+        -- SSH sessions with active output can grab focus back if delay is too short
         if isFullscreen or attemptNum > 1 then
-            delay 0.4
+            delay 0.6
         else
-            delay 0.15
+            delay 0.5
         end if
 
         -- Step 5: Use System Events to ensure window is raised
@@ -456,8 +473,8 @@ tell application "iTerm2"
             end tell
         end tell
 
-        -- Delay for AXRaise
-        delay 0.1
+        -- Delay for AXRaise (or if it failed, just a settling delay)
+        delay 0.2
 
         -- Phase 3: Verify the correct window is focused
         try
@@ -466,12 +483,12 @@ tell application "iTerm2"
                 set focusSuccess to true
             else
                 -- Wrong window focused
-                -- On retry, try more aggressive approach
+                -- On retry, try more aggressive approach with longer delays
                 if attemptNum < maxAttempts then
-                    delay (0.3 * attemptNum)
+                    delay (0.5 * attemptNum)
                     -- Try activating again - sometimes helps with Space switching
                     activate
-                    delay 0.2
+                    delay 0.4
                 end if
             end if
         on error errMsg
@@ -487,19 +504,20 @@ tell application "iTerm2"
         -- One more try with maximum delays
         set index of targetWindow to 1
         select targetWindow
-        delay 0.5
+        delay 0.7
         activate
-        delay 0.5
+        delay 0.7
         tell application "System Events"
             tell process "iTerm2"
                 set frontmost to true
-                delay 0.1
+                delay 0.2
                 try
                     perform action "AXRaise" of first window
                 end try
             end tell
         end tell
         -- Check one more time
+        delay 0.3
         try
             set frontWindowId to id of first window
             if frontWindowId is equal to targetWindowId then
@@ -507,6 +525,14 @@ tell application "iTerm2"
             end if
         end try
     end if
+
+    -- Phase 4: Restore previously minimized windows
+    delay 0.3
+    repeat with w in minimizedWindows
+        try
+            set miniaturized of w to false
+        end try
+    end repeat
 
     if focusSuccess then
         if isFullscreen then
@@ -636,9 +662,25 @@ case "$TYPE" in
     local-tmux)
         # Local tmux session (started via claude-slack-notify launch)
         # Uses gastown pattern for reliable Enter submission to Claude Code
-        # ARG1 = tmux target (session:window.pane)
-        tmux_target="$ARG1"
-        echo "$(date): Local-tmux: target=$tmux_target input='$ACTION_INPUT'" >> "$LOG_FILE"
+        #
+        # Two URL formats supported:
+        # 1. New: claude-focus://local-tmux/ITERM_SESSION_ID/TMUX_TARGET
+        #    ARG1 = iterm_session_id, ARG2 = tmux_target
+        # 2. Old: claude-focus://local-tmux/TMUX_TARGET
+        #    ARG1 = tmux_target (no session ID)
+        #
+        # Detect format: if ARG2 is set, we have the new format
+        iterm_session_id=""
+        tmux_target=""
+        if [[ -n "$ARG2" ]]; then
+            # New format: ARG1 = iterm_session_id, ARG2 = tmux_target
+            iterm_session_id="$ARG1"
+            tmux_target="$ARG2"
+        else
+            # Old format: ARG1 = tmux_target
+            tmux_target="$ARG1"
+        fi
+        echo "$(date): Local-tmux: iterm_id=$iterm_session_id target=$tmux_target input='$ACTION_INPUT'" >> "$LOG_FILE"
 
         if [[ -n "$ACTION_INPUT" ]]; then
             # Gastown pattern: reliable input delivery to Claude Code
@@ -669,11 +711,18 @@ case "$TYPE" in
             done
         fi
 
-        # Try to bring the terminal window to front (convenience, not required for input)
-        client_tty=$($TMUX_BIN -S "$TMUX_SOCKET" list-clients -t "${tmux_target%%:*}" -F '#{client_tty}' 2>/dev/null | head -1)
-        if [[ -n "$client_tty" ]]; then
-            switch_iterm_session "tty" "$client_tty" 2>/dev/null || \
-            switch_terminal_tab "$client_tty" 2>/dev/null
+        # Try to bring the terminal window to front
+        # Prefer iTerm session ID (new format) - more reliable
+        # Fall back to TTY-based lookup (old format)
+        if [[ -n "$iterm_session_id" ]]; then
+            switch_iterm_session "id" "$iterm_session_id"
+        else
+            # TTY-based lookup (may fail if multiple windows have activity)
+            client_tty=$($TMUX_BIN -S "$TMUX_SOCKET" list-clients -t "${tmux_target%%:*}" -F '#{client_tty}' 2>/dev/null | head -1)
+            if [[ -n "$client_tty" ]]; then
+                switch_iterm_session "tty" "$client_tty" 2>/dev/null || \
+                switch_terminal_tab "$client_tty" 2>/dev/null
+            fi
         fi
         ;;
     ssh-linked)

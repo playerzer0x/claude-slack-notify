@@ -936,6 +936,18 @@ if [[ "$1" == "launch" ]]; then
         fi
     fi
 
+    # Capture iTerm session ID before creating tmux (for reliable Focus button)
+    # This is more reliable than TTY-based lookup which can fail when multiple
+    # windows have terminal activity
+    ITERM_SESSION_ID=""
+    if [[ -n "$ITERM_SESSION_ID" ]]; then
+        # Already set by iTerm
+        ITERM_SESSION_ID="$ITERM_SESSION_ID"
+    else
+        # Query iTerm for current session ID
+        ITERM_SESSION_ID=$(osascript -e 'tell application "iTerm2" to tell current session of current tab of current window to return id' 2>/dev/null)
+    fi
+
     # Create new tmux session with Claude
     # The session runs a wrapper that:
     # 1. Sets CLAUDE_TMUX_SESSION in tmux environment (accessible by all processes)
@@ -953,6 +965,9 @@ if [[ "$1" == "launch" ]]; then
     tmux set-environment -t "$SESSION_NAME" CLAUDE_TMUX_SESSION "$SESSION_NAME"
     tmux set-environment -t "$SESSION_NAME" CLAUDE_TMUX_TARGET "$TMUX_TARGET"
     tmux set-environment -t "$SESSION_NAME" CLAUDE_INSTANCE_NAME "$SESSION_NAME"
+    if [[ -n "$ITERM_SESSION_ID" ]]; then
+        tmux set-environment -t "$SESSION_NAME" CLAUDE_ITERM_SESSION_ID "$ITERM_SESSION_ID"
+    fi
 
     # Also export in shell for immediate use
     tmux send-keys -t "$SESSION_NAME" "export CLAUDE_TMUX_SESSION='$SESSION_NAME'" Enter
@@ -1702,9 +1717,25 @@ detect_terminal() {
 
     if [[ -n "$tmux_session" ]]; then
         tmux_target="${tmux_target:-$tmux_session:0.0}"
+
+        # Get iTerm session ID if available (more reliable for focusing)
+        local iterm_session_id=""
+        if [[ -n "$CLAUDE_ITERM_SESSION_ID" ]]; then
+            iterm_session_id="$CLAUDE_ITERM_SESSION_ID"
+        elif [[ -n "$TMUX" ]]; then
+            iterm_session_id=$(tmux show-environment CLAUDE_ITERM_SESSION_ID 2>/dev/null | cut -d= -f2-)
+            [[ "$iterm_session_id" == "-CLAUDE_ITERM_SESSION_ID" ]] && iterm_session_id=""
+        fi
+
         TERM_TYPE="local-tmux"
         TERM_TARGET="$tmux_target"
-        FOCUS_URL="claude-focus://local-tmux/$(url_encode "$tmux_target")"
+        # Include iTerm session ID in URL for reliable focus (TTY-based focus can fail
+        # when multiple windows have terminal activity)
+        if [[ -n "$iterm_session_id" ]]; then
+            FOCUS_URL="claude-focus://local-tmux/$(url_encode "$iterm_session_id")/$(url_encode "$tmux_target")"
+        else
+            FOCUS_URL="claude-focus://local-tmux/$(url_encode "$tmux_target")"
+        fi
         return
     fi
 

@@ -7,18 +7,10 @@
 
 import { Redis } from 'ioredis';
 
+import type { TenantRegistration } from './types.js';
 import { validateTunnelUrl } from './validation.js';
 
 const REGISTRATION_TTL_SECONDS = 60; // Expire after 60s without heartbeat
-
-interface TenantRegistration {
-  tunnel_url: string;
-  tunnel_secret: string;
-  registered_at: string;
-  last_heartbeat: string;
-  hostname?: string;
-  instance_name?: string;
-}
 
 let redis: Redis | null = null;
 

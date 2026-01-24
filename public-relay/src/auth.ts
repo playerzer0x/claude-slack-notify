@@ -9,14 +9,11 @@
 
 import type { NextFunction, Request, Response } from 'express';
 
+import type { ApiKeyEntry } from './types.js';
+
 // API keys can be set via environment variable or loaded from a file
 // Format: comma-separated list of "key:app_id" pairs
 // Example: RELAY_API_KEYS="sk_abc123:A0B1C2D3,sk_def456:A4B5C6D7"
-
-interface ApiKeyEntry {
-  key: string;
-  appId: string | null; // null = wildcard (any app_id)
-}
 
 let apiKeys: ApiKeyEntry[] = [];
 

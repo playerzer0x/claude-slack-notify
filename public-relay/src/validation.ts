@@ -7,6 +7,8 @@
  * - Non-HTTPS connections
  */
 
+import type { ValidationResult } from './types.js';
+
 // Private IP ranges that should never be forwarded to
 const PRIVATE_IP_PATTERNS = [
   /^127\./,                    // Loopback
@@ -28,11 +30,6 @@ const BLOCKED_HOSTNAMES = new Set([
   'metadata',
   '169.254.169.254',
 ]);
-
-export interface ValidationResult {
-  valid: boolean;
-  reason?: string;
-}
 
 /**
  * Validate a tunnel URL is safe to forward requests to

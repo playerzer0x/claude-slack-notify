@@ -849,6 +849,83 @@ if [[ "$1" == "links" ]]; then
 fi
 
 # -----------------------------------------------------------------------------
+# Launch command - start Claude in a local tmux session for reliable input
+# Usage: claude-slack-notify launch [session-name]
+# This is the recommended way to run Claude on Mac for thread reply support.
+# Uses tmux send-keys (gastown pattern) instead of AppleScript for Enter.
+# -----------------------------------------------------------------------------
+if [[ "$1" == "launch" ]]; then
+    shift
+    SESSION_NAME="${1:-}"
+
+    # Platform check - macOS only (for now)
+    if [[ "$(uname)" != "Darwin" ]]; then
+        echo "Error: 'launch' command is currently for macOS only." >&2
+        echo "On Linux, Claude already runs in tmux via 'remote' command." >&2
+        exit 1
+    fi
+
+    # Check if tmux is available
+    if ! command -v tmux &>/dev/null; then
+        echo "Error: tmux is required. Install with: brew install tmux" >&2
+        exit 1
+    fi
+
+    # Check if already inside tmux
+    if [[ -n "$TMUX" ]]; then
+        echo "Error: Already inside a tmux session." >&2
+        echo "Either run 'claude' directly here and use /slack-notify," >&2
+        echo "or exit tmux and run 'claude-slack-notify launch' from outside." >&2
+        exit 1
+    fi
+
+    # Generate session name if not provided
+    if [[ -z "$SESSION_NAME" ]]; then
+        SESSION_NAME="claude-$(head -c 6 /dev/urandom | base64 | tr -dc 'a-z0-9' | head -c 6)"
+    fi
+
+    # Check if session already exists
+    if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+        echo "Attaching to existing session: $SESSION_NAME"
+        exec tmux attach-session -t "$SESSION_NAME"
+    fi
+
+    # Platform check for tunnel setup (macOS only)
+    if [[ "$(uname)" == "Darwin" ]]; then
+        # Check local-tunnel and start if needed
+        LOCAL_TUNNEL="${CLAUDE_DIR}/bin/local-tunnel"
+        if [[ -x "$LOCAL_TUNNEL" ]]; then
+            STATUS=$(check_local_tunnel_status 2>/dev/null || echo "stopped")
+            if [[ "$STATUS" == "stopped" ]]; then
+                echo "Starting local-tunnel in background..."
+                "$LOCAL_TUNNEL" --background 2>/dev/null &
+                sleep 2
+            fi
+        fi
+    fi
+
+    # Create new tmux session with Claude
+    # The session runs a wrapper that:
+    # 1. Exports CLAUDE_TMUX_SESSION for the hooks to detect
+    # 2. Runs claude
+    # 3. Kills the session when claude exits
+    echo "Creating tmux session: $SESSION_NAME"
+    tmux new-session -d -s "$SESSION_NAME" -x 200 -y 50
+
+    # Send the claude command to the session
+    # Export env vars for slack-notify to detect this is a local-tmux session
+    tmux send-keys -t "$SESSION_NAME" "export CLAUDE_TMUX_SESSION='$SESSION_NAME'" Enter
+    sleep 0.1
+    tmux send-keys -t "$SESSION_NAME" "export CLAUDE_TMUX_TARGET='$SESSION_NAME:0.0'" Enter
+    sleep 0.1
+    tmux send-keys -t "$SESSION_NAME" "claude" Enter
+
+    # Attach to the session
+    echo "Attaching to Claude session..."
+    exec tmux attach-session -t "$SESSION_NAME"
+fi
+
+# -----------------------------------------------------------------------------
 # Local command - check/start local-tunnel (macOS), then register session
 # Usage: claude-slack-notify local [optional-name]
 # -----------------------------------------------------------------------------
@@ -1520,6 +1597,16 @@ detect_terminal() {
     TERM_TYPE="unknown"
     TERM_TARGET=""
     FOCUS_URL=""
+
+    # Check for local-tmux session (started via claude-slack-notify launch)
+    # This uses tmux send-keys with gastown pattern for reliable Enter submission
+    if [[ -n "$CLAUDE_TMUX_SESSION" ]]; then
+        local tmux_target="${CLAUDE_TMUX_TARGET:-$CLAUDE_TMUX_SESSION:0.0}"
+        TERM_TYPE="local-tmux"
+        TERM_TARGET="$tmux_target"
+        FOCUS_URL="claude-focus://local-tmux/$(url_encode "$tmux_target")"
+        return
+    fi
 
     # If in tmux, try to get link variables from tmux session environment
     # This is needed because tmux set-environment stores vars at session level,

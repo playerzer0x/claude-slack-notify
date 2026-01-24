@@ -135,8 +135,8 @@ send_tmux_input() {
 }
 
 # Send input to iTerm2 session (by TTY or ID)
-# Sends text + carriage return directly to the specific session
-# Does NOT require focus - works even if another window is active
+# Switches to the specific session first, then uses System Events for Return
+# (Claude Code/iTerm has quirks with newline characters, System Events is more reliable)
 send_iterm_input() {
     local property="$1"  # "tty" or "id"
     local target="$2"
@@ -149,9 +149,65 @@ tell application "iTerm2"
         repeat with t in tabs of w
             repeat with s in sessions of t
                 if ($property of s) is "$target" then
-                    -- Send text followed by carriage return (ASCII 13)
-                    -- This goes directly to the session, no focus required
-                    tell s to write text "$input" & (ASCII character 13)
+                    -- Store window reference and ID for verification
+                    set targetWindow to w
+                    set targetWindowId to id of w
+
+                    -- First: switch to this specific session
+                    select s
+                    set index of w to 1
+                    activate
+                    -- Wait for focus to settle
+                    delay 0.15
+                    -- Send text without newline
+                    tell s to write text "$input" newline NO
+                    -- Wait for text to appear
+                    delay 0.1
+
+                    -- Re-acquire focus right before Enter (combat focus stealing)
+                    -- This is critical: another window may have grabbed focus during the delay
+                    set focusOk to false
+                    repeat 3 times
+                        set index of targetWindow to 1
+                        select s
+                        activate
+                        delay 0.05
+                        -- Verify focus
+                        try
+                            if id of first window is equal to targetWindowId then
+                                set focusOk to true
+                                exit repeat
+                            end if
+                        end try
+                        delay 0.1
+                    end repeat
+
+                    -- Use System Events for Return (now that correct session is frontmost)
+                    -- Final select right before keypress to ensure correct session receives it
+                    select s
+                    delay 0.02
+                    if focusOk then
+                        tell application "System Events"
+                            tell process "iTerm2"
+                                set frontmost to true
+                            end tell
+                            delay 0.02
+                            key code 36
+                        end tell
+                    else
+                        -- Focus failed, try one more aggressive attempt
+                        set index of targetWindow to 1
+                        select s
+                        activate
+                        delay 0.2
+                        tell application "System Events"
+                            tell process "iTerm2"
+                                set frontmost to true
+                            end tell
+                            delay 0.02
+                            key code 36
+                        end tell
+                    end if
                     return
                 end if
             end repeat
@@ -546,9 +602,12 @@ case "$TYPE" in
         ;;
     iterm2)
         # Pure iTerm2 - ARG1 is the session UUID
-        # Send input first (works without focus), then try to focus
-        send_iterm_input "id" "$ARG1" "$ACTION_INPUT"
-        switch_iterm_session "id" "$ARG1"
+        focus_result=$(switch_iterm_session "id" "$ARG1")
+        if [[ "$focus_result" == SUCCESS* ]]; then
+            send_iterm_input "id" "$ARG1" "$ACTION_INPUT"
+        else
+            echo "$(date): Skipping input - focus failed: $focus_result" >> $LOG_FILE
+        fi
         ;;
     terminal-tmux)
         # Terminal.app running tmux - send input first, then focus
@@ -572,6 +631,49 @@ case "$TYPE" in
         else
             osascript -e 'tell application "iTerm2" to activate' 2>/dev/null || \
             osascript -e 'tell application "Terminal" to activate' 2>/dev/null
+        fi
+        ;;
+    local-tmux)
+        # Local tmux session (started via claude-slack-notify launch)
+        # Uses gastown pattern for reliable Enter submission to Claude Code
+        # ARG1 = tmux target (session:window.pane)
+        tmux_target="$ARG1"
+        echo "$(date): Local-tmux: target=$tmux_target input='$ACTION_INPUT'" >> "$LOG_FILE"
+
+        if [[ -n "$ACTION_INPUT" ]]; then
+            # Gastown pattern: reliable input delivery to Claude Code
+            # 1. Send text in literal mode (handles special characters)
+            result=$($TMUX_BIN -S "$TMUX_SOCKET" send-keys -t "$tmux_target" -l "$ACTION_INPUT" 2>&1)
+            echo "$(date): send-keys -l result: $? - $result" >> $LOG_FILE
+
+            # 2. Wait 500ms for paste to complete
+            sleep 0.5
+
+            # 3. Send Escape (required for Claude Code input handling)
+            $TMUX_BIN -S "$TMUX_SOCKET" send-keys -t "$tmux_target" Escape 2>/dev/null
+            sleep 0.1
+
+            # 4. Send Enter with retries (up to 3 attempts)
+            local last_err=""
+            for attempt in 1 2 3; do
+                if [[ $attempt -gt 1 ]]; then
+                    sleep 0.2
+                fi
+                result=$($TMUX_BIN -S "$TMUX_SOCKET" send-keys -t "$tmux_target" Enter 2>&1)
+                if [[ $? -eq 0 ]]; then
+                    echo "$(date): send-keys Enter succeeded on attempt $attempt" >> $LOG_FILE
+                    break
+                fi
+                last_err="$result"
+                echo "$(date): send-keys Enter attempt $attempt failed: $result" >> $LOG_FILE
+            done
+        fi
+
+        # Try to bring the terminal window to front (convenience, not required for input)
+        client_tty=$($TMUX_BIN -S "$TMUX_SOCKET" list-clients -t "${tmux_target%%:*}" -F '#{client_tty}' 2>/dev/null | head -1)
+        if [[ -n "$client_tty" ]]; then
+            switch_iterm_session "tty" "$client_tty" 2>/dev/null || \
+            switch_terminal_tab "$client_tty" 2>/dev/null
         fi
         ;;
     ssh-linked)

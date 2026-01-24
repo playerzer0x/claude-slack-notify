@@ -25,3 +25,4 @@ node_modules/
 
 # Slack config (contains tokens)
 .slack-config
+.claude/codemap.md

@@ -879,9 +879,9 @@ if [[ "$1" == "launch" ]]; then
         exit 1
     fi
 
-    # Generate session name if not provided
+    # Generate session name if not provided (use same pattern as instance names)
     if [[ -z "$SESSION_NAME" ]]; then
-        SESSION_NAME="claude-$(head -c 6 /dev/urandom | base64 | tr -dc 'a-z0-9' | head -c 6)"
+        SESSION_NAME=$(generate_instance_name)
     fi
 
     # Check if session already exists
@@ -915,11 +915,14 @@ if [[ "$1" == "launch" ]]; then
     # Set env vars at tmux session level (so hooks can read them via tmux show-environment)
     tmux set-environment -t "$SESSION_NAME" CLAUDE_TMUX_SESSION "$SESSION_NAME"
     tmux set-environment -t "$SESSION_NAME" CLAUDE_TMUX_TARGET "$SESSION_NAME:0.0"
+    tmux set-environment -t "$SESSION_NAME" CLAUDE_INSTANCE_NAME "$SESSION_NAME"
 
     # Also export in shell for immediate use
     tmux send-keys -t "$SESSION_NAME" "export CLAUDE_TMUX_SESSION='$SESSION_NAME'" Enter
     sleep 0.1
     tmux send-keys -t "$SESSION_NAME" "export CLAUDE_TMUX_TARGET='$SESSION_NAME:0.0'" Enter
+    sleep 0.1
+    tmux send-keys -t "$SESSION_NAME" "export CLAUDE_INSTANCE_NAME='$SESSION_NAME'" Enter
     sleep 0.1
     tmux send-keys -t "$SESSION_NAME" "claude" Enter
 

@@ -7,8 +7,14 @@ LOG_DIR="$HOME/.claude/logs"
 LOG_FILE="$LOG_DIR/focus-debug.log"
 mkdir -p "$LOG_DIR" && chmod 700 "$LOG_DIR"
 
+# Logging helper
+log() { echo "$(date): $*" >> "$LOG_FILE"; }
+
+# Error exit helper
+die() { log "ERROR: $1"; exit 1; }
+
 URL="$1"
-echo "$(date): Helper received: $URL" >> "$LOG_FILE"
+log "Helper received: $URL"
 
 # Parse URL and query string
 URL_PATH="${URL#claude-focus://}"
@@ -85,15 +91,12 @@ ARG3=$(sanitize_applescript "$ARG3")
 ARG4=$(sanitize_applescript "$ARG4")
 ARG5=$(sanitize_applescript "$ARG5")
 
-# Exit if inputs are invalid
-if [[ "$ARG1" == "INVALID_INPUT" ]] || [[ "$ARG2" == "INVALID_INPUT" ]] || \
-   [[ "$ARG3" == "INVALID_INPUT" ]] || [[ "$ARG4" == "INVALID_INPUT" ]] || \
-   [[ "$ARG5" == "INVALID_INPUT" ]]; then
-    echo "$(date): Rejected invalid input - potential injection attempt" >> $LOG_FILE
-    exit 1
-fi
+# Exit if any input is invalid
+for arg in "$ARG1" "$ARG2" "$ARG3" "$ARG4" "$ARG5"; do
+    [[ "$arg" == "INVALID_INPUT" ]] && die "Rejected invalid input - potential injection attempt"
+done
 
-echo "$(date): Type=$TYPE ARG1=$ARG1 ARG2=$ARG2 ARG3=$ARG3 ARG4=$ARG4 ARG5=$ARG5 ACTION=$ACTION" >> $LOG_FILE
+log "Type=$TYPE ARG1=$ARG1 ARG2=$ARG2 ARG3=$ARG3 ARG4=$ARG4 ARG5=$ARG5 ACTION=$ACTION"
 
 # Map action parameter to input text (allowlist for security)
 get_action_input() {
@@ -115,23 +118,23 @@ get_action_input() {
 send_tmux_input() {
     local tmux_target="$1"
     local input="$2"
-    if [[ -n "$input" && -n "$tmux_target" ]]; then
-        echo "$(date): Sending input to tmux target $tmux_target: $input" >> $LOG_FILE
+    [[ -z "$input" || -z "$tmux_target" ]] && return
 
-        # Step 1: Send text in literal mode (handles special characters)
-        local result
-        result=$($TMUX_BIN -S "$TMUX_SOCKET" send-keys -t "$tmux_target" -l "$input" 2>&1)
-        echo "$(date): send-keys -l result: $? - $result" >> $LOG_FILE
+    log "Sending input to tmux target $tmux_target: $input"
 
-        # Step 2: Wait for paste to complete (tested requirement from gastown)
-        sleep 0.2
+    # Step 1: Send text in literal mode (handles special characters)
+    local result
+    result=$($TMUX_BIN -S "$TMUX_SOCKET" send-keys -t "$tmux_target" -l "$input" 2>&1)
+    log "send-keys -l result: $? - $result"
 
-        # Step 3: Send Enter as separate command (more reliable than appending)
-        # NOTE: Removed Escape key - it was interrupting Claude Code.
-        # Vim mode users should manually exit insert mode before clicking buttons.
-        result=$($TMUX_BIN -S "$TMUX_SOCKET" send-keys -t "$tmux_target" Enter 2>&1)
-        echo "$(date): send-keys Enter result: $? - $result" >> $LOG_FILE
-    fi
+    # Step 2: Wait for paste to complete (tested requirement from gastown)
+    sleep 0.2
+
+    # Step 3: Send Enter as separate command (more reliable than appending)
+    # NOTE: Removed Escape key - it was interrupting Claude Code.
+    # Vim mode users should manually exit insert mode before clicking buttons.
+    result=$($TMUX_BIN -S "$TMUX_SOCKET" send-keys -t "$tmux_target" Enter 2>&1)
+    log "send-keys Enter result: $? - $result"
 }
 
 # Send input to iTerm2 session (by TTY or ID)
@@ -141,9 +144,10 @@ send_iterm_input() {
     local property="$1"  # "tty" or "id"
     local target="$2"
     local input="$3"
-    if [[ -n "$input" ]]; then
-        echo "$(date): Sending input to iTerm2 ($property=$target): $input" >> $LOG_FILE
-        osascript << APPLESCRIPT 2>/dev/null
+    [[ -z "$input" ]] && return
+
+    log "Sending input to iTerm2 ($property=$target): $input"
+    osascript << APPLESCRIPT 2>/dev/null
 tell application "iTerm2"
     repeat with w in windows
         repeat with t in tabs of w
@@ -215,7 +219,6 @@ tell application "iTerm2"
     end repeat
 end tell
 APPLESCRIPT
-    fi
 }
 
 # Send input to Terminal.app (by TTY)
@@ -224,12 +227,13 @@ APPLESCRIPT
 send_terminal_input() {
     local target_tty="$1"
     local input="$2"
-    if [[ -n "$input" ]]; then
-        echo "$(date): Sending input to Terminal.app (tty=$target_tty): $input" >> $LOG_FILE
+    [[ -z "$input" ]] && return
 
-        # Special case: "frontmost" sends to the active Terminal window
-        if [[ "$target_tty" == "frontmost" ]]; then
-            osascript << APPLESCRIPT 2>/dev/null
+    log "Sending input to Terminal.app (tty=$target_tty): $input"
+
+    # Special case: "frontmost" sends to the active Terminal window
+    if [[ "$target_tty" == "frontmost" ]]; then
+        osascript << APPLESCRIPT 2>/dev/null
 tell application "Terminal"
     activate
     delay 0.1
@@ -242,10 +246,10 @@ tell application "Terminal"
     end tell
 end tell
 APPLESCRIPT
-            return
-        fi
+        return
+    fi
 
-        osascript << APPLESCRIPT 2>/dev/null
+    osascript << APPLESCRIPT 2>/dev/null
 tell application "Terminal"
     repeat with w in windows
         repeat with t in tabs of w
@@ -269,7 +273,6 @@ tell application "Terminal"
     end repeat
 end tell
 APPLESCRIPT
-    fi
 }
 
 # Tmux utilities
@@ -286,21 +289,21 @@ switch_remote_tmux() {
     local ssh_port="$3"
     local tmux_target="$4"  # format: session:window.pane
 
-    if [[ -n "$tmux_target" ]]; then
-        echo "$(date): Switching remote tmux to $tmux_target via SSH" >> $LOG_FILE
+    [[ -z "$tmux_target" ]] && return
 
-        local ssh_cmd="ssh -o BatchMode=yes -o ConnectTimeout=5 -p $ssh_port $ssh_user@$ssh_host"
+    log "Switching remote tmux to $tmux_target via SSH"
 
-        # Extract session:window.pane components
-        local session="${tmux_target%%:*}"
-        local window_pane="${tmux_target#*:}"
-        local window="${window_pane%%.*}"
+    local ssh_cmd="ssh -o BatchMode=yes -o ConnectTimeout=5 -p $ssh_port $ssh_user@$ssh_host"
 
-        # Switch to the window and select the pane
-        local result
-        result=$($ssh_cmd "tmux select-window -t '$session:$window' 2>/dev/null; tmux select-pane -t '$tmux_target' 2>/dev/null" 2>&1)
-        echo "$(date): Remote tmux switch result: $? - $result" >> $LOG_FILE
-    fi
+    # Extract session:window.pane components
+    local session="${tmux_target%%:*}"
+    local window_pane="${tmux_target#*:}"
+    local window="${window_pane%%.*}"
+
+    # Switch to the window and select the pane
+    local result
+    result=$($ssh_cmd "tmux select-window -t '$session:$window' 2>/dev/null; tmux select-pane -t '$tmux_target' 2>/dev/null" 2>&1)
+    log "Remote tmux switch result: $? - $result"
 }
 
 # Send input to remote tmux session via SSH
@@ -312,37 +315,36 @@ send_ssh_tmux_input() {
     local tmux_target="$4"
     local input="$5"
 
-    if [[ -n "$input" && -n "$tmux_target" ]]; then
-        echo "$(date): Sending input via SSH to $ssh_user@$ssh_host:$ssh_port tmux $tmux_target: $input" >> $LOG_FILE
+    [[ -z "$input" || -z "$tmux_target" ]] && return
 
-        # SSH command to send input to remote tmux
-        # Uses BatchMode to fail fast if no key auth available
-        # Uses -t to allocate PTY for tmux commands
-        local ssh_cmd="ssh -o BatchMode=yes -o ConnectTimeout=5 -p $ssh_port $ssh_user@$ssh_host"
+    log "Sending input via SSH to $ssh_user@$ssh_host:$ssh_port tmux $tmux_target: $input"
 
-        # Escape input for shell quoting (single quotes with escaped single quotes)
-        local escaped_input="${input//\'/\'\\\'\'}"
+    # SSH command to send input to remote tmux
+    # Uses BatchMode to fail fast if no key auth available
+    local ssh_cmd="ssh -o BatchMode=yes -o ConnectTimeout=5 -p $ssh_port $ssh_user@$ssh_host"
 
-        # Step 1: Send text in literal mode
-        local result
-        result=$($ssh_cmd "tmux send-keys -t '$tmux_target' -l '$escaped_input'" 2>&1)
-        local exit_code=$?
-        echo "$(date): SSH send-keys -l result: $exit_code - $result" >> $LOG_FILE
+    # Escape input for shell quoting (single quotes with escaped single quotes)
+    local escaped_input="${input//\'/\'\\\'\'}"
 
-        if [[ $exit_code -ne 0 ]]; then
-            echo "$(date): SSH command failed - check SSH key authentication" >> $LOG_FILE
-            return 1
-        fi
+    # Step 1: Send text in literal mode
+    local result
+    result=$($ssh_cmd "tmux send-keys -t '$tmux_target' -l '$escaped_input'" 2>&1)
+    local exit_code=$?
+    log "SSH send-keys -l result: $exit_code - $result"
 
-        # Step 2: Wait for paste to complete
-        sleep 0.2
-
-        # Step 3: Send Enter
-        # NOTE: Removed Escape key - it was interrupting Claude Code.
-        # Vim mode users should manually exit insert mode before clicking buttons.
-        result=$($ssh_cmd "tmux send-keys -t '$tmux_target' Enter" 2>&1)
-        echo "$(date): SSH send-keys Enter result: $? - $result" >> $LOG_FILE
+    if [[ $exit_code -ne 0 ]]; then
+        log "SSH command failed - check SSH key authentication"
+        return 1
     fi
+
+    # Step 2: Wait for paste to complete
+    sleep 0.2
+
+    # Step 3: Send Enter
+    # NOTE: Removed Escape key - it was interrupting Claude Code.
+    # Vim mode users should manually exit insert mode before clicking buttons.
+    result=$($ssh_cmd "tmux send-keys -t '$tmux_target' Enter" 2>&1)
+    log "SSH send-keys Enter result: $? - $result"
 }
 
 # Switch iTerm2 to the tab matching a session property
@@ -355,7 +357,7 @@ send_ssh_tmux_input() {
 switch_iterm_session() {
     local property="$1"
     local target="$2"
-    echo "$(date): Looking for iTerm2 session with $property=$target" >> $LOG_FILE
+    log "Looking for iTerm2 session with $property=$target"
 
     local result
     result=$(osascript << APPLESCRIPT 2>&1
@@ -546,19 +548,19 @@ tell application "iTerm2"
 end tell
 APPLESCRIPT
 )
-    echo "$(date): iTerm2 result: $result" >> $LOG_FILE
+    log "iTerm2 result: $result"
 }
 
 # Switch Terminal.app to the tab with the given TTY
 switch_terminal_tab() {
     local target_tty="$1"
-    echo "$(date): Looking for Terminal.app tab with tty=$target_tty" >> $LOG_FILE
+    log "Looking for Terminal.app tab with tty=$target_tty"
 
     # Special case: "frontmost" just activates Terminal.app
     if [[ "$target_tty" == "frontmost" ]]; then
         osascript -e 'tell application "Terminal" to activate'
         osascript -e 'tell application "System Events" to set frontmost of process "Terminal" to true'
-        echo "$(date): Terminal.app activated (frontmost)" >> $LOG_FILE
+        log "Terminal.app activated (frontmost)"
         return
     fi
 
@@ -584,7 +586,7 @@ tell application "Terminal"
 end tell
 APPLESCRIPT
 )
-    echo "$(date): Terminal.app result: $result" >> $LOG_FILE
+    log "Terminal.app result: $result"
 }
 
 # Switch tmux to the specified session:window and return the client TTY
@@ -594,17 +596,17 @@ switch_tmux_window() {
     local window="${tmux_target#*:}"
     window="${window%%.*}"
 
-    echo "$(date): Switching tmux to session=$session window=$window" >> $LOG_FILE
+    log "Switching tmux to session=$session window=$window"
 
     local client_tty
     client_tty=$($TMUX_BIN -S "$TMUX_SOCKET" list-clients -t "$session" -F '#{client_tty}' 2>/dev/null | head -1)
 
     if [[ -n "$client_tty" ]]; then
         $TMUX_BIN -S "$TMUX_SOCKET" switch-client -c "$client_tty" -t "$session:$window" 2>/dev/null
-        echo "$(date): Switched tmux client $client_tty to $session:$window" >> $LOG_FILE
+        log "Switched tmux client $client_tty to $session:$window"
     else
         $TMUX_BIN -S "$TMUX_SOCKET" select-window -t "$session:$window" 2>/dev/null
-        echo "$(date): Selected tmux window $session:$window directly" >> $LOG_FILE
+        log "Selected tmux window $session:$window directly"
     fi
 
     echo "$client_tty"
@@ -632,7 +634,7 @@ case "$TYPE" in
         if [[ "$focus_result" == SUCCESS* ]]; then
             send_iterm_input "id" "$ARG1" "$ACTION_INPUT"
         else
-            echo "$(date): Skipping input - focus failed: $focus_result" >> $LOG_FILE
+            log "Skipping input - focus failed: $focus_result"
         fi
         ;;
     terminal-tmux)
@@ -680,13 +682,13 @@ case "$TYPE" in
             # Old format: ARG1 = tmux_target
             tmux_target="$ARG1"
         fi
-        echo "$(date): Local-tmux: iterm_id=$iterm_session_id target=$tmux_target input='$ACTION_INPUT'" >> "$LOG_FILE"
+        log "Local-tmux: iterm_id=$iterm_session_id target=$tmux_target input='$ACTION_INPUT'"
 
         if [[ -n "$ACTION_INPUT" ]]; then
             # Gastown pattern: reliable input delivery to Claude Code
             # 1. Send text in literal mode (handles special characters)
             result=$($TMUX_BIN -S "$TMUX_SOCKET" send-keys -t "$tmux_target" -l "$ACTION_INPUT" 2>&1)
-            echo "$(date): send-keys -l result: $? - $result" >> $LOG_FILE
+            log "send-keys -l result: $? - $result"
 
             # 2. Wait 500ms for paste to complete
             sleep 0.5
@@ -696,18 +698,18 @@ case "$TYPE" in
             sleep 0.1
 
             # 4. Send Enter with retries (up to 3 attempts)
-            local last_err=""
+            last_err=""
             for attempt in 1 2 3; do
                 if [[ $attempt -gt 1 ]]; then
                     sleep 0.2
                 fi
                 result=$($TMUX_BIN -S "$TMUX_SOCKET" send-keys -t "$tmux_target" Enter 2>&1)
                 if [[ $? -eq 0 ]]; then
-                    echo "$(date): send-keys Enter succeeded on attempt $attempt" >> $LOG_FILE
+                    log "send-keys Enter succeeded on attempt $attempt"
                     break
                 fi
                 last_err="$result"
-                echo "$(date): send-keys Enter attempt $attempt failed: $result" >> $LOG_FILE
+                log "send-keys Enter attempt $attempt failed: $result"
             done
         fi
 
@@ -734,7 +736,7 @@ case "$TYPE" in
         ssh_port="$ARG4"
         remote_tmux_target="$ARG5"
 
-        echo "$(date): SSH-linked: link=$link_id host=$ssh_host user=$ssh_user port=$ssh_port tmux=$remote_tmux_target" >> "$LOG_FILE"
+        log "SSH-linked: link=$link_id host=$ssh_host user=$ssh_user port=$ssh_port tmux=$remote_tmux_target"
 
         # Step 1: Focus LOCAL terminal using link info
         link_file="$LINKS_DIR/${link_id}.json"
@@ -742,7 +744,7 @@ case "$TYPE" in
             local_type=$(grep -o '"term_type": *"[^"]*"' "$link_file" | cut -d'"' -f4)
             local_target=$(grep -o '"term_target": *"[^"]*"' "$link_file" | cut -d'"' -f4)
 
-            echo "$(date): Link found: local_type=$local_type local_target=$local_target" >> "$LOG_FILE"
+            log "Link found: local_type=$local_type local_target=$local_target"
 
             case "$local_type" in
                 iterm2)
@@ -771,11 +773,11 @@ case "$TYPE" in
                     fi
                     ;;
                 *)
-                    echo "$(date): Unknown local term type: $local_type" >> "$LOG_FILE"
+                    log "Unknown local term type: $local_type"
                     ;;
             esac
         else
-            echo "$(date): Link file not found: $link_file" >> "$LOG_FILE"
+            log "Link file not found: $link_file"
         fi
 
         # Step 2: Switch remote tmux to the correct window/pane
@@ -796,7 +798,7 @@ case "$TYPE" in
         ssh_port="$ARG3"
         remote_tmux_target="$ARG4"
 
-        echo "$(date): SSH-tmux (direct): host=$ssh_host user=$ssh_user port=$ssh_port tmux=$remote_tmux_target" >> "$LOG_FILE"
+        log "SSH-tmux (direct): host=$ssh_host user=$ssh_user port=$ssh_port tmux=$remote_tmux_target"
 
         # Switch remote tmux to correct window/pane
         if [[ -n "$remote_tmux_target" ]]; then
@@ -817,7 +819,7 @@ case "$TYPE" in
         ssh_port="$ARG4"
         remote_tmux_target="$ARG5"
 
-        echo "$(date): Jupyter-tmux: link=$link_id host=$ssh_host user=$ssh_user port=$ssh_port tmux=$remote_tmux_target" >> "$LOG_FILE"
+        log "Jupyter-tmux: link=$link_id host=$ssh_host user=$ssh_user port=$ssh_port tmux=$remote_tmux_target"
 
         # Step 1: Focus Chrome tab with JupyterLab URL from link file
         link_file="$LINKS_DIR/${link_id}.json"
@@ -825,7 +827,7 @@ case "$TYPE" in
             jupyter_url=$(grep -o '"jupyter_url": *"[^"]*"' "$link_file" | cut -d'"' -f4)
 
             if [[ -n "$jupyter_url" ]]; then
-                echo "$(date): Focusing Chrome tab with URL containing: $jupyter_url" >> "$LOG_FILE"
+                log "Focusing Chrome tab with URL containing: $jupyter_url"
 
                 # Focus Chrome and find tab matching the JupyterLab URL
                 osascript << APPLESCRIPT 2>/dev/null
@@ -855,7 +857,7 @@ end tell
 APPLESCRIPT
             fi
         else
-            echo "$(date): Link file not found: $link_file" >> "$LOG_FILE"
+            log "Link file not found: $link_file"
             # Just activate Chrome as fallback
             osascript -e 'tell application "Google Chrome" to activate' 2>/dev/null
         fi
@@ -878,12 +880,11 @@ APPLESCRIPT
         ssh_host="$PARAM_HOST"
         instance_name="${PARAM_NAME:-jupyter}"
 
-        echo "$(date): Creating jupyter link: id=$link_id url=$jupyter_url host=$ssh_host name=$instance_name" >> "$LOG_FILE"
+        log "Creating jupyter link: id=$link_id url=$jupyter_url host=$ssh_host name=$instance_name"
 
         if [[ -z "$link_id" || -z "$jupyter_url" || -z "$ssh_host" ]]; then
-            echo "$(date): Error: Missing required parameters for jupyter-link" >> "$LOG_FILE"
             osascript -e 'display notification "Missing link parameters" with title "Claude Slack Notify"'
-            exit 1
+            die "Missing required parameters for jupyter-link"
         fi
 
         # Create links directory if needed
@@ -908,7 +909,7 @@ APPLESCRIPT
 }
 EOF
 
-        echo "$(date): Link file created: $link_file" >> "$LOG_FILE"
+        log "Link file created: $link_file"
 
         # Close the setup tab (the one with claude-focus:// URL) and switch to JupyterLab
         osascript << 'APPLESCRIPT' 2>/dev/null

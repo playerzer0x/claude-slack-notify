@@ -4,6 +4,7 @@
  * Provides cross-platform helpers for terminal detection and paths.
  */
 
+import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -148,16 +149,59 @@ export interface TerminalEnv {
   sshConnection?: string;
   /** Claude link ID for SSH sessions */
   claudeLinkId?: string;
+  /** Claude SSH host (set by claude-slack-notify remote) */
+  claudeSshHost?: string;
+  /** Claude SSH port (set by claude-slack-notify remote) */
+  claudeSshPort?: string;
   /** Claude tmux session (set by claude-slack-notify launch) */
   claudeTmuxSession?: string;
   /** Claude tmux target (set by claude-slack-notify launch) */
   claudeTmuxTarget?: string;
   /** Claude iTerm session ID (set by claude-slack-notify launch) */
   claudeItermSessionId?: string;
+  /** Claude instance name (set by claude-slack-notify) */
+  claudeInstanceName?: string;
+}
+
+/**
+ * Read a single environment variable from tmux session environment.
+ * Returns undefined if not in tmux or variable not set.
+ */
+export function getTmuxEnv(varName: string): string | undefined {
+  if (!process.env.TMUX) {
+    return undefined;
+  }
+
+  try {
+    const output = execSync(`tmux show-environment ${varName} 2>/dev/null`, {
+      encoding: 'utf-8',
+      timeout: 1000,
+    }).trim();
+
+    // tmux show-environment returns "VARNAME=value" or "-VARNAME" (for unset)
+    if (output.startsWith('-') || !output.includes('=')) {
+      return undefined;
+    }
+
+    const eqIndex = output.indexOf('=');
+    return output.substring(eqIndex + 1);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Get an environment variable with tmux session fallback.
+ * First checks process.env, then falls back to tmux session environment.
+ */
+export function getEnvWithTmuxFallback(varName: string): string | undefined {
+  return process.env[varName] || getTmuxEnv(varName);
 }
 
 /**
  * Detect terminal environment from environment variables.
+ * For Claude-specific variables, falls back to tmux session environment
+ * if not set in shell environment (handles new tmux window/pane scenarios).
  */
 export function detectTerminalEnv(): TerminalEnv {
   const env: TerminalEnv = {};
@@ -198,21 +242,41 @@ export function detectTerminalEnv(): TerminalEnv {
     env.sshConnection = process.env.SSH_CONNECTION;
   }
 
-  // Claude-specific env vars (set by claude-slack-notify)
-  if (process.env.CLAUDE_LINK_ID) {
-    env.claudeLinkId = process.env.CLAUDE_LINK_ID;
+  // Claude-specific env vars with tmux session fallback
+  // Shell env takes priority, then tmux session env
+  const claudeLinkId = getEnvWithTmuxFallback('CLAUDE_LINK_ID');
+  if (claudeLinkId) {
+    env.claudeLinkId = claudeLinkId;
   }
 
-  if (process.env.CLAUDE_TMUX_SESSION) {
-    env.claudeTmuxSession = process.env.CLAUDE_TMUX_SESSION;
+  const claudeSshHost = getEnvWithTmuxFallback('CLAUDE_SSH_HOST');
+  if (claudeSshHost) {
+    env.claudeSshHost = claudeSshHost;
   }
 
-  if (process.env.CLAUDE_TMUX_TARGET) {
-    env.claudeTmuxTarget = process.env.CLAUDE_TMUX_TARGET;
+  const claudeSshPort = getEnvWithTmuxFallback('CLAUDE_SSH_PORT');
+  if (claudeSshPort) {
+    env.claudeSshPort = claudeSshPort;
   }
 
-  if (process.env.CLAUDE_ITERM_SESSION_ID) {
-    env.claudeItermSessionId = process.env.CLAUDE_ITERM_SESSION_ID;
+  const claudeTmuxSession = getEnvWithTmuxFallback('CLAUDE_TMUX_SESSION');
+  if (claudeTmuxSession) {
+    env.claudeTmuxSession = claudeTmuxSession;
+  }
+
+  const claudeTmuxTarget = getEnvWithTmuxFallback('CLAUDE_TMUX_TARGET');
+  if (claudeTmuxTarget) {
+    env.claudeTmuxTarget = claudeTmuxTarget;
+  }
+
+  const claudeItermSessionId = getEnvWithTmuxFallback('CLAUDE_ITERM_SESSION_ID');
+  if (claudeItermSessionId) {
+    env.claudeItermSessionId = claudeItermSessionId;
+  }
+
+  const claudeInstanceName = getEnvWithTmuxFallback('CLAUDE_INSTANCE_NAME');
+  if (claudeInstanceName) {
+    env.claudeInstanceName = claudeInstanceName;
   }
 
   return env;

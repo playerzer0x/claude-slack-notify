@@ -115,8 +115,8 @@ export function detectTerminal(env: TerminalEnv): TerminalInfo {
   // Check for SSH-linked session (via claude-slack-notify remote)
   if (env.claudeLinkId) {
     const sshUser = process.env.USER || 'unknown';
-    const sshHost = process.env.CLAUDE_SSH_HOST || hostname();
-    const sshPort = parseInt(process.env.CLAUDE_SSH_PORT || '22', 10);
+    const sshHost = env.claudeSshHost || hostname();
+    const sshPort = parseInt(env.claudeSshPort || '22', 10);
 
     result.linkId = env.claudeLinkId;
     result.sshHost = sshHost;
@@ -158,8 +158,8 @@ export function detectTerminal(env: TerminalEnv): TerminalInfo {
   // Check for SSH session without link
   if (isSSHSession()) {
     const sshUser = process.env.USER || 'unknown';
-    const sshHost = process.env.CLAUDE_SSH_HOST || hostname();
-    const sshPort = parseInt(process.env.CLAUDE_SSH_PORT || '22', 10);
+    const sshHost = env.claudeSshHost || hostname();
+    const sshPort = parseInt(env.claudeSshPort || '22', 10);
 
     result.sshHost = sshHost;
     result.sshUser = sshUser;

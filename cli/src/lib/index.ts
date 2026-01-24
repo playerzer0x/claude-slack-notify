@@ -38,6 +38,7 @@ export {
 export {
   detectTerminalEnv,
   getClaudeDir,
+  getEnvWithTmuxFallback,
   getInstancesDir,
   getLinksDir,
   getLogsDir,
@@ -46,6 +47,7 @@ export {
   getSlackConfigPath,
   getSlackSigningSecretPath,
   getThreadsDir,
+  getTmuxEnv,
   getTmuxSocketPath,
   getTunnelUrlPath,
   getUid,

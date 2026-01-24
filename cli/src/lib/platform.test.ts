@@ -23,6 +23,8 @@ import {
   isSSHSession,
   isInsideTmux,
   isInITerm2,
+  getTmuxEnv,
+  getEnvWithTmuxFallback,
 } from './platform';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -260,6 +262,59 @@ describe('Convenience detection functions', () => {
     test('returns true with ITERM_SESSION_ID', () => {
       process.env.ITERM_SESSION_ID = 'w0t0p0:ABC';
       expect(isInITerm2()).toBe(true);
+    });
+  });
+});
+
+describe('Tmux environment fallback', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    delete process.env.TMUX;
+    delete process.env.CLAUDE_LINK_ID;
+  });
+
+  afterEach(() => {
+    Object.assign(process.env, originalEnv);
+  });
+
+  describe('getTmuxEnv', () => {
+    test('returns undefined when not in tmux', () => {
+      expect(getTmuxEnv('CLAUDE_LINK_ID')).toBeUndefined();
+    });
+
+    // Note: Full tmux session env tests require actual tmux session
+    // The edge case tests in bin/test-edge-cases.sh provide E2E coverage
+  });
+
+  describe('getEnvWithTmuxFallback', () => {
+    test('returns shell env value when set', () => {
+      process.env.CLAUDE_LINK_ID = 'shell-link';
+      expect(getEnvWithTmuxFallback('CLAUDE_LINK_ID')).toBe('shell-link');
+    });
+
+    test('returns undefined when not set and not in tmux', () => {
+      expect(getEnvWithTmuxFallback('CLAUDE_LINK_ID')).toBeUndefined();
+    });
+  });
+
+  describe('detectTerminalEnv with new fields', () => {
+    test('detects claudeSshHost', () => {
+      process.env.CLAUDE_SSH_HOST = 'test-host';
+      const env = detectTerminalEnv();
+      expect(env.claudeSshHost).toBe('test-host');
+    });
+
+    test('detects claudeSshPort', () => {
+      process.env.CLAUDE_SSH_PORT = '2222';
+      const env = detectTerminalEnv();
+      expect(env.claudeSshPort).toBe('2222');
+    });
+
+    test('detects claudeInstanceName', () => {
+      process.env.CLAUDE_INSTANCE_NAME = 'my-session';
+      const env = detectTerminalEnv();
+      expect(env.claudeInstanceName).toBe('my-session');
     });
   });
 });

@@ -15,21 +15,54 @@ const PRIVATE_IP_PATTERNS = [
   /^10\./,                     // Class A private
   /^192\.168\./,               // Class C private
   /^172\.(1[6-9]|2\d|3[01])\./, // Class B private (172.16-31.x)
-  /^169\.254\./,               // Link-local / cloud metadata
+  /^169\.254\./,               // Link-local / cloud metadata (AWS/Azure/GCP/DO/OCI)
   /^0\./,                      // Current network
+  /^100\.100\.100\./,          // Alibaba Cloud metadata (100.100.100.200)
   /^::1$/,                     // IPv6 loopback
   /^fc[0-9a-f]{2}:/i,          // IPv6 unique local
   /^fe80:/i,                   // IPv6 link-local
+  /^fd[0-9a-f]{2}:/i,          // IPv6 unique local (fd00::/8)
 ];
 
 // Hostnames that should never be forwarded to
 const BLOCKED_HOSTNAMES = new Set([
+  // Loopback
   'localhost',
   'localhost.localdomain',
+
+  // AWS metadata endpoints
+  '169.254.169.254',                    // AWS EC2 metadata
+  '169.254.170.2',                      // AWS ECS task metadata
+
+  // GCP metadata endpoints
   'metadata.google.internal',
   'metadata',
-  '169.254.169.254',
+
+  // Azure metadata endpoints
+  '169.254.169.254',                    // Azure IMDS (same as AWS)
+  'metadata.azure.com',
+
+  // DigitalOcean metadata
+  '169.254.169.254',                    // DigitalOcean (same IP)
+
+  // Oracle Cloud metadata
+  '169.254.169.254',                    // OCI (same IP)
+
+  // Alibaba Cloud metadata
+  '100.100.100.200',
+
+  // Kubernetes
+  'kubernetes.default',
+  'kubernetes.default.svc',
+  'kubernetes.default.svc.cluster.local',
 ]);
+
+// Additional hostname patterns to block (checked via regex)
+const BLOCKED_HOSTNAME_PATTERNS = [
+  /\.internal$/,                        // Any .internal domain
+  /^metadata\./,                        // Any metadata.* subdomain
+  /\.metadata\./,                       // Any *.metadata.* domain
+];
 
 /**
  * Validate a tunnel URL is safe to forward requests to
@@ -51,7 +84,14 @@ export function validateTunnelUrl(url: string): ValidationResult {
 
   // Block known dangerous hostnames
   if (BLOCKED_HOSTNAMES.has(hostname)) {
-    return { valid: false, reason: `Hostname ${hostname} is not allowed` };
+    return { valid: false, reason: `Hostname '${hostname}' is not allowed (metadata/internal endpoint)` };
+  }
+
+  // Block hostname patterns (metadata subdomains, .internal TLD)
+  for (const pattern of BLOCKED_HOSTNAME_PATTERNS) {
+    if (pattern.test(hostname)) {
+      return { valid: false, reason: `Hostname '${hostname}' matches blocked pattern (internal/metadata)` };
+    }
   }
 
   // Block private IP addresses

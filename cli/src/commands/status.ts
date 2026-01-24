@@ -241,6 +241,62 @@ function loadLinks(): LinkData[] {
   return links;
 }
 
+/** Get saved remote host */
+function getRemoteHost(): string | null {
+  const remoteHostFile = join(getClaudeDir(), '.remote-host');
+  if (existsSync(remoteHostFile)) {
+    return readFileSync(remoteHostFile, 'utf-8').trim();
+  }
+  return null;
+}
+
+/** Load sessions from remote host via SSH */
+function loadRemoteSessions(host: string): InstanceData[] {
+  try {
+    const result = execSync(
+      `ssh -o ConnectTimeout=3 -o BatchMode=yes ${host} 'cat ~/.claude/instances/*.json 2>/dev/null || echo "[]"'`,
+      {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 10000,
+      }
+    );
+
+    // Parse JSON objects (they're concatenated, not an array)
+    const sessions: InstanceData[] = [];
+    const jsonMatches = result.match(/\{[^{}]+\}/g);
+    if (jsonMatches) {
+      for (const match of jsonMatches) {
+        try {
+          sessions.push(JSON.parse(match) as InstanceData);
+        } catch {
+          // Skip invalid JSON
+        }
+      }
+    }
+    return sessions;
+  } catch {
+    return [];
+  }
+}
+
+/** Get active tmux sessions from remote host */
+function getRemoteTmuxSessions(host: string): string[] {
+  try {
+    const result = execSync(
+      `ssh -o ConnectTimeout=3 -o BatchMode=yes ${host} 'tmux list-sessions -F "#{session_name}" 2>/dev/null || echo ""'`,
+      {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 10000,
+      }
+    );
+    return result.trim().split('\n').filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Show system status.
  */
@@ -309,23 +365,65 @@ export async function status(): Promise<void> {
   }
   console.log('');
 
-  // Sessions section
+  // Local Sessions section
   console.log(INNER_TOP);
-  console.log('  \u2502 Registered Sessions                                     \u2502');
+  console.log('  \u2502 Local Sessions                                          \u2502');
   console.log(INNER_BOT);
 
   const sessions = loadSessions();
   if (sessions.length === 0) {
-    console.log('    (no sessions registered)');
+    console.log('    (no local sessions registered)');
   } else {
     for (const session of sessions) {
       const isCurrentSession = session.id === currentInstanceId;
       const marker = isCurrentSession ? '\u2192' : '\u2022';
-      const suffix = isCurrentSession ? ' - current session' : ` @ ${session.hostname}`;
+      const suffix = isCurrentSession ? ` ${DIM}(current)${RESET}` : '';
       console.log(`    ${marker} ${session.name} (${session.term_type})${suffix}`);
     }
   }
   console.log('');
+
+  // Remote Sessions section (Mac only - when connected to remote via SSH)
+  const remoteHost = getRemoteHost();
+  if (remoteHost && isMac()) {
+    console.log(INNER_TOP);
+    const remoteTitle = `Remote Sessions (${remoteHost})`;
+    const padding = 55 - remoteTitle.length;
+    console.log(`  \u2502 ${remoteTitle}${' '.repeat(Math.max(0, padding))}\u2502`);
+    console.log(INNER_BOT);
+
+    const remoteSessions = loadRemoteSessions(remoteHost);
+    const remoteTmux = getRemoteTmuxSessions(remoteHost);
+
+    if (remoteSessions.length === 0 && remoteTmux.length === 0) {
+      console.log(`    ${DIM}(unable to connect or no sessions)${RESET}`);
+    } else {
+      // Show registered sessions
+      for (const session of remoteSessions) {
+        // Check if the tmux session is still active
+        const tmuxMatch = session.term_target?.match(/([^:|]+):/);
+        const tmuxSession = tmuxMatch ? tmuxMatch[1] : null;
+        const isActive = tmuxSession && remoteTmux.includes(tmuxSession);
+        const statusIcon = isActive ? `${GREEN}\u2713${RESET}` : `${DIM}\u2717${RESET}`;
+        console.log(`    ${statusIcon} ${session.name} (${session.term_type})`);
+      }
+
+      // Show tmux sessions not registered
+      const registeredTmux = new Set(
+        remoteSessions
+          .map((s) => s.term_target?.match(/([^:|]+):/)?.[1])
+          .filter(Boolean)
+      );
+      const unregistered = remoteTmux.filter((t) => !registeredTmux.has(t));
+      if (unregistered.length > 0) {
+        console.log(`    ${DIM}Unregistered tmux sessions:${RESET}`);
+        for (const tmux of unregistered) {
+          console.log(`      ${DIM}\u2022 ${tmux}${RESET}`);
+        }
+      }
+    }
+    console.log('');
+  }
 
   // Links section (Mac only)
   const links = loadLinks();

@@ -892,14 +892,46 @@ if [[ "$1" == "launch" ]]; then
 
     # Platform check for tunnel setup (macOS only)
     if [[ "$(uname)" == "Darwin" ]]; then
-        # Check local-tunnel and start if needed
+        # Check local-tunnel and start/restart if needed
         LOCAL_TUNNEL="${CLAUDE_DIR}/bin/local-tunnel"
+        TUNNEL_URL_FILE="${CLAUDE_DIR}/.tunnel-url"
+
         if [[ -x "$LOCAL_TUNNEL" ]]; then
-            STATUS=$(check_local_tunnel_status 2>/dev/null || echo "stopped")
-            if [[ "$STATUS" == "stopped" ]]; then
-                echo "Starting local-tunnel in background..."
-                "$LOCAL_TUNNEL" --background 2>/dev/null &
-                sleep 2
+            tunnel_healthy=false
+
+            # Check if tunnel URL exists and is reachable
+            if [[ -f "$TUNNEL_URL_FILE" ]]; then
+                TUNNEL_URL=$(cat "$TUNNEL_URL_FILE" 2>/dev/null)
+                if [[ -n "$TUNNEL_URL" ]]; then
+                    # Test if tunnel is actually responding
+                    if curl -sfk "${TUNNEL_URL}/health" --max-time 3 >/dev/null 2>&1; then
+                        tunnel_healthy=true
+                    fi
+                fi
+            fi
+
+            if [[ "$tunnel_healthy" == "false" ]]; then
+                echo "Local tunnel not healthy, restarting..."
+                # Stop any existing (possibly broken) tunnel
+                "$LOCAL_TUNNEL" --stop 2>/dev/null
+                sleep 1
+                # Start fresh
+                "$LOCAL_TUNNEL" --background 2>/dev/null
+
+                # Wait for tunnel to be ready (up to 10 seconds)
+                for i in {1..10}; do
+                    sleep 1
+                    if [[ -f "$TUNNEL_URL_FILE" ]]; then
+                        TUNNEL_URL=$(cat "$TUNNEL_URL_FILE" 2>/dev/null)
+                        if curl -sfk "${TUNNEL_URL}/health" --max-time 2 >/dev/null 2>&1; then
+                            echo "Local tunnel ready: $TUNNEL_URL"
+                            break
+                        fi
+                    fi
+                    if [[ $i -eq 10 ]]; then
+                        echo "Warning: Tunnel may not be ready. Buttons might not work until tunnel is up."
+                    fi
+                done
             fi
         fi
     fi

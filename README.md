@@ -4,6 +4,8 @@
 
 # Claude Slack Notify
 
+[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/playerzer0x/claude-slack-notify/releases)
+
 Slack notifications for Claude Code with clickable buttons to focus terminals and send commands.
 
 **Get notified when Claude needs input. Break free from your terminal.** 
@@ -107,8 +109,7 @@ The remote install skips tunnel setup since the tunnel runs on your local Mac.
 
 ```bash
 # On your Mac:
-claude-slack-notify remote                    # First run: prompts for host, syncs config
-                                              # Then: SSHs into tmux session
+claude-slack-notify remote myserver           # Connect to remote, start tmux session
 claude                                        # Start Claude on remote
 /slack-notify                                 # Register in Slack
 ```
@@ -183,14 +184,28 @@ Format: `LABEL|ACTION` per line. Reconfigure with `./install.sh --configure`.
 | `/slack-notify clean` | Any | Kill stale claude-* tmux sessions (>1 day) |
 | `/slack-notify stop` | Any | Unregister + stop tunnel |
 
-### Terminal
+### CLI Commands
+
+The CLI binary (`claude-slack-notify` or `claude-notify`) provides these commands:
+
+```bash
+claude-slack-notify register [--name <name>]     # Register current session
+claude-slack-notify notify [options]             # Send a Slack notification
+claude-slack-notify launch [--name <name>]       # Start Claude in a tmux session
+claude-slack-notify remote [hostname]            # Connect to remote server with linking
+claude-slack-notify status                       # Show system status
+claude-slack-notify clean [--sessions] [--links] # Clean up stale sessions
+```
+
+### Installation & Tunnel Commands
 
 ```bash
 # Installation
-./install.sh              # Install
+./install.sh              # Install (builds CLI if bun available)
 ./install.sh --uninstall  # Uninstall completely
 ./install.sh --configure  # Reconfigure buttons
 ./install.sh --link       # Install with symlinks (development)
+./install.sh --update     # Quick update (non-interactive)
 
 # Tunnel (macOS)
 local-tunnel              # Start tunnel (foreground)

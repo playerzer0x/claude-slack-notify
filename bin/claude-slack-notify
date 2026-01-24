@@ -906,14 +906,17 @@ if [[ "$1" == "launch" ]]; then
 
     # Create new tmux session with Claude
     # The session runs a wrapper that:
-    # 1. Exports CLAUDE_TMUX_SESSION for the hooks to detect
-    # 2. Runs claude
-    # 3. Kills the session when claude exits
+    # 1. Sets CLAUDE_TMUX_SESSION in tmux environment (accessible by all processes)
+    # 2. Exports it in shell for immediate use
+    # 3. Runs claude
     echo "Creating tmux session: $SESSION_NAME"
     tmux new-session -d -s "$SESSION_NAME" -x 200 -y 50
 
-    # Send the claude command to the session
-    # Export env vars for slack-notify to detect this is a local-tmux session
+    # Set env vars at tmux session level (so hooks can read them via tmux show-environment)
+    tmux set-environment -t "$SESSION_NAME" CLAUDE_TMUX_SESSION "$SESSION_NAME"
+    tmux set-environment -t "$SESSION_NAME" CLAUDE_TMUX_TARGET "$SESSION_NAME:0.0"
+
+    # Also export in shell for immediate use
     tmux send-keys -t "$SESSION_NAME" "export CLAUDE_TMUX_SESSION='$SESSION_NAME'" Enter
     sleep 0.1
     tmux send-keys -t "$SESSION_NAME" "export CLAUDE_TMUX_TARGET='$SESSION_NAME:0.0'" Enter
@@ -1600,8 +1603,22 @@ detect_terminal() {
 
     # Check for local-tmux session (started via claude-slack-notify launch)
     # This uses tmux send-keys with gastown pattern for reliable Enter submission
-    if [[ -n "$CLAUDE_TMUX_SESSION" ]]; then
-        local tmux_target="${CLAUDE_TMUX_TARGET:-$CLAUDE_TMUX_SESSION:0.0}"
+    # Check direct env var first, then tmux session environment
+    local tmux_session="$CLAUDE_TMUX_SESSION"
+    local tmux_target="$CLAUDE_TMUX_TARGET"
+
+    # If not in direct env, try to read from tmux session environment
+    if [[ -z "$tmux_session" && -n "$TMUX" ]]; then
+        tmux_session=$(tmux show-environment CLAUDE_TMUX_SESSION 2>/dev/null | cut -d= -f2-)
+        [[ "$tmux_session" == "-CLAUDE_TMUX_SESSION" ]] && tmux_session=""
+    fi
+    if [[ -z "$tmux_target" && -n "$TMUX" ]]; then
+        tmux_target=$(tmux show-environment CLAUDE_TMUX_TARGET 2>/dev/null | cut -d= -f2-)
+        [[ "$tmux_target" == "-CLAUDE_TMUX_TARGET" ]] && tmux_target=""
+    fi
+
+    if [[ -n "$tmux_session" ]]; then
+        tmux_target="${tmux_target:-$tmux_session:0.0}"
         TERM_TYPE="local-tmux"
         TERM_TARGET="$tmux_target"
         FOCUS_URL="claude-focus://local-tmux/$(url_encode "$tmux_target")"

@@ -912,9 +912,10 @@ if [[ "$1" == "launch" ]]; then
     echo "Creating tmux session: $SESSION_NAME"
     tmux new-session -d -s "$SESSION_NAME" -x 200 -y 50
 
-    # Detect actual window index (respects user's base-index setting in .tmux.conf)
+    # Detect actual window and pane indices (respects user's base-index and pane-base-index settings)
     FIRST_WINDOW=$(tmux list-windows -t "$SESSION_NAME" -F '#{window_index}' | head -1)
-    TMUX_TARGET="$SESSION_NAME:${FIRST_WINDOW}.0"
+    FIRST_PANE=$(tmux list-panes -t "$SESSION_NAME:$FIRST_WINDOW" -F '#{pane_index}' | head -1)
+    TMUX_TARGET="$SESSION_NAME:${FIRST_WINDOW}.${FIRST_PANE}"
 
     # Set env vars at tmux session level (so hooks can read them via tmux show-environment)
     tmux set-environment -t "$SESSION_NAME" CLAUDE_TMUX_SESSION "$SESSION_NAME"

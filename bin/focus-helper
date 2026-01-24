@@ -561,24 +561,56 @@ APPLESCRIPT
     echo "$(date): Terminal.app result: $result" >> $LOG_FILE
 }
 
-# Switch tmux to the specified session:window and return the client TTY
+# Switch tmux to the specified target and return the client TTY
+# Args: $1 = tmux target (session:window.pane or pane id), $2 = preferred client tty
 switch_tmux_window() {
     local tmux_target="$1"
-    local session="${tmux_target%%:*}"
-    local window="${tmux_target#*:}"
-    window="${window%%.*}"
+    local preferred_client_tty="$2"
+    local session=""
+    local window=""
+    local pane=""
 
-    echo "$(date): Switching tmux to session=$session window=$window" >> $LOG_FILE
+    if [[ "$tmux_target" == *":"* ]]; then
+        session="${tmux_target%%:*}"
+        local window_pane="${tmux_target#*:}"
+        window="${window_pane%%.*}"
+        if [[ "$window_pane" == *"."* ]]; then
+            pane="${window_pane#*.}"
+        fi
+    fi
 
-    local client_tty
-    client_tty=$($TMUX_BIN -S "$TMUX_SOCKET" list-clients -t "$session" -F '#{client_tty}' 2>/dev/null | head -1)
+    # Resolve session/window/pane for pane ids or nonstandard targets
+    if [[ -z "$session" || -z "$window" ]]; then
+        local resolved
+        resolved=$($TMUX_BIN -S "$TMUX_SOCKET" display-message -p -t "$tmux_target" '#{session_name} #{window_index} #{pane_index}' 2>/dev/null)
+        read -r session window pane <<< "$resolved"
+    fi
 
-    if [[ -n "$client_tty" ]]; then
+    echo "$(date): Switching tmux target=$tmux_target session=$session window=$window pane=$pane" >> $LOG_FILE
+
+    local client_tty="$preferred_client_tty"
+    if [[ -z "$client_tty" ]]; then
+        if [[ -n "$session" ]]; then
+            client_tty=$($TMUX_BIN -S "$TMUX_SOCKET" list-clients -t "$session" -F '#{client_tty}' 2>/dev/null | head -1)
+        else
+            client_tty=$($TMUX_BIN -S "$TMUX_SOCKET" list-clients -F '#{client_tty}' 2>/dev/null | head -1)
+        fi
+    fi
+
+    if [[ -n "$client_tty" && -n "$session" && -n "$window" ]]; then
         $TMUX_BIN -S "$TMUX_SOCKET" switch-client -c "$client_tty" -t "$session:$window" 2>/dev/null
         echo "$(date): Switched tmux client $client_tty to $session:$window" >> $LOG_FILE
-    else
+    elif [[ -n "$session" && -n "$window" ]]; then
         $TMUX_BIN -S "$TMUX_SOCKET" select-window -t "$session:$window" 2>/dev/null
         echo "$(date): Selected tmux window $session:$window directly" >> $LOG_FILE
+    fi
+
+    if [[ -n "$session" && -n "$window" && -n "$pane" ]]; then
+        $TMUX_BIN -S "$TMUX_SOCKET" select-pane -t "$session:$window.$pane" 2>/dev/null
+        echo "$(date): Selected tmux pane $session:$window.$pane" >> $LOG_FILE
+    elif [[ -n "$pane" ]]; then
+        $TMUX_BIN -S "$TMUX_SOCKET" select-pane -t "$tmux_target" 2>/dev/null
+        echo "$(date): Selected tmux pane $tmux_target" >> $LOG_FILE
     fi
 
     echo "$client_tty"
@@ -598,7 +630,7 @@ case "$TYPE" in
         # iTerm2 running tmux - send input first (works in background), then focus
         send_tmux_input "$ARG2" "$ACTION_INPUT"
         switch_iterm_session "tty" "$ARG1"
-        switch_tmux_window "$ARG2"
+        switch_tmux_window "$ARG2" "$ARG1"
         ;;
     iterm2)
         # Pure iTerm2 - ARG1 is the session UUID
@@ -613,7 +645,7 @@ case "$TYPE" in
         # Terminal.app running tmux - send input first, then focus
         send_tmux_input "$ARG2" "$ACTION_INPUT"
         switch_terminal_tab "$ARG1"
-        switch_tmux_window "$ARG2"
+        switch_tmux_window "$ARG2" "$ARG1"
         ;;
     terminal)
         # Pure Terminal.app - switch to the tab by TTY
@@ -703,13 +735,13 @@ case "$TYPE" in
                     local_tty="${local_target%%|*}"
                     local_tmux="${local_target#*|}"
                     switch_iterm_session "tty" "$local_tty"
-                    switch_tmux_window "$local_tmux"
+                    switch_tmux_window "$local_tmux" "$local_tty"
                     ;;
                 terminal-tmux)
                     local_tty="${local_target%%|*}"
                     local_tmux="${local_target#*|}"
                     switch_terminal_tab "$local_tty"
-                    switch_tmux_window "$local_tmux"
+                    switch_tmux_window "$local_tmux" "$local_tty"
                     ;;
                 terminal)
                     switch_terminal_tab "$local_target"

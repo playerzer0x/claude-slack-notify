@@ -1,0 +1,1945 @@
+#!/bin/bash
+# =============================================================================
+# tunnel - Unified tunnel for Slack button actions (Mac and Linux)
+#
+# Auto-detects platform:
+#   - Mac (Darwin): Starts MCP server on port 8463 (local mode)
+#   - Linux: Starts remote relay on port 8464 (remote mode)
+#
+# Supports multiple tunnel backends (in order of preference):
+#   1. Tailscale Funnel (recommended) - stable URL, no third-party service
+#   2. Localtunnel - free, but can be flaky with subdomain conflicts
+#
+# Commands:
+#   tunnel                 - Start tunnel (auto-detects best backend)
+#   tunnel --setup         - Configure Slack tokens (for auto-URL updates)
+#   tunnel --update-token  - Quick Slack token refresh when expired (Mac only)
+#   tunnel --background    - Start tunnel in background
+#   tunnel --stop          - Stop background tunnel
+#   tunnel --status        - Check tunnel status
+#   tunnel --use-tailscale - Force Tailscale Funnel
+#   tunnel --use-localtunnel - Force Localtunnel
+#
+# Mode override:
+#   tunnel --local         - Force local mode (Mac behavior)
+#   tunnel --remote        - Force remote mode (Linux behavior)
+# =============================================================================
+
+set -uo pipefail
+
+# =============================================================================
+# Mode detection (auto-detect based on platform, can override with flags)
+# =============================================================================
+
+if [[ "$(uname)" == "Darwin" ]]; then
+    MODE="local"
+else
+    MODE="remote"
+fi
+
+# =============================================================================
+# Configuration (mode-specific defaults, set after flag parsing)
+# =============================================================================
+
+CLAUDE_DIR="$HOME/.claude"
+SLACK_CONFIG_FILE="$CLAUDE_DIR/.slack-config"
+ENV_FILE="$CLAUDE_DIR/.env"
+
+# Public relay configuration
+PUBLIC_RELAY_URL_FILE="$CLAUDE_DIR/.public-relay-url"
+PUBLIC_RELAY_KEY_FILE="$CLAUDE_DIR/.public-relay-key"
+RELAY_TUNNEL_SECRET_FILE="$CLAUDE_DIR/.relay-tunnel-secret"
+HEARTBEAT_PID_FILE="$CLAUDE_DIR/.relay-heartbeat.pid"
+USE_PUBLIC_RELAY=false
+
+# Tunnel type: "tailscale" or "localtunnel" (set by --use-* flags)
+TUNNEL_TYPE=""
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+echo_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+echo_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+echo_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+# =============================================================================
+# Set mode-specific configuration
+# =============================================================================
+
+set_mode_config() {
+    if [[ "$MODE" == "local" ]]; then
+        SERVER_PORT=8463
+        SERVER_TYPE="mcp"
+        TUNNEL_URL_FILE="$CLAUDE_DIR/.tunnel-url"
+        TUNNEL_TYPE_FILE="$CLAUDE_DIR/.tunnel-type"
+        TUNNEL_PID_FILE="$CLAUDE_DIR/.tunnel.pid"
+        SERVER_PID_FILE="$CLAUDE_DIR/.mcp-server.pid"
+        WATCHDOG_PID_FILE="$CLAUDE_DIR/.tunnel-watchdog.pid"
+        ACTIVITY_FILE="$CLAUDE_DIR/.tunnel-last-activity"
+        TUNNEL_LOG="$CLAUDE_DIR/tunnel.log"
+        LOCALTUNNEL_SUBDOMAIN_FILE="$CLAUDE_DIR/.localtunnel-subdomain"
+        # Watchdog disabled by default - tunnel should persist through Mac sleep/wake cycles
+        IDLE_TIMEOUT="${CLAUDE_TUNNEL_IDLE_TIMEOUT:-0}"
+    else
+        SERVER_PORT=8464
+        SERVER_TYPE="relay"
+        TUNNEL_URL_FILE="$CLAUDE_DIR/.remote-tunnel-url"
+        TUNNEL_TYPE_FILE="$CLAUDE_DIR/.remote-tunnel-type"
+        TUNNEL_PID_FILE="$CLAUDE_DIR/.remote-tunnel.pid"
+        SERVER_PID_FILE="$CLAUDE_DIR/.remote-relay.pid"
+        WATCHDOG_PID_FILE="$CLAUDE_DIR/.remote-tunnel-watchdog.pid"
+        ACTIVITY_FILE="$CLAUDE_DIR/.relay-last-activity"
+        TUNNEL_LOG="$CLAUDE_DIR/remote-tunnel.log"
+        LOCALTUNNEL_SUBDOMAIN_FILE="$CLAUDE_DIR/.remote-localtunnel-subdomain"
+        # Watchdog disabled by default - relay is lightweight and should persist for overnight tasks
+        IDLE_TIMEOUT="${CLAUDE_RELAY_IDLE_TIMEOUT:-0}"
+    fi
+}
+
+# =============================================================================
+# Public Relay helpers
+# =============================================================================
+
+has_public_relay() {
+    [[ -f "$PUBLIC_RELAY_URL_FILE" ]] && [[ -f "$PUBLIC_RELAY_KEY_FILE" ]]
+}
+
+load_public_relay_config() {
+    if [[ ! -f "$PUBLIC_RELAY_URL_FILE" ]]; then
+        return 1
+    fi
+    PUBLIC_RELAY_URL=$(cat "$PUBLIC_RELAY_URL_FILE" 2>/dev/null)
+    if [[ -z "$PUBLIC_RELAY_URL" ]]; then
+        return 1
+    fi
+    if [[ ! -f "$PUBLIC_RELAY_KEY_FILE" ]]; then
+        return 1
+    fi
+    PUBLIC_RELAY_KEY=$(cat "$PUBLIC_RELAY_KEY_FILE" 2>/dev/null)
+    if [[ -z "$PUBLIC_RELAY_KEY" ]]; then
+        return 1
+    fi
+    return 0
+}
+
+get_or_create_tunnel_secret() {
+    if [[ -f "$RELAY_TUNNEL_SECRET_FILE" ]]; then
+        cat "$RELAY_TUNNEL_SECRET_FILE"
+    else
+        local secret
+        secret="ts_$(openssl rand -hex 16)"
+        echo "$secret" > "$RELAY_TUNNEL_SECRET_FILE"
+        chmod 600 "$RELAY_TUNNEL_SECRET_FILE"
+        echo "$secret"
+    fi
+}
+
+register_with_public_relay() {
+    local tunnel_url="$1"
+
+    if ! load_public_relay_config; then
+        echo_error "Public relay not configured"
+        return 1
+    fi
+
+    if ! load_slack_config; then
+        echo_error "Slack not configured (need App ID)"
+        return 1
+    fi
+
+    local tunnel_secret hostname instance_name
+    tunnel_secret=$(get_or_create_tunnel_secret)
+    hostname=$(hostname)
+    instance_name="${MODE}-tunnel"
+
+    echo_info "Registering with public relay..."
+
+    local response
+    response=$(curl -s --max-time 10 -X POST "${PUBLIC_RELAY_URL}/register" \
+        -H "Authorization: Bearer ${PUBLIC_RELAY_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"app_id\": \"${SLACK_APP_ID}\",
+            \"tunnel_url\": \"${tunnel_url}\",
+            \"tunnel_secret\": \"${tunnel_secret}\",
+            \"hostname\": \"${hostname}\",
+            \"instance_name\": \"${instance_name}\"
+        }")
+
+    if echo "$response" | grep -q '"success":true'; then
+        echo_info "Registered with public relay"
+        return 0
+    else
+        local error
+        error=$(echo "$response" | grep -oP '"error":"[^"]+"' | cut -d'"' -f4 2>/dev/null || echo "$response")
+        echo_error "Failed to register: ${error:-$response}"
+        return 1
+    fi
+}
+
+send_relay_heartbeat() {
+    if ! load_public_relay_config; then
+        return 1
+    fi
+
+    if ! load_slack_config; then
+        return 1
+    fi
+
+    curl -s --max-time 5 -X POST "${PUBLIC_RELAY_URL}/register/heartbeat" \
+        -H "Authorization: Bearer ${PUBLIC_RELAY_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{\"app_id\": \"${SLACK_APP_ID}\"}" >/dev/null 2>&1
+}
+
+start_relay_heartbeat() {
+    if [[ "$USE_PUBLIC_RELAY" != "true" ]]; then
+        return 0
+    fi
+
+    stop_relay_heartbeat
+
+    (
+        while true; do
+            local jitter=$((RANDOM % 5))
+            sleep $((30 + jitter))
+            send_relay_heartbeat
+        done
+    ) &
+    local pid=$!
+    echo "$pid" > "$HEARTBEAT_PID_FILE"
+    echo_info "Relay heartbeat started (PID: $pid)"
+}
+
+stop_relay_heartbeat() {
+    if [[ -f "$HEARTBEAT_PID_FILE" ]]; then
+        local pid
+        pid=$(cat "$HEARTBEAT_PID_FILE")
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+        fi
+        rm -f "$HEARTBEAT_PID_FILE"
+    fi
+}
+
+unregister_from_public_relay() {
+    if [[ "$USE_PUBLIC_RELAY" != "true" ]]; then
+        return 0
+    fi
+
+    if ! load_public_relay_config; then
+        return 1
+    fi
+
+    if ! load_slack_config; then
+        return 1
+    fi
+
+    curl -s --max-time 5 -X DELETE "${PUBLIC_RELAY_URL}/register" \
+        -H "Authorization: Bearer ${PUBLIC_RELAY_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{\"app_id\": \"${SLACK_APP_ID}\"}" >/dev/null 2>&1
+
+    echo_info "Unregistered from public relay"
+}
+
+cmd_public_relay_setup() {
+    echo ""
+    echo -e "${BOLD}Public Relay Setup${NC}"
+    echo ""
+    echo -e "  Enter the URL of your public relay server."
+    echo -e "  ${DIM}Example: https://claude-relay.railway.app${NC}"
+    echo ""
+    echo -ne "  ${YELLOW}?${NC} Relay URL: "
+    read -r relay_url
+
+    if [[ -z "$relay_url" ]]; then
+        echo_error "Relay URL is required"
+        exit 1
+    fi
+
+    relay_url="${relay_url%/}"
+
+    echo_info "Testing connection to relay..."
+    if ! curl -s --max-time 5 "${relay_url}/health" | grep -q '"status":"ok"'; then
+        echo_error "Could not reach relay at $relay_url"
+        echo_error "Make sure the URL is correct and the relay is running"
+        exit 1
+    fi
+    echo -e "  ${GREEN}✓${NC} Relay is reachable"
+
+    echo ""
+    echo -e "  Enter your API key for the relay."
+    echo -e "  ${DIM}Contact the relay administrator to get a key.${NC}"
+    echo ""
+    echo -ne "  ${YELLOW}?${NC} API Key: "
+    read -r api_key
+
+    if [[ -z "$api_key" ]]; then
+        echo_error "API key is required"
+        exit 1
+    fi
+
+    echo "$relay_url" > "$PUBLIC_RELAY_URL_FILE"
+    chmod 600 "$PUBLIC_RELAY_URL_FILE"
+    echo "$api_key" > "$PUBLIC_RELAY_KEY_FILE"
+    chmod 600 "$PUBLIC_RELAY_KEY_FILE"
+
+    echo ""
+    echo -e "${GREEN}Public relay configured!${NC}"
+    echo -e "  Run ${BOLD}tunnel --public-relay${NC} to use it."
+    echo ""
+}
+
+# =============================================================================
+# Slack API helpers
+# =============================================================================
+
+load_slack_config() {
+    if [[ ! -f "$SLACK_CONFIG_FILE" ]]; then
+        return 1
+    fi
+    source "$SLACK_CONFIG_FILE"
+    return 0
+}
+
+save_slack_config() {
+    cat > "$SLACK_CONFIG_FILE" << EOF
+SLACK_APP_ID="$SLACK_APP_ID"
+SLACK_ACCESS_TOKEN="$SLACK_ACCESS_TOKEN"
+SLACK_REFRESH_TOKEN="$SLACK_REFRESH_TOKEN"
+SLACK_TOKEN_EXPIRES="$SLACK_TOKEN_EXPIRES"
+SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN:-}"
+SLACK_CHANNEL_ID="${SLACK_CHANNEL_ID:-}"
+EOF
+    chmod 600 "$SLACK_CONFIG_FILE"
+}
+
+is_token_expired() {
+    local now buffer=300
+    now=$(date +%s)
+    if [[ -z "${SLACK_TOKEN_EXPIRES:-}" ]] || [[ $((SLACK_TOKEN_EXPIRES - buffer)) -lt $now ]]; then
+        return 0
+    fi
+    return 1
+}
+
+rotate_slack_token() {
+    if [[ -z "${SLACK_REFRESH_TOKEN:-}" ]]; then
+        echo_error "No refresh token configured"
+        echo_error "Run 'tunnel --setup' to configure Slack"
+        return 1
+    fi
+
+    echo_info "Refreshing Slack configuration token..."
+
+    local response ok
+    response=$(curl -s --max-time 30 -X POST "https://slack.com/api/tooling.tokens.rotate" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "refresh_token=${SLACK_REFRESH_TOKEN}")
+
+    ok=$(echo "$response" | jq -r '.ok // false')
+
+    if [[ "$ok" != "true" ]]; then
+        local error
+        error=$(echo "$response" | jq -r '.error // "unknown error"')
+        echo_error "Failed to refresh token: $error"
+        return 1
+    fi
+
+    SLACK_ACCESS_TOKEN=$(echo "$response" | jq -r '.token')
+    SLACK_REFRESH_TOKEN=$(echo "$response" | jq -r '.refresh_token')
+    SLACK_TOKEN_EXPIRES=$(echo "$response" | jq -r '.exp')
+
+    save_slack_config
+    echo_info "Token refreshed successfully"
+    return 0
+}
+
+update_slack_request_url() {
+    local actions_url="$1"
+    local events_url="$2"
+
+    if is_token_expired; then
+        if ! rotate_slack_token; then
+            return 1
+        fi
+    fi
+
+    echo_info "Updating Slack Request URLs..."
+
+    local manifest_response ok
+    manifest_response=$(curl -s --max-time 30 -X POST "https://slack.com/api/apps.manifest.export" \
+        -H "Authorization: Bearer ${SLACK_ACCESS_TOKEN}" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "app_id=${SLACK_APP_ID}")
+
+    ok=$(echo "$manifest_response" | jq -r '.ok // false')
+
+    if [[ "$ok" != "true" ]]; then
+        local error
+        error=$(echo "$manifest_response" | jq -r '.error // "unknown error"')
+        echo_error "Failed to export manifest: $error"
+        return 1
+    fi
+
+    local updated_manifest update_response
+    updated_manifest=$(echo "$manifest_response" | jq --arg actions_url "$actions_url" --arg events_url "$events_url" '
+        .manifest.settings.interactivity.is_enabled = true |
+        .manifest.settings.interactivity.request_url = $actions_url |
+        .manifest.settings.event_subscriptions.request_url = $events_url |
+        .manifest
+    ')
+
+    update_response=$(curl -s --max-time 30 -X POST "https://slack.com/api/apps.manifest.update" \
+        -H "Authorization: Bearer ${SLACK_ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "{\"app_id\": \"${SLACK_APP_ID}\", \"manifest\": ${updated_manifest}}")
+
+    ok=$(echo "$update_response" | jq -r '.ok // false')
+
+    if [[ "$ok" != "true" ]]; then
+        local error errors
+        error=$(echo "$update_response" | jq -r '.error // "unknown error"')
+        echo_error "Failed to update manifest: $error"
+        errors=$(echo "$update_response" | jq -r '.errors // empty')
+        if [[ -n "$errors" ]]; then
+            echo_error "Details: $errors"
+        fi
+        return 1
+    fi
+
+    echo_info "Slack URLs updated:"
+    echo_info "  Actions: $actions_url"
+    echo_info "  Events:  $events_url"
+    return 0
+}
+
+# =============================================================================
+# Tailscale Funnel helpers
+# =============================================================================
+
+has_tailscale() {
+    command -v tailscale &>/dev/null
+}
+
+is_tailscale_connected() {
+    tailscale status &>/dev/null
+}
+
+get_tailscale_dns_name() {
+    tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' 2>/dev/null | sed 's/\.$//'
+}
+
+get_tailscale_funnel_url() {
+    local dns_name
+    dns_name=$(get_tailscale_dns_name)
+    if [[ -n "$dns_name" ]]; then
+        echo "https://${dns_name}"
+    fi
+}
+
+is_tailscale_funnel_active() {
+    local status
+    status=$(tailscale funnel status --json 2>/dev/null)
+    if [[ -n "$status" && "$status" != "{}" ]]; then
+        echo "$status" | jq -e '.Web | to_entries[].value.Handlers["/"]' &>/dev/null
+    else
+        return 1
+    fi
+}
+
+start_tailscale_funnel() {
+    local background="${1:-false}"
+    local retry="${2:-false}"
+
+    # Check if nginx/caddy is already on port 443 (Linux only - can intercept funnel traffic)
+    if [[ "$MODE" == "remote" ]]; then
+        local port_443_process
+        port_443_process=$(ss -tlnp 2>/dev/null | grep ":443 " | grep -v tailscale | head -1)
+        if [[ -n "$port_443_process" ]]; then
+            echo_warn "Another process is listening on port 443:"
+            echo "        $port_443_process"
+            echo_warn "This may intercept Tailscale Funnel traffic."
+            echo_warn "If Focus button doesn't work, stop nginx/caddy or add a proxy rule."
+            echo ""
+        fi
+    fi
+
+    if ! has_tailscale; then
+        echo_error "Tailscale not installed"
+        return 1
+    fi
+
+    if ! is_tailscale_connected; then
+        echo_error "Tailscale not connected. Run: tailscale up"
+        return 1
+    fi
+
+    local dns_name
+    dns_name=$(get_tailscale_dns_name)
+    if [[ -z "$dns_name" ]]; then
+        echo_error "Could not get Tailscale DNS name"
+        return 1
+    fi
+
+    TUNNEL_URL="https://${dns_name}"
+    echo "$TUNNEL_URL" > "$TUNNEL_URL_FILE"
+    echo "tailscale" > "$TUNNEL_TYPE_FILE"
+
+    echo_info "Starting Tailscale Funnel..."
+
+    # Use --bg flag to run in background
+    tailscale funnel --bg "$SERVER_PORT" >/dev/null 2>&1
+
+    sleep 1
+    if is_tailscale_funnel_active; then
+        echo_info "Tailscale Funnel started: $TUNNEL_URL"
+        # Save to .mac-tunnel-url for remote-relay auto-detect (local mode only)
+        if [[ "$MODE" == "local" ]]; then
+            echo "$TUNNEL_URL" > "$CLAUDE_DIR/.mac-tunnel-url"
+        fi
+        return 0
+    else
+        if [[ "$retry" == "false" ]]; then
+            echo_warn "Tailscale Funnel not enabled in ACL policy"
+            if enable_funnel_in_acl; then
+                echo_info "Retrying Tailscale Funnel..."
+                start_tailscale_funnel "$background" "true"
+                return $?
+            fi
+        fi
+        echo_error "Tailscale Funnel failed to start"
+        echo_error "Enable Funnel manually at: https://login.tailscale.com/admin/acls"
+        return 1
+    fi
+}
+
+stop_tailscale_funnel() {
+    if has_tailscale && is_tailscale_funnel_active; then
+        tailscale funnel off >/dev/null 2>&1 || true
+        echo_info "Tailscale Funnel stopped"
+        return 0
+    fi
+    return 1
+}
+
+# =============================================================================
+# Tailscale API helpers (for auto-enabling Funnel)
+# =============================================================================
+
+load_tailscale_api_key() {
+    if [[ -f "$ENV_FILE" ]]; then
+        TAILSCALE_API_KEY=$(grep -E '^TAILSCALE_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+        [[ -n "$TAILSCALE_API_KEY" ]]
+        return $?
+    fi
+    return 1
+}
+
+prompt_tailscale_api_key() {
+    echo ""
+    echo -e "${BOLD}Tailscale Funnel Setup${NC}"
+    echo -e "  Funnel needs an API key to auto-enable."
+    echo ""
+    echo -e "  ${CYAN}1.${NC} Go to ${BOLD}https://login.tailscale.com/admin/settings/keys${NC}"
+    echo -e "  ${CYAN}2.${NC} Click ${BOLD}Generate API key${NC}"
+    echo -e "  ${CYAN}3.${NC} Copy the key (starts with tskey-api-...)"
+    echo ""
+
+    if command -v open &>/dev/null; then
+        open "https://login.tailscale.com/admin/settings/keys" 2>/dev/null || true
+    elif command -v xdg-open &>/dev/null; then
+        xdg-open "https://login.tailscale.com/admin/settings/keys" 2>/dev/null || true
+    fi
+
+    echo -ne "  ${YELLOW}?${NC} API key: "
+    read -r TAILSCALE_API_KEY
+
+    if [[ -z "$TAILSCALE_API_KEY" ]]; then
+        echo_error "API key is required"
+        return 1
+    fi
+
+    if [[ ! "$TAILSCALE_API_KEY" =~ ^tskey-api- ]]; then
+        echo_error "Invalid format - should start with 'tskey-api-'"
+        return 1
+    fi
+
+    if [[ -f "$ENV_FILE" ]]; then
+        grep -v '^TAILSCALE_API_KEY=' "$ENV_FILE" > "$ENV_FILE.tmp" 2>/dev/null || true
+        mv "$ENV_FILE.tmp" "$ENV_FILE"
+    fi
+    echo "TAILSCALE_API_KEY=$TAILSCALE_API_KEY" >> "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+    echo_info "API key saved"
+    return 0
+}
+
+enable_funnel_in_acl() {
+    if ! load_tailscale_api_key; then
+        if ! prompt_tailscale_api_key; then
+            return 1
+        fi
+    fi
+
+    echo_info "Checking current Tailscale ACL policy..."
+
+    local current_acl error_msg
+    current_acl=$(curl -s --max-time 10 "https://api.tailscale.com/api/v2/tailnet/-/acl" \
+        -u "${TAILSCALE_API_KEY}:" \
+        -H "Accept: application/json" 2>/dev/null)
+
+    if [[ -z "$current_acl" ]]; then
+        echo_error "Failed to fetch current ACL policy"
+        return 1
+    fi
+
+    error_msg=$(echo "$current_acl" | jq -r '.message // empty' 2>/dev/null)
+    if [[ -n "$error_msg" ]]; then
+        echo_error "API error: $error_msg"
+        echo_error "Check your TAILSCALE_API_KEY in $ENV_FILE"
+        return 1
+    fi
+
+    if echo "$current_acl" | jq -e '.nodeAttrs[]?.attr[]? | select(. == "funnel")' &>/dev/null; then
+        echo_info "Funnel is already enabled in ACL policy"
+        return 0
+    fi
+
+    echo_info "Adding Funnel attribute to ACL policy..."
+
+    local updated_acl
+    if echo "$current_acl" | jq -e '.nodeAttrs | length > 0' &>/dev/null; then
+        if echo "$current_acl" | jq -e '.nodeAttrs[] | select(.target == ["*"])' &>/dev/null; then
+            updated_acl=$(echo "$current_acl" | jq '
+                .nodeAttrs = [.nodeAttrs[] |
+                    if .target == ["*"] then
+                        .attr = ((.attr // []) + ["funnel"] | unique)
+                    else
+                        .
+                    end
+                ]
+            ')
+        else
+            updated_acl=$(echo "$current_acl" | jq '.nodeAttrs += [{"target": ["*"], "attr": ["funnel"]}]')
+        fi
+    else
+        updated_acl=$(echo "$current_acl" | jq '. + {"nodeAttrs": [{"target": ["*"], "attr": ["funnel"]}]}')
+    fi
+
+    local update_response
+    update_response=$(curl -s --max-time 10 -X POST "https://api.tailscale.com/api/v2/tailnet/-/acl" \
+        -u "${TAILSCALE_API_KEY}:" \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json" \
+        --data-raw "$updated_acl" 2>/dev/null)
+
+    error_msg=$(echo "$update_response" | jq -r '.message // empty' 2>/dev/null)
+    if [[ -n "$error_msg" ]]; then
+        echo_error "Failed to update ACL: $error_msg"
+        return 1
+    fi
+
+    echo_info "Funnel enabled - changes propagate in ~10s"
+    sleep 5
+    return 0
+}
+
+# =============================================================================
+# Localtunnel helpers
+# =============================================================================
+
+has_localtunnel_subdomain() {
+    [[ -f "$LOCALTUNNEL_SUBDOMAIN_FILE" ]]
+}
+
+has_stable_tunnel() {
+    [[ -f "$LOCALTUNNEL_SUBDOMAIN_FILE" ]] || (has_tailscale && is_tailscale_connected)
+}
+
+get_localtunnel_subdomain() {
+    cat "$LOCALTUNNEL_SUBDOMAIN_FILE" 2>/dev/null
+}
+
+start_tunnel_and_get_url() {
+    local background="${1:-false}"
+    local log_file="$CLAUDE_DIR/.tunnel-${MODE}.log"
+
+    # Kill any existing tunnel processes
+    pkill -f "lt --port.*${SERVER_PORT}" 2>/dev/null || true
+    rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE" "$log_file"
+    sleep 0.5
+
+    if ! has_stable_tunnel; then
+        echo_error "Stable URL not configured."
+        echo ""
+        echo -e "  Run ${BOLD}tunnel${NC} interactively to configure your subdomain."
+        exit 1
+    fi
+
+    local subdomain
+    subdomain=$(get_localtunnel_subdomain)
+
+    if ! command -v lt &>/dev/null; then
+        echo_warn "Localtunnel not installed. Installing..."
+        if command -v bun &>/dev/null; then
+            bun add -g localtunnel
+        elif command -v npm &>/dev/null; then
+            npm install -g localtunnel
+        else
+            echo_error "Cannot install localtunnel."
+            echo ""
+            echo -e "  Install with: ${BOLD}npm install -g localtunnel${NC}"
+            exit 1
+        fi
+    fi
+
+    echo_info "Starting Localtunnel (stable URL: ${subdomain}.loca.lt)..."
+
+    if [[ "$background" == "true" ]]; then
+        nohup lt --port "$SERVER_PORT" --subdomain "$subdomain" > "$log_file" 2>&1 &
+    else
+        lt --port "$SERVER_PORT" --subdomain "$subdomain" > "$log_file" 2>&1 &
+    fi
+    TUNNEL_PID=$!
+    echo "$TUNNEL_PID" > "$TUNNEL_PID_FILE"
+
+    local tunnel_url=""
+    for i in {1..20}; do
+        if [[ -f "$log_file" ]]; then
+            tunnel_url=$(grep -oE 'https://[a-z0-9-]+\.loca\.lt' "$log_file" 2>/dev/null | head -1 || true)
+            if [[ -n "$tunnel_url" ]]; then
+                break
+            fi
+        fi
+        sleep 0.5
+    done
+
+    if [[ -z "$tunnel_url" ]]; then
+        echo_error "Failed to start localtunnel"
+        cat "$log_file" 2>/dev/null | tail -5
+        kill "$TUNNEL_PID" 2>/dev/null || true
+        rm -f "$TUNNEL_PID_FILE"
+        exit 1
+    fi
+
+    echo "$tunnel_url" > "$TUNNEL_URL_FILE"
+    echo "localtunnel" > "$TUNNEL_TYPE_FILE"
+    TUNNEL_URL="$tunnel_url"
+
+    local expected_url="https://${subdomain}.loca.lt"
+    if [[ "$tunnel_url" != "$expected_url" ]]; then
+        echo_warn "Subdomain '$subdomain' unavailable - got random URL instead"
+        echo_warn "Your stable subdomain may be in use. Try again in a few minutes,"
+        echo_warn "or choose a new subdomain with: tunnel --stable"
+        echo ""
+    fi
+
+    echo_info "Tunnel started: $tunnel_url"
+
+    # Save to .mac-tunnel-url for remote-relay auto-detect (local mode only)
+    if [[ "$MODE" == "local" ]]; then
+        echo "$TUNNEL_URL" > "$CLAUDE_DIR/.mac-tunnel-url"
+        sync_tunnel_url_to_remotes
+    fi
+}
+
+# =============================================================================
+# Sync tunnel URL to remote servers (local mode only)
+# =============================================================================
+
+sync_tunnel_url_to_remotes() {
+    local links_dir="$CLAUDE_DIR/links"
+    if [[ ! -d "$links_dir" ]]; then
+        return 0
+    fi
+
+    local mac_url_file="$CLAUDE_DIR/.mac-tunnel-url"
+    if [[ ! -f "$mac_url_file" ]]; then
+        return 0
+    fi
+
+    local hosts_synced=0
+    local seen_hosts=""
+
+    for link_file in "$links_dir"/*.json; do
+        [[ -f "$link_file" ]] || continue
+
+        local ssh_host ssh_user ssh_port
+        ssh_host=$(grep -o '"ssh_host": *"[^"]*"' "$link_file" 2>/dev/null | cut -d'"' -f4)
+        ssh_user=$(grep -o '"ssh_user": *"[^"]*"' "$link_file" 2>/dev/null | cut -d'"' -f4)
+        ssh_port=$(grep -o '"ssh_port": *"[^"]*"' "$link_file" 2>/dev/null | cut -d'"' -f4)
+
+        [[ -z "$ssh_host" ]] && continue
+        [[ "$seen_hosts" == *"$ssh_user@$ssh_host:$ssh_port"* ]] && continue
+
+        seen_hosts="$seen_hosts $ssh_user@$ssh_host:$ssh_port"
+
+        if scp -o BatchMode=yes -o ConnectTimeout=2 -P "${ssh_port:-22}" \
+            "$mac_url_file" "${ssh_user}@${ssh_host}:~/.claude/.mac-tunnel-url" 2>/dev/null; then
+            ((hosts_synced++)) || true
+        fi
+    done
+
+    if [[ $hosts_synced -gt 0 ]]; then
+        echo_info "Synced tunnel URL to $hosts_synced remote host(s)"
+    fi
+}
+
+# =============================================================================
+# Server helpers (MCP server for local, relay for remote)
+# =============================================================================
+
+check_server_running() {
+    if curl -s "http://localhost:$SERVER_PORT/health" &>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+get_port_pid() {
+    local port="$1"
+    local pid=""
+    if command -v lsof &>/dev/null; then
+        pid=$(lsof -ti ":$port" 2>/dev/null | head -1)
+    elif command -v ss &>/dev/null; then
+        pid=$(ss -tlnp "sport = :$port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1)
+    elif command -v fuser &>/dev/null; then
+        pid=$(fuser "$port/tcp" 2>/dev/null | awk '{print $1}')
+    fi
+    echo "$pid"
+}
+
+kill_orphan_server() {
+    local tracked_pid=""
+    local killed_orphan=false
+
+    if [[ -f "$SERVER_PID_FILE" ]]; then
+        tracked_pid=$(cat "$SERVER_PID_FILE" 2>/dev/null)
+        if [[ -n "$tracked_pid" ]] && ! kill -0 "$tracked_pid" 2>/dev/null; then
+            rm -f "$SERVER_PID_FILE"
+            tracked_pid=""
+        fi
+    fi
+
+    local port_pid
+    port_pid=$(get_port_pid "$SERVER_PORT")
+
+    if [[ -n "$port_pid" ]]; then
+        if [[ "$port_pid" != "$tracked_pid" ]]; then
+            echo_warn "Killing orphan process on port $SERVER_PORT (PID: $port_pid)"
+            kill "$port_pid" 2>/dev/null || true
+            sleep 0.5
+            if kill -0 "$port_pid" 2>/dev/null; then
+                kill -9 "$port_pid" 2>/dev/null || true
+                sleep 0.5
+            fi
+            killed_orphan=true
+        fi
+    fi
+
+    if [[ -n "$tracked_pid" ]] && [[ "$tracked_pid" != "$port_pid" ]]; then
+        rm -f "$SERVER_PID_FILE"
+    fi
+
+    $killed_orphan && return 0 || return 1
+}
+
+find_server_executable() {
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+    if [[ "$MODE" == "local" ]]; then
+        # MCP server
+        if [[ -x "$CLAUDE_DIR/bin/mcp-server" ]]; then
+            echo "$CLAUDE_DIR/bin/mcp-server"
+            return 0
+        fi
+    else
+        # Remote relay
+        if [[ -f "$CLAUDE_DIR/mcp-server-dist/dist/remote-relay.js" ]]; then
+            echo "$CLAUDE_DIR/mcp-server-dist/dist/remote-relay.js"
+            return 0
+        fi
+        if [[ -f "$script_dir/../mcp-server/dist/remote-relay.js" ]]; then
+            echo "$script_dir/../mcp-server/dist/remote-relay.js"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+find_mcp_source_dir() {
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+    if [[ -L "$CLAUDE_DIR/bin/mcp-server" ]]; then
+        local target repo_dir
+        target="$(readlink "$CLAUDE_DIR/bin/mcp-server")"
+        repo_dir="$(dirname "$target")/.."
+        if [[ -d "$repo_dir/mcp-server/src" ]]; then
+            echo "$repo_dir/mcp-server"
+            return 0
+        fi
+    fi
+
+    if [[ -d "$script_dir/../mcp-server/src" ]]; then
+        echo "$script_dir/../mcp-server"
+        return 0
+    fi
+
+    return 1
+}
+
+rebuild_if_needed() {
+    [[ "$MODE" != "local" ]] && return 0
+
+    local mcp_source_dir
+    if ! mcp_source_dir=$(find_mcp_source_dir); then
+        return 0
+    fi
+
+    local src_dir="$mcp_source_dir/src"
+    local dist_dir="$mcp_source_dir/dist"
+    local installed_dist="$CLAUDE_DIR/mcp-server-dist/dist"
+
+    local newest_src oldest_dist=0
+
+    if [[ "$(uname)" == "Darwin" ]]; then
+        newest_src=$(find "$src_dir" -name "*.ts" -type f -exec stat -f "%m %N" {} \; 2>/dev/null | sort -rn | head -1 | cut -d' ' -f1)
+        if [[ -d "$dist_dir" ]]; then
+            oldest_dist=$(find "$dist_dir" -name "*.js" -type f -exec stat -f "%m %N" {} \; 2>/dev/null | sort -n | head -1 | cut -d' ' -f1)
+        fi
+    else
+        newest_src=$(find "$src_dir" -name "*.ts" -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f1 | cut -d'.' -f1)
+        if [[ -d "$dist_dir" ]]; then
+            oldest_dist=$(find "$dist_dir" -name "*.js" -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | head -1 | cut -d' ' -f1 | cut -d'.' -f1)
+        fi
+    fi
+
+    if [[ -n "$newest_src" ]] && [[ "$newest_src" -gt "$oldest_dist" ]]; then
+        echo_info "Source files changed, rebuilding MCP server..."
+        (
+            cd "$mcp_source_dir"
+            if command -v bun &>/dev/null; then
+                bun run build
+            elif command -v npm &>/dev/null; then
+                npm run build
+            else
+                echo_warn "No build tool found (bun/npm), skipping rebuild"
+                return 0
+            fi
+        )
+
+        if [[ -d "$installed_dist" ]]; then
+            cp -r "$dist_dir"/* "$installed_dist"/
+            echo_info "Updated installed MCP server"
+        fi
+    fi
+}
+
+start_server() {
+    local server_path log_file
+
+    if ! server_path=$(find_server_executable); then
+        if [[ "$MODE" == "local" ]]; then
+            echo_error "MCP server not found at $CLAUDE_DIR/bin/mcp-server"
+            echo_error "Run install.sh first to build the MCP server"
+        else
+            echo_error "Remote relay not found."
+            echo_error "Build the MCP server first: cd mcp-server && bun run build"
+        fi
+        exit 1
+    fi
+
+    kill_orphan_server || true
+
+    if [[ "$MODE" == "local" ]]; then
+        log_file="$CLAUDE_DIR/mcp-server.log"
+        echo_info "Starting MCP server..."
+        nohup "$server_path" > "$log_file" 2>&1 &
+    else
+        log_file="$CLAUDE_DIR/remote-relay.log"
+        echo_info "Starting remote relay..."
+        nohup node "$server_path" > "$log_file" 2>&1 &
+    fi
+
+    local server_pid=$!
+    echo "$server_pid" > "$SERVER_PID_FILE"
+
+    for i in {1..10}; do
+        if check_server_running; then
+            echo_info "${SERVER_TYPE^} server started (PID: $server_pid)"
+            return 0
+        fi
+        sleep 0.5
+    done
+
+    echo_error "${SERVER_TYPE^} server failed to start. Check $log_file"
+    exit 1
+}
+
+stop_server() {
+    local stopped=false
+
+    if [[ -f "$SERVER_PID_FILE" ]]; then
+        local pid
+        pid=$(cat "$SERVER_PID_FILE")
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+            stopped=true
+        fi
+        rm -f "$SERVER_PID_FILE"
+    fi
+
+    if kill_orphan_server; then
+        stopped=true
+    fi
+
+    if $stopped; then
+        echo_info "${SERVER_TYPE^} server stopped"
+    fi
+}
+
+# =============================================================================
+# Idle watchdog (for --background mode)
+# =============================================================================
+
+start_watchdog() {
+    if [[ -z "$IDLE_TIMEOUT" || "$IDLE_TIMEOUT" -le 0 ]]; then
+        echo_info "Idle watchdog disabled (tunnel will persist until manually stopped)"
+        return 0
+    fi
+
+    touch "$ACTIVITY_FILE"
+
+    (
+        while true; do
+            sleep 300
+
+            if [[ ! -f "$ACTIVITY_FILE" ]]; then
+                continue
+            fi
+
+            local last now
+            if [[ "$(uname)" == "Darwin" ]]; then
+                last=$(stat -f %m "$ACTIVITY_FILE" 2>/dev/null)
+            else
+                last=$(stat -c %Y "$ACTIVITY_FILE" 2>/dev/null)
+            fi
+            now=$(date +%s)
+
+            if [[ -z "$last" || ! "$last" =~ ^[0-9]+$ ]]; then
+                continue
+            fi
+
+            if [[ $((now - last)) -gt $IDLE_TIMEOUT ]]; then
+                echo "$(date): Idle timeout ($IDLE_TIMEOUT seconds), shutting down" >> "$TUNNEL_LOG"
+
+                if [[ -f "$TUNNEL_PID_FILE" ]]; then
+                    local tunnel_pid
+                    tunnel_pid=$(cat "$TUNNEL_PID_FILE")
+                    kill "$tunnel_pid" 2>/dev/null || true
+                    rm -f "$TUNNEL_PID_FILE"
+                fi
+
+                stop_server
+                rm -f "$ACTIVITY_FILE"
+                rm -f "$WATCHDOG_PID_FILE"
+                exit 0
+            fi
+        done
+    ) &
+    local watchdog_pid=$!
+    echo "$watchdog_pid" > "$WATCHDOG_PID_FILE"
+    echo_info "Idle watchdog started (timeout: ${IDLE_TIMEOUT}s)"
+}
+
+stop_watchdog() {
+    if [[ -f "$WATCHDOG_PID_FILE" ]]; then
+        local pid
+        pid=$(cat "$WATCHDOG_PID_FILE")
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+        fi
+        rm -f "$WATCHDOG_PID_FILE"
+    fi
+}
+
+# =============================================================================
+# --setup: Configure Slack API tokens
+# =============================================================================
+
+cmd_setup() {
+    echo ""
+    echo -e "${BOLD}Slack Tunnel Setup${NC}"
+    echo ""
+
+    if ! command -v jq &>/dev/null; then
+        echo_error "jq required. Install: brew install jq (macOS) or apt install jq (Linux)"
+        exit 1
+    fi
+
+    if [[ "$MODE" == "remote" ]]; then
+        # Remote mode: offer to copy from Mac or manual setup
+        if [[ -f "$SLACK_CONFIG_FILE" ]]; then
+            echo_info "Slack config already exists at $SLACK_CONFIG_FILE"
+            echo ""
+            echo -ne "  ${YELLOW}?${NC} Replace existing config? [y/N] "
+            read -r response
+            if [[ ! "$response" =~ ^[Yy]$ ]]; then
+                echo_info "Keeping existing config"
+                return 0
+            fi
+        fi
+
+        echo ""
+        echo -e "${CYAN}Option 1: Copy config from Mac (recommended)${NC}"
+        echo ""
+        echo -e "  Run this on your Mac:"
+        echo -e "    ${BOLD}scp ~/.claude/.slack-config $(hostname):~/.claude/${NC}"
+        echo ""
+        echo -e "${CYAN}Option 2: Manual setup${NC}"
+        echo ""
+    fi
+
+    echo -e "${BOLD}Configuration Token${NC}"
+    echo -e "  1. Go to ${BOLD}https://api.slack.com/apps${NC}"
+    echo -e "  2. Scroll to bottom -> ${BOLD}\"Your App Configuration Tokens\"${NC}"
+    echo -e "  3. Click ${BOLD}\"Generate Token\"${NC} -> select workspace -> ${BOLD}\"Generate\"${NC}"
+    echo -e "  4. Copy the ${BOLD}Access Token${NC} (xoxe-...)"
+    echo ""
+    echo -ne "  ${YELLOW}?${NC} Access Token: "
+    read -r SLACK_ACCESS_TOKEN
+
+    if [[ -z "$SLACK_ACCESS_TOKEN" ]]; then
+        echo_error "Access token is required"
+        exit 1
+    fi
+
+    echo -e "  5. Copy the ${BOLD}Refresh Token${NC}"
+    echo -ne "  ${YELLOW}?${NC} Refresh Token: "
+    read -r SLACK_REFRESH_TOKEN
+
+    if [[ -z "$SLACK_REFRESH_TOKEN" ]]; then
+        echo_error "Refresh token is required"
+        exit 1
+    fi
+
+    SLACK_TOKEN_EXPIRES=$(($(date +%s) + 43200))
+
+    echo ""
+    echo -e "${BOLD}Slack App ID${NC}"
+    echo -e "  Create app at ${BOLD}https://api.slack.com/apps${NC} if needed."
+    echo -e "  Copy ${BOLD}App ID${NC} from top of page (format: A0XXXXXXXXX)"
+    echo ""
+    echo -ne "  ${YELLOW}?${NC} App ID: "
+    read -r SLACK_APP_ID
+
+    if [[ -z "$SLACK_APP_ID" || ! "$SLACK_APP_ID" =~ ^A[A-Z0-9]+$ ]]; then
+        echo_error "Invalid App ID format"
+        exit 1
+    fi
+
+    save_slack_config
+
+    # Verify token
+    local test_response ok
+    test_response=$(curl -s -X POST "https://slack.com/api/apps.manifest.export" \
+        -H "Authorization: Bearer ${SLACK_ACCESS_TOKEN}" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "app_id=${SLACK_APP_ID}")
+    ok=$(echo "$test_response" | jq -r '.ok // false')
+
+    if [[ "$ok" != "true" ]]; then
+        local error
+        error=$(echo "$test_response" | jq -r '.error // "unknown error"')
+        echo_error "Verification failed: $error"
+        rm -f "$SLACK_CONFIG_FILE"
+        exit 1
+    fi
+
+    echo_info "Configuration verified"
+    echo ""
+
+    # Local mode: also set up webhook
+    if [[ "$MODE" == "local" ]]; then
+        echo -e "${BOLD}Webhook URL${NC}"
+        echo -e "  1. Go to ${BOLD}https://api.slack.com/apps/${SLACK_APP_ID}${NC}"
+        echo -e "  2. ${BOLD}Incoming Webhooks${NC} -> Enable -> ${BOLD}Add New Webhook${NC}"
+        echo -e "  3. Select channel -> Copy webhook URL"
+        echo ""
+        echo -ne "  ${YELLOW}?${NC} Webhook URL: "
+        read -r webhook_url
+
+        if [[ -n "$webhook_url" ]]; then
+            echo "$webhook_url" > "$CLAUDE_DIR/slack-webhook-url"
+            chmod 600 "$CLAUDE_DIR/slack-webhook-url"
+            echo_info "Webhook saved"
+        else
+            echo_warn "Skipped - notifications won't work"
+        fi
+
+        echo ""
+        echo -ne "${YELLOW}?${NC} Enable thread replies? [Y/n] "
+        read -r enable_threads
+
+        if [[ ! "$enable_threads" =~ ^[Nn]$ ]]; then
+            echo ""
+            echo -e "  1. ${BOLD}OAuth & Permissions${NC} -> Add scopes: app_mentions:read, channels:history, chat:write, files:read"
+            echo -e "  2. ${BOLD}Install to Workspace${NC} -> Copy ${BOLD}Bot User OAuth Token${NC} (xoxb-...)"
+            echo ""
+            echo -ne "  ${YELLOW}?${NC} Bot Token: "
+            read -r SLACK_BOT_TOKEN
+
+            if [[ -n "$SLACK_BOT_TOKEN" ]]; then
+                echo -e "  3. ${BOLD}Event Subscriptions${NC} -> Enable -> Add: message.channels, message.im"
+                save_slack_config
+                echo_info "Bot token saved"
+            fi
+        fi
+
+        echo ""
+        echo -e "${BOLD}Channel ID${NC}"
+        echo -e "  Right-click channel -> View details -> scroll to Channel ID"
+        echo -ne "  ${YELLOW}?${NC} Channel ID: "
+        read -r SLACK_CHANNEL_ID
+
+        if [[ -n "$SLACK_CHANNEL_ID" ]]; then
+            save_slack_config
+            echo_info "Channel ID saved"
+        fi
+    fi
+
+    echo ""
+    echo -e "${GREEN}Setup complete!${NC} Run ${BOLD}tunnel${NC} to start."
+    echo ""
+}
+
+# =============================================================================
+# --update-token: Quick token refresh (local mode only)
+# =============================================================================
+
+cmd_update_token() {
+    echo ""
+    echo -e "${BOLD}Update Slack Token${NC}"
+    echo ""
+
+    if [[ ! -f "$SLACK_CONFIG_FILE" ]]; then
+        echo_error "No config found. Run: tunnel --setup"
+        exit 1
+    fi
+
+    source "$SLACK_CONFIG_FILE"
+
+    if [[ -z "${SLACK_APP_ID:-}" ]]; then
+        echo_error "App ID not found. Run: tunnel --setup"
+        exit 1
+    fi
+
+    echo -e "  App ID: ${BOLD}${SLACK_APP_ID}${NC}"
+    echo ""
+
+    local config_url="https://api.slack.com/apps"
+    if command -v open &>/dev/null; then
+        open "$config_url" 2>/dev/null || true
+    elif command -v xdg-open &>/dev/null; then
+        xdg-open "$config_url" 2>/dev/null || true
+    fi
+
+    echo -e "  1. Scroll to bottom -> ${BOLD}\"Your App Configuration Tokens\"${NC}"
+    echo -e "  2. ${BOLD}\"Generate Token\"${NC} -> select workspace -> ${BOLD}\"Generate\"${NC}"
+    echo ""
+    echo -ne "  ${YELLOW}?${NC} Access Token (xoxe-...): "
+    read -r SLACK_ACCESS_TOKEN
+    [[ -z "$SLACK_ACCESS_TOKEN" ]] && { echo_error "Required"; exit 1; }
+
+    echo -ne "  ${YELLOW}?${NC} Refresh Token: "
+    read -r SLACK_REFRESH_TOKEN
+    [[ -z "$SLACK_REFRESH_TOKEN" ]] && { echo_error "Required"; exit 1; }
+
+    SLACK_TOKEN_EXPIRES=$(($(date +%s) + 43200))
+    save_slack_config
+
+    local test_response ok
+    test_response=$(curl -s -X POST "https://slack.com/api/apps.manifest.export" \
+        -H "Authorization: Bearer ${SLACK_ACCESS_TOKEN}" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "app_id=${SLACK_APP_ID}")
+    ok=$(echo "$test_response" | jq -r '.ok // false')
+
+    if [[ "$ok" != "true" ]]; then
+        echo_error "Verification failed: $(echo "$test_response" | jq -r '.error // "unknown"')"
+        exit 1
+    fi
+
+    echo ""
+    echo -e "${GREEN}Token updated!${NC}"
+    echo ""
+}
+
+# =============================================================================
+# --stable: Setup stable URL with Localtunnel
+# =============================================================================
+
+cmd_stable() {
+    if ! command -v lt &>/dev/null; then
+        echo_info "Installing localtunnel..."
+        if command -v bun &>/dev/null; then
+            bun add -g localtunnel
+        elif command -v npm &>/dev/null; then
+            npm install -g localtunnel
+        else
+            echo_error "bun/npm not found. Install Node.js first."
+            exit 1
+        fi
+    fi
+
+    if has_stable_tunnel; then
+        local current tunnel_url
+        current=$(get_localtunnel_subdomain)
+        tunnel_url="https://${current}.loca.lt"
+
+        echo ""
+        echo -e "  Current URL: ${CYAN}${tunnel_url}${NC}"
+        echo -ne "  ${YELLOW}?${NC} Change subdomain? [y/N] "
+        read -r change_subdomain
+
+        if [[ ! "$change_subdomain" =~ ^[Yy]$ ]]; then
+            cmd_interactive
+            return
+        fi
+    fi
+
+    echo ""
+    echo -e "${BOLD}Stable Tunnel Setup${NC}"
+    echo -e "  Choose a unique subdomain (e.g., claude-slack-yourname)"
+    echo -ne "  ${YELLOW}?${NC} Subdomain: "
+    read -r subdomain
+
+    [[ -z "$subdomain" ]] && { echo_error "Subdomain required"; exit 1; }
+
+    subdomain="${subdomain#https://}"
+    subdomain="${subdomain%.loca.lt}"
+    subdomain="${subdomain%%/*}"
+
+    if [[ ! "$subdomain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]]; then
+        echo_error "Invalid subdomain - use only letters, numbers, hyphens"
+        exit 1
+    fi
+
+    echo "$subdomain" > "$LOCALTUNNEL_SUBDOMAIN_FILE"
+    chmod 600 "$LOCALTUNNEL_SUBDOMAIN_FILE"
+
+    local tunnel_url="https://${subdomain}.loca.lt"
+
+    echo_info "Testing tunnel..."
+    local log_file="$CLAUDE_DIR/.localtunnel-test.log"
+    rm -f "$log_file"
+
+    lt --port "$SERVER_PORT" --subdomain "$subdomain" > "$log_file" 2>&1 &
+    local test_pid=$!
+
+    local connected=""
+    for i in {1..10}; do
+        grep -q "your url is" "$log_file" 2>/dev/null && { connected="true"; break; }
+        sleep 1
+    done
+
+    kill "$test_pid" 2>/dev/null || true
+    wait "$test_pid" 2>/dev/null || true
+
+    if [[ -z "$connected" ]]; then
+        echo_warn "Could not verify - subdomain might be taken"
+    else
+        echo -e "  ${GREEN}✓${NC} Tunnel works!"
+    fi
+
+    echo ""
+    echo -e "${GREEN}Stable URL:${NC} ${CYAN}${tunnel_url}${NC}"
+
+    # Update Slack if tokens exist (remote mode)
+    if [[ "$MODE" == "remote" ]]; then
+        if load_slack_config && [[ -n "${SLACK_APP_ID:-}" ]]; then
+            echo_info "Updating Slack app settings..."
+            if update_slack_request_url "${tunnel_url}/slack/actions" "${tunnel_url}/slack/events"; then
+                echo -e "  ${GREEN}✓${NC} Slack Request URLs updated automatically!"
+            fi
+        fi
+    fi
+
+    echo ""
+    cmd_interactive
+}
+
+# =============================================================================
+# --background: Start tunnel in background
+# =============================================================================
+
+cmd_background() {
+    if ! load_slack_config; then
+        echo_error "Slack not configured. Run: tunnel --setup"
+        exit 1
+    fi
+
+    # Check if Tailscale Funnel is already running
+    if is_tailscale_funnel_active; then
+        echo_info "Tailscale Funnel already running"
+        TUNNEL_URL=$(get_tailscale_funnel_url)
+        if ! check_server_running; then
+            [[ "$MODE" == "local" ]] && rebuild_if_needed
+            start_server
+        fi
+        return 0
+    fi
+
+    local server_needs_start=true
+    local tunnel_was_running=false
+    local need_slack_update=false
+
+    # Check server status
+    if check_server_running; then
+        local tracked_pid="" port_pid=""
+        if [[ -f "$SERVER_PID_FILE" ]]; then
+            tracked_pid=$(cat "$SERVER_PID_FILE" 2>/dev/null)
+        fi
+        port_pid=$(get_port_pid "$SERVER_PORT")
+
+        if [[ -n "$tracked_pid" ]] && [[ "$tracked_pid" == "$port_pid" ]] && kill -0 "$tracked_pid" 2>/dev/null; then
+            server_needs_start=false
+            echo_info "${SERVER_TYPE^} server already running (PID: $tracked_pid)"
+        else
+            echo_info "Cleaning up stale ${SERVER_TYPE} server..."
+        fi
+    fi
+
+    # Check tunnel status
+    if [[ -f "$TUNNEL_PID_FILE" ]]; then
+        local tunnel_pid
+        tunnel_pid=$(cat "$TUNNEL_PID_FILE")
+        if [[ -n "$tunnel_pid" ]] && kill -0 "$tunnel_pid" 2>/dev/null; then
+            tunnel_was_running=true
+            echo_info "Localtunnel already running"
+        fi
+    fi
+
+    [[ "$MODE" == "local" ]] && rebuild_if_needed
+
+    if $server_needs_start; then
+        start_server
+    fi
+
+    if [[ "$tunnel_was_running" == "false" ]]; then
+        local tunnel_started=false
+        if [[ "$TUNNEL_TYPE" != "localtunnel" ]] && has_tailscale && is_tailscale_connected; then
+            if start_tailscale_funnel "true"; then
+                tunnel_started=true
+                [[ "$MODE" == "local" ]] && sync_tunnel_url_to_remotes
+            else
+                echo_warn "Tailscale Funnel failed, falling back to Localtunnel..."
+            fi
+        fi
+
+        if [[ "$tunnel_started" == "false" ]]; then
+            if ! has_localtunnel_subdomain; then
+                echo_error "No tunnel backend available."
+                echo ""
+                echo -e "  Either:"
+                echo -e "    1. Enable Tailscale Funnel: ${BOLD}tailscale funnel ${SERVER_PORT}${NC}"
+                echo -e "    2. Configure Localtunnel: ${BOLD}tunnel --stable${NC}"
+                exit 1
+            fi
+            start_tunnel_and_get_url "true"
+        fi
+        need_slack_update=true
+    fi
+
+    # Update Slack Request URLs (remote mode only)
+    if [[ "$MODE" == "remote" && "$need_slack_update" == "true" ]]; then
+        if ! update_slack_request_url "${TUNNEL_URL}/slack/actions" "${TUNNEL_URL}/slack/events"; then
+            echo_warn "Failed to update Slack, but tunnel is running"
+            echo_warn "Manually set Request URLs:"
+            echo_warn "  Actions: ${TUNNEL_URL}/slack/actions"
+            echo_warn "  Events:  ${TUNNEL_URL}/slack/events"
+        fi
+    fi
+
+    start_watchdog
+    touch "$ACTIVITY_FILE"
+
+    echo_info "Tunnel running in background"
+}
+
+# =============================================================================
+# --stop: Stop background tunnel
+# =============================================================================
+
+cmd_stop() {
+    local stopped=false
+
+    if [[ -f "$WATCHDOG_PID_FILE" ]]; then
+        stop_watchdog
+        stopped=true
+    fi
+
+    if stop_tailscale_funnel; then
+        stopped=true
+    fi
+
+    if [[ -f "$TUNNEL_PID_FILE" ]]; then
+        local pid
+        pid=$(cat "$TUNNEL_PID_FILE")
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+            echo_info "Localtunnel stopped"
+            stopped=true
+        fi
+        rm -f "$TUNNEL_PID_FILE"
+    fi
+
+    # Kill any remaining localtunnel processes
+    local stale_count=0
+    while IFS= read -r pid; do
+        if [[ -n "$pid" ]]; then
+            kill "$pid" 2>/dev/null || true
+            ((stale_count++)) || true
+        fi
+    done < <(pgrep -f "lt --port.*${SERVER_PORT}" 2>/dev/null || true)
+
+    if [[ "$stale_count" -gt 0 ]]; then
+        echo_info "Cleaned up $stale_count stale localtunnel process(es)"
+        stopped=true
+    fi
+
+    rm -f "$TUNNEL_URL_FILE" "$TUNNEL_TYPE_FILE"
+
+    if [[ -f "$SERVER_PID_FILE" ]]; then
+        stop_server
+        stopped=true
+    fi
+
+    rm -f "$ACTIVITY_FILE"
+
+    if [[ "$stopped" == "true" ]]; then
+        echo_info "All services stopped"
+    else
+        echo_info "No services were running"
+    fi
+}
+
+# =============================================================================
+# --status: Check tunnel status
+# =============================================================================
+
+cmd_status() {
+    echo ""
+    echo -e "${BOLD}Tunnel Status (${MODE} mode)${NC}"
+    echo ""
+
+    # Check Tailscale availability and status
+    if has_tailscale && is_tailscale_connected; then
+        local ts_dns
+        ts_dns=$(get_tailscale_dns_name)
+        if is_tailscale_funnel_active; then
+            echo -e "  Backend:    ${GREEN}Tailscale Funnel${NC} (active)"
+            echo -e "  URL:        ${CYAN}https://${ts_dns}${NC}"
+        else
+            echo -e "  Tailscale:  ${CYAN}Available${NC} (${ts_dns})"
+            if has_localtunnel_subdomain; then
+                local subdomain
+                subdomain=$(get_localtunnel_subdomain)
+                echo -e "  Localtunnel: ${CYAN}Configured${NC} (${subdomain}.loca.lt)"
+            fi
+        fi
+    elif has_localtunnel_subdomain; then
+        local subdomain
+        subdomain=$(get_localtunnel_subdomain)
+        echo -e "  Backend:    ${GREEN}Localtunnel${NC}"
+        echo -e "  URL:        ${CYAN}https://${subdomain}.loca.lt${NC}"
+    else
+        echo -e "  Backend:    ${YELLOW}Not configured${NC}"
+        echo -e "              ${DIM}Tailscale recommended, or run --stable for Localtunnel${NC}"
+    fi
+    echo ""
+
+    # Check server
+    local server_tracked_pid="" server_port_pid=""
+    if [[ -f "$SERVER_PID_FILE" ]]; then
+        server_tracked_pid=$(cat "$SERVER_PID_FILE" 2>/dev/null)
+    fi
+    server_port_pid=$(get_port_pid "$SERVER_PORT")
+
+    local server_label
+    [[ "$MODE" == "local" ]] && server_label="MCP Server" || server_label="Relay"
+
+    if check_server_running; then
+        if [[ -n "$server_tracked_pid" ]] && [[ "$server_tracked_pid" == "$server_port_pid" ]]; then
+            echo -e "  ${server_label}:  ${GREEN}Running${NC} (PID: $server_tracked_pid)"
+        elif [[ -n "$server_port_pid" ]]; then
+            echo -e "  ${server_label}:  ${YELLOW}Orphan process${NC} (PID: $server_port_pid, not tracked)"
+            echo -e "              ${DIM}Run: tunnel --stop && tunnel --background${NC}"
+        else
+            echo -e "  ${server_label}:  ${GREEN}Running${NC}"
+        fi
+    else
+        if [[ -n "$server_tracked_pid" ]]; then
+            echo -e "  ${server_label}:  ${YELLOW}Stopped${NC} (stale PID file: $server_tracked_pid)"
+        else
+            echo -e "  ${server_label}:  ${YELLOW}Stopped${NC}"
+        fi
+    fi
+
+    # Check tunnel
+    if is_tailscale_funnel_active; then
+        echo -e "  Tunnel:     ${GREEN}Running${NC} (Tailscale Funnel)"
+        if [[ -f "$TUNNEL_URL_FILE" ]]; then
+            local url
+            url=$(cat "$TUNNEL_URL_FILE")
+            echo -e "  Actions:    ${CYAN}$url/slack/actions${NC}"
+        fi
+    elif [[ -f "$TUNNEL_PID_FILE" ]]; then
+        local pid
+        pid=$(cat "$TUNNEL_PID_FILE")
+        if kill -0 "$pid" 2>/dev/null; then
+            echo -e "  Tunnel:     ${GREEN}Running${NC} (Localtunnel PID: $pid)"
+            if [[ -f "$TUNNEL_URL_FILE" ]]; then
+                local url
+                url=$(cat "$TUNNEL_URL_FILE")
+                echo -e "  Actions:    ${CYAN}$url/slack/actions${NC}"
+            fi
+        else
+            echo -e "  Tunnel:     ${YELLOW}Stopped${NC} (stale PID file)"
+        fi
+    else
+        echo -e "  Tunnel:     ${YELLOW}Stopped${NC}"
+    fi
+
+    # Check watchdog
+    if [[ -z "$IDLE_TIMEOUT" || "$IDLE_TIMEOUT" -le 0 ]]; then
+        echo -e "  Watchdog:   ${DIM}Disabled (tunnel persists until stopped)${NC}"
+    elif [[ -f "$WATCHDOG_PID_FILE" ]]; then
+        local pid
+        pid=$(cat "$WATCHDOG_PID_FILE")
+        if kill -0 "$pid" 2>/dev/null; then
+            echo -e "  Watchdog:   ${GREEN}Running${NC} (timeout: ${IDLE_TIMEOUT}s)"
+        else
+            echo -e "  Watchdog:   ${YELLOW}Stopped${NC}"
+        fi
+    else
+        echo -e "  Watchdog:   ${YELLOW}Stopped${NC}"
+    fi
+
+    # Check Mac tunnel URL (remote mode)
+    if [[ "$MODE" == "remote" && -f "$CLAUDE_DIR/.mac-tunnel-url" ]]; then
+        local mac_url
+        mac_url=$(cat "$CLAUDE_DIR/.mac-tunnel-url")
+        echo -e "  Mac URL:    ${DIM}$mac_url${NC}"
+    fi
+
+    # Check last activity
+    if [[ -n "$IDLE_TIMEOUT" && "$IDLE_TIMEOUT" -gt 0 && -f "$ACTIVITY_FILE" ]]; then
+        local last now elapsed
+        if [[ "$(uname)" == "Darwin" ]]; then
+            last=$(stat -f %m "$ACTIVITY_FILE" 2>/dev/null || echo 0)
+        else
+            last=$(stat -c %Y "$ACTIVITY_FILE" 2>/dev/null || echo 0)
+        fi
+        now=$(date +%s)
+        elapsed=$((now - last))
+        local remaining=$((IDLE_TIMEOUT - elapsed))
+        if [[ $remaining -gt 0 ]]; then
+            echo -e "  Idle timer: ${DIM}${remaining}s until auto-stop${NC}"
+        fi
+    fi
+
+    echo ""
+}
+
+# =============================================================================
+# Default: Interactive mode
+# =============================================================================
+
+cmd_interactive() {
+    echo ""
+    if [[ "$MODE" == "local" ]]; then
+        echo -e "${BOLD}Slack Tunnel${NC}"
+    else
+        echo -e "${BOLD}Remote Tunnel for Claude Slack Buttons${NC}"
+        echo -e "${DIM}Receive Slack button clicks when your Mac is closed${NC}"
+    fi
+    echo ""
+
+    local using_tailscale=false
+    local using_localtunnel=false
+
+    if ! load_slack_config; then
+        echo_warn "Slack not configured yet."
+        echo ""
+        echo -ne "  ${YELLOW}?${NC} Run setup now? [Y/n] "
+        read -r response
+        if [[ "$response" =~ ^[Nn]$ ]]; then
+            exit 0
+        fi
+        cmd_setup
+        load_slack_config || true
+    fi
+
+    [[ "$MODE" == "local" ]] && rebuild_if_needed
+
+    # Kill existing server and start fresh
+    if check_server_running; then
+        local old_pid
+        old_pid=$(cat "$SERVER_PID_FILE" 2>/dev/null)
+        [[ -n "$old_pid" ]] && kill "$old_pid" 2>/dev/null || true
+        sleep 1
+    fi
+    start_server
+
+    # Cleanup on exit
+    cleanup() {
+        echo ""
+        echo_info "Shutting down..."
+        stop_relay_heartbeat
+        unregister_from_public_relay
+        stop_tailscale_funnel 2>/dev/null || true
+        [[ -n "${TUNNEL_PID:-}" ]] && kill "$TUNNEL_PID" 2>/dev/null || true
+        stop_server
+        rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE" "$TUNNEL_TYPE_FILE"
+        exit 0
+    }
+    trap cleanup INT TERM
+    trap 'rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE" "$TUNNEL_TYPE_FILE"' EXIT
+
+    # Try Tailscale Funnel first
+    if [[ "$TUNNEL_TYPE" != "localtunnel" ]] && has_tailscale && is_tailscale_connected; then
+        if start_tailscale_funnel "false"; then
+            using_tailscale=true
+            [[ "$MODE" == "local" ]] && sync_tunnel_url_to_remotes
+        else
+            echo_warn "Tailscale Funnel failed, falling back to Localtunnel..."
+        fi
+    fi
+
+    # Fall back to Localtunnel
+    if [[ "$using_tailscale" == "false" ]]; then
+        if has_stable_tunnel; then
+            using_localtunnel=true
+            start_tunnel_and_get_url "false"
+        else
+            echo_warn "No tunnel configured."
+            echo -e "  Run ${BOLD}tunnel --stable${NC} to setup Localtunnel."
+            exit 1
+        fi
+    fi
+
+    # Register with public relay if enabled
+    if [[ "$USE_PUBLIC_RELAY" == "true" ]]; then
+        if register_with_public_relay "$TUNNEL_URL"; then
+            start_relay_heartbeat
+        else
+            echo_warn "Could not register with public relay - continuing without it"
+        fi
+    fi
+
+    # Update Slack Request URLs (remote mode only)
+    if [[ "$MODE" == "remote" ]]; then
+        if update_slack_request_url "${TUNNEL_URL}/slack/actions" "${TUNNEL_URL}/slack/events"; then
+            echo ""
+            if [[ "$using_tailscale" == "true" ]]; then
+                echo -e "${GREEN}Tailscale Funnel connected!${NC}"
+            else
+                echo -e "${GREEN}Localtunnel connected!${NC}"
+            fi
+            echo -e "  URL: ${CYAN}${TUNNEL_URL}${NC}"
+            echo -e "  ${DIM}Slack URLs updated automatically.${NC}"
+        else
+            echo ""
+            echo_warn "Could not auto-update Slack"
+            echo -e "  Actions URL: ${CYAN}${TUNNEL_URL}/slack/actions${NC}"
+            echo -e "  Events URL:  ${CYAN}${TUNNEL_URL}/slack/events${NC}"
+        fi
+    else
+        echo ""
+        if [[ "$using_tailscale" == "true" ]]; then
+            echo -e "${GREEN}Tailscale Funnel connected${NC}"
+        else
+            echo -e "${GREEN}Localtunnel connected${NC}"
+        fi
+        echo -e "  URL: ${CYAN}${TUNNEL_URL}${NC}"
+    fi
+
+    if [[ "$USE_PUBLIC_RELAY" == "true" ]]; then
+        echo -e "  ${GREEN}✓${NC} Registered with public relay"
+    fi
+    echo -e "  ${DIM}Focus endpoint: ${TUNNEL_URL}/focus${NC}"
+    echo -e "  ${DIM}Press Ctrl+C to stop.${NC}"
+    echo ""
+
+    # Keep running
+    if [[ "$using_tailscale" == "true" ]]; then
+        while true; do sleep 3600; done
+    else
+        wait "$TUNNEL_PID" 2>/dev/null || true
+    fi
+}
+
+# =============================================================================
+# Help
+# =============================================================================
+
+cmd_help() {
+    local script_name
+    script_name=$(basename "$0")
+
+    echo "Usage: $script_name [command]"
+    echo ""
+    echo "Commands:"
+    echo "  (none)         Start tunnel (Tailscale if available, else Localtunnel)"
+    echo "  --setup        Configure Slack tokens (for auto-URL updates)"
+    if [[ "$MODE" == "local" ]]; then
+        echo "  --update-token Quick Slack token refresh when expired"
+    fi
+    echo "  --background   Start tunnel in background"
+    echo "  --stop         Stop background tunnel"
+    echo "  --status       Check tunnel status"
+    echo ""
+    echo "Mode options:"
+    echo "  --local        Force local mode (Mac behavior, port 8463)"
+    echo "  --remote       Force remote mode (Linux behavior, port 8464)"
+    echo ""
+    echo "Backend options:"
+    echo "  --use-tailscale    Force Tailscale Funnel"
+    echo "  --use-localtunnel  Force Localtunnel"
+    echo ""
+    echo "Public relay options:"
+    echo "  --public-relay           Start with public relay registration"
+    echo "  --public-relay --setup   Configure public relay URL and API key"
+    echo "  --public-relay --background  Run in background with public relay"
+    echo ""
+    echo "Environment variables:"
+    if [[ "$MODE" == "local" ]]; then
+        echo "  CLAUDE_TUNNEL_IDLE_TIMEOUT  Enable auto-shutdown after N seconds idle (default: disabled)"
+    else
+        echo "  CLAUDE_RELAY_IDLE_TIMEOUT   Enable auto-shutdown after N seconds idle (default: disabled)"
+    fi
+    echo ""
+    echo "Current mode: $MODE (port $SERVER_PORT)"
+    echo ""
+}
+
+# =============================================================================
+# Main - parse flags first, then run command
+# =============================================================================
+
+# First pass: extract mode flags
+ARGS=()
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --local)
+            MODE="local"
+            shift
+            ;;
+        --remote)
+            MODE="remote"
+            shift
+            ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# Set mode-specific configuration
+set_mode_config
+
+# Restore args
+set -- "${ARGS[@]}"
+
+# Second pass: run command
+case "${1:-}" in
+    --setup)
+        cmd_setup
+        ;;
+    --update-token)
+        if [[ "$MODE" != "local" ]]; then
+            echo_error "--update-token is only available in local mode"
+            exit 1
+        fi
+        cmd_update_token
+        ;;
+    --background)
+        cmd_background
+        ;;
+    --stop)
+        cmd_stop
+        ;;
+    --status)
+        cmd_status
+        ;;
+    --public-relay)
+        shift
+        case "${1:-}" in
+            --setup)
+                cmd_public_relay_setup
+                ;;
+            --background)
+                USE_PUBLIC_RELAY=true
+                cmd_background
+                ;;
+            "")
+                USE_PUBLIC_RELAY=true
+                cmd_interactive
+                ;;
+            *)
+                echo_error "Unknown command after --public-relay: $1"
+                exit 1
+                ;;
+        esac
+        ;;
+    --use-tailscale)
+        TUNNEL_TYPE="tailscale"
+        shift
+        case "${1:-}" in
+            --background) cmd_background ;;
+            "") cmd_interactive ;;
+            *) echo_error "Unknown command after --use-tailscale: $1"; exit 1 ;;
+        esac
+        ;;
+    --use-localtunnel)
+        TUNNEL_TYPE="localtunnel"
+        shift
+        case "${1:-}" in
+            --background) cmd_background ;;
+            --stable|"") cmd_stable ;;
+            *) echo_error "Unknown command after --use-localtunnel: $1"; exit 1 ;;
+        esac
+        ;;
+    --help|-h)
+        cmd_help
+        ;;
+    --stable)
+        cmd_stable
+        ;;
+    "")
+        # Default: try Tailscale, fall back to Localtunnel setup
+        if has_tailscale && is_tailscale_connected; then
+            cmd_interactive
+        else
+            cmd_stable
+        fi
+        ;;
+    *)
+        echo_error "Unknown command: $1"
+        echo "Run: tunnel --help"
+        exit 1
+        ;;
+esac

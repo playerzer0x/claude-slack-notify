@@ -1,0 +1,3 @@
+# Placeholder for cross-machine E2E tests
+# Add test-*.sh files here for tests that span multiple machines
+# (e.g., SSH-linked sessions, remote tunnel scenarios)

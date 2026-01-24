@@ -1,0 +1,2 @@
+# Placeholder for Linux-specific E2E tests
+# Add test-*.sh files here for tests that should only run on Linux

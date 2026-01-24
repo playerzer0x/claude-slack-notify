@@ -2076,15 +2076,12 @@ if [[ "$1" == "register" ]]; then
     if [[ -f "$SLACK_CONFIG_FILE" ]]; then
         case "$(uname)" in
             Linux)
-                # On Linux: always auto-start remote-tunnel relay if not running
-                # (needed for button support regardless of session type)
-                REMOTE_TUNNEL="${CLAUDE_DIR}/bin/remote-tunnel"
-                if [[ -x "$REMOTE_TUNNEL" ]]; then
-                    # Check if relay is responding
-                    if ! curl -sf "http://localhost:8464/health" --max-time 1 >/dev/null 2>&1; then
-                        echo "Starting relay for Slack buttons..." >&2
-                        "$REMOTE_TUNNEL" --background >/dev/null 2>&1 || true
-                    fi
+                # On Linux: use sync command to ensure relay and tunnel are running
+                # This uses systemd if available, falls back to manual start
+                if ! curl -sf "http://localhost:8464/health" --max-time 1 >/dev/null 2>&1; then
+                    echo "Checking relay/tunnel status..." >&2
+                    # Call sync command (it's in this same script)
+                    "$0" sync >&2 || true
                 fi
                 ;;
             Darwin)
@@ -2307,10 +2304,123 @@ if [[ "$1" == "status" ]]; then
     echo "    claude-slack-notify update    Pull latest & reinstall"
     echo "    claude-slack-notify list      List all sessions"
     echo "    claude-slack-notify stop      Stop this session"
+    if [[ "$(uname)" == "Linux" ]]; then
+        echo "    claude-slack-notify sync      Fix dead relay/tunnel"
+    fi
     echo "    /slack-notify                 Register in Claude"
     echo ""
 
     exit 0
+fi
+
+# -----------------------------------------------------------------------------
+# Sync - check relay/tunnel status and start if dead (Linux only)
+# Usage: claude-slack-notify sync
+# This is called automatically during /slack-notify registration on Linux
+# -----------------------------------------------------------------------------
+if [[ "$1" == "sync" ]]; then
+    if [[ "$(uname)" != "Linux" ]]; then
+        echo "sync command is for Linux only (use local-tunnel on macOS)"
+        exit 0
+    fi
+
+    FIXED_SOMETHING=false
+
+    # Check remote-relay status
+    RELAY_RUNNING=false
+    if curl -sf "http://localhost:8464/health" --max-time 2 >/dev/null 2>&1; then
+        RELAY_RUNNING=true
+    fi
+
+    # Check Tailscale funnel status
+    FUNNEL_RUNNING=false
+    if command -v tailscale &>/dev/null && tailscale status &>/dev/null 2>&1; then
+        if tailscale funnel status 2>/dev/null | grep -q "proxy.*8464"; then
+            FUNNEL_RUNNING=true
+        fi
+    fi
+
+    # If relay not running, try to start it
+    if [[ "$RELAY_RUNNING" == "false" ]]; then
+        echo "Remote relay not running, starting..."
+
+        # Try systemd first (if service exists and is enabled)
+        SYSTEMD_SERVICE="claude-remote-relay"
+        if systemctl --user is-enabled "$SYSTEMD_SERVICE" &>/dev/null 2>&1; then
+            if systemctl --user start "$SYSTEMD_SERVICE" 2>/dev/null; then
+                sleep 2
+                if curl -sf "http://localhost:8464/health" --max-time 2 >/dev/null 2>&1; then
+                    echo "✓ Remote relay started via systemd"
+                    RELAY_RUNNING=true
+                    FUNNEL_RUNNING=true  # systemd service starts funnel too
+                    FIXED_SOMETHING=true
+                else
+                    echo "⚠ Systemd start succeeded but relay not responding"
+                fi
+            else
+                echo "⚠ Systemd service start failed, trying manual start..."
+            fi
+        fi
+
+        # Fallback: try remote-tunnel --background
+        if [[ "$RELAY_RUNNING" == "false" ]]; then
+            REMOTE_TUNNEL="${CLAUDE_DIR}/bin/remote-tunnel"
+            if [[ -x "$REMOTE_TUNNEL" ]]; then
+                "$REMOTE_TUNNEL" --background 2>/dev/null
+                sleep 2
+                if curl -sf "http://localhost:8464/health" --max-time 2 >/dev/null 2>&1; then
+                    echo "✓ Remote relay started via remote-tunnel"
+                    RELAY_RUNNING=true
+                    FUNNEL_RUNNING=true  # remote-tunnel starts funnel too
+                    FIXED_SOMETHING=true
+                else
+                    echo "✗ Failed to start remote relay"
+                fi
+            else
+                echo "✗ remote-tunnel script not found"
+            fi
+        fi
+    else
+        echo "✓ Remote relay already running"
+    fi
+
+    # If funnel not running but relay is, try to start funnel
+    if [[ "$FUNNEL_RUNNING" == "false" && "$RELAY_RUNNING" == "true" ]]; then
+        echo "Tailscale funnel not running, starting..."
+        if command -v tailscale &>/dev/null; then
+            if tailscale funnel --bg 8464 2>/dev/null; then
+                sleep 1
+                if tailscale funnel status 2>/dev/null | grep -q "proxy.*8464"; then
+                    echo "✓ Tailscale funnel started"
+                    FUNNEL_RUNNING=true
+                    FIXED_SOMETHING=true
+                else
+                    echo "⚠ Funnel command succeeded but not active"
+                fi
+            else
+                echo "⚠ Failed to start Tailscale funnel"
+            fi
+        else
+            echo "⚠ Tailscale not installed"
+        fi
+    elif [[ "$FUNNEL_RUNNING" == "true" ]]; then
+        echo "✓ Tailscale funnel already running"
+    fi
+
+    # Summary
+    if [[ "$RELAY_RUNNING" == "true" && "$FUNNEL_RUNNING" == "true" ]]; then
+        if [[ "$FIXED_SOMETHING" == "true" ]]; then
+            echo ""
+            echo "All services recovered and running"
+        fi
+        exit 0
+    else
+        echo ""
+        echo "Some services still not running. Check logs:"
+        echo "  ~/.claude/remote-relay.log"
+        echo "  journalctl --user -u claude-remote-relay"
+        exit 1
+    fi
 fi
 
 # -----------------------------------------------------------------------------

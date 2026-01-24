@@ -184,15 +184,33 @@ fi
 if [[ "${1:-}" == "--uninstall" ]]; then
     echo_info "Uninstalling Claude Slack Notify..."
 
-    # Stop and remove LaunchAgent
-    launchctl unload "$LAUNCHAGENT_PATH" 2>/dev/null || true
-    rm -f "$LAUNCHAGENT_PATH"
-    echo_info "Removed LaunchAgent"
+    if [[ "$(uname)" == "Darwin" ]]; then
+        # macOS: Stop and remove LaunchAgent
+        launchctl unload "$LAUNCHAGENT_PATH" 2>/dev/null || true
+        rm -f "$LAUNCHAGENT_PATH"
+        echo_info "Removed LaunchAgent"
 
-    # Remove ClaudeFocus.app
-    rm -rf "$APP_PATH"
-    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$APP_PATH" 2>/dev/null || true
-    echo_info "Removed ClaudeFocus.app"
+        # Remove ClaudeFocus.app
+        rm -rf "$APP_PATH"
+        /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$APP_PATH" 2>/dev/null || true
+        echo_info "Removed ClaudeFocus.app"
+    else
+        # Linux: Stop and remove systemd service
+        SYSTEMD_SERVICE="claude-remote-relay"
+        if systemctl --user is-enabled "$SYSTEMD_SERVICE" &>/dev/null 2>&1; then
+            systemctl --user stop "$SYSTEMD_SERVICE" 2>/dev/null || true
+            systemctl --user disable "$SYSTEMD_SERVICE" 2>/dev/null || true
+            echo_info "Stopped and disabled systemd service"
+        fi
+        rm -f "$HOME/.config/systemd/user/claude-remote-relay.service"
+        systemctl --user daemon-reload 2>/dev/null || true
+        echo_info "Removed systemd service file"
+
+        # Stop Tailscale funnel if running
+        if command -v tailscale &>/dev/null; then
+            tailscale funnel off 2>/dev/null || true
+        fi
+    fi
 
     # Remove scripts
     rm -f "$BIN_DIR/claude-slack-notify"
@@ -457,7 +475,68 @@ end open location'
     /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_PATH"
     echo_info "ClaudeFocus.app installed"
 else
-    echo_info "Linux detected - run ${BOLD}remote-tunnel${NC} for Slack button support"
+    # Linux: Setup systemd user service for auto-restart of remote-relay
+    SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
+    SERVICE_FILE="$SYSTEMD_USER_DIR/claude-remote-relay.service"
+
+    # Only setup if MCP server dist exists
+    if [[ -d "$CLAUDE_DIR/mcp-server-dist/dist" ]] || [[ -d "$SCRIPT_DIR/mcp-server/dist" ]]; then
+        mkdir -p "$SYSTEMD_USER_DIR"
+
+        # Determine relay path
+        if [[ -f "$CLAUDE_DIR/mcp-server-dist/dist/remote-relay.js" ]]; then
+            RELAY_PATH="$CLAUDE_DIR/mcp-server-dist/dist/remote-relay.js"
+        else
+            RELAY_PATH="$SCRIPT_DIR/mcp-server/dist/remote-relay.js"
+        fi
+
+        # Create systemd service file
+        cat > "$SERVICE_FILE" << EOF
+[Unit]
+Description=Claude Slack Remote Relay
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node $RELAY_PATH
+Restart=always
+RestartSec=5
+Environment=HOME=$HOME
+Environment=NODE_ENV=production
+
+# Start Tailscale funnel before relay (if available)
+ExecStartPre=-/usr/bin/tailscale funnel --bg 8464
+
+# Stop funnel when service stops
+ExecStopPost=-/usr/bin/tailscale funnel off
+
+[Install]
+WantedBy=default.target
+EOF
+
+        echo_info "Systemd service created: $SERVICE_FILE"
+
+        # Reload systemd
+        if systemctl --user daemon-reload 2>/dev/null; then
+            # Enable but don't start (user may want to configure Slack first)
+            if systemctl --user enable claude-remote-relay 2>/dev/null; then
+                echo_info "Service enabled (will auto-start on boot)"
+            fi
+        fi
+
+        # Check if linger is enabled
+        if command -v loginctl &>/dev/null; then
+            LINGER_STATUS=$(loginctl show-user "$USER" 2>/dev/null | grep -oP 'Linger=\K\w+' || echo "no")
+            if [[ "$LINGER_STATUS" != "yes" ]]; then
+                echo_warn "For service to run without login: sudo loginctl enable-linger $USER"
+            fi
+        fi
+
+        echo_info "Linux detected - use ${BOLD}remote-tunnel${NC} or ${BOLD}systemctl --user start claude-remote-relay${NC}"
+    else
+        echo_info "Linux detected - run ${BOLD}remote-tunnel${NC} for Slack button support"
+    fi
 fi
 
 # Add ~/.claude/bin to PATH if not already there

@@ -23,6 +23,39 @@ import { getSafeDomain, validateTunnelUrl } from './validation.js';
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
+// ============================================================================
+// Structured JSON Logging
+// ============================================================================
+
+interface LogEvent {
+  event: string;
+  app_id?: string;
+  action?: string;
+  tunnel_domain?: string;
+  response_status?: number;
+  latency_ms?: number;
+  error_type?: string;
+  path?: string;
+  port?: number;
+  signal?: string;
+  reason?: string;
+  hostname?: string;
+  instance_name?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Output structured JSON log to stdout
+ * Format: {"timestamp": "...", "event": "...", ...}
+ */
+function log(event: LogEvent): void {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    ...event,
+  };
+  console.log(JSON.stringify(entry));
+}
+
 // Create Express app
 const app = express();
 
@@ -76,12 +109,13 @@ app.post('/register', requireApiKey, async (req: Request, res: Response) => {
   // Validate tunnel URL
   const validation = validateTunnelUrl(tunnel_url);
   if (!validation.valid) {
-    console.log(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      event: 'registration_rejected',
+    log({
+      event: 'register',
       app_id,
+      tunnel_domain: getSafeDomain(tunnel_url),
       reason: validation.reason,
-    }));
+      error_type: 'validation_failed',
+    });
     res.status(400).json({ error: validation.reason });
     return;
   }
@@ -89,8 +123,22 @@ app.post('/register', requireApiKey, async (req: Request, res: Response) => {
   const result = await registerTenant(app_id, tunnel_url, tunnel_secret, { hostname, instance_name });
 
   if (result.success) {
+    log({
+      event: 'register',
+      app_id,
+      tunnel_domain: getSafeDomain(tunnel_url),
+      hostname,
+      instance_name,
+    });
     res.json({ success: true });
   } else {
+    log({
+      event: 'register',
+      app_id,
+      tunnel_domain: getSafeDomain(tunnel_url),
+      error_type: 'redis_error',
+      reason: result.error,
+    });
     res.status(500).json({ error: result.error });
   }
 });
@@ -107,8 +155,10 @@ app.post('/register/heartbeat', requireApiKey, async (req: Request, res: Respons
   const result = await refreshTenant(app_id);
 
   if (result.success) {
+    log({ event: 'heartbeat', app_id });
     res.json({ success: true });
   } else {
+    log({ event: 'heartbeat', app_id, error_type: 'tenant_not_found', reason: result.error });
     res.status(404).json({ error: result.error });
   }
 });
@@ -123,6 +173,7 @@ app.delete('/register', requireApiKey, async (req: Request, res: Response) => {
   }
 
   await unregisterTenant(app_id);
+  log({ event: 'unregister', app_id });
   res.json({ success: true });
 });
 
@@ -149,6 +200,33 @@ function extractAppId(body: Record<string, unknown>): string | null {
 }
 
 /**
+ * Extract action from Slack payload for logging
+ */
+function extractAction(body: Record<string, unknown>): string | undefined {
+  if (typeof body.payload === 'string') {
+    try {
+      const payload = JSON.parse(body.payload);
+      // Block actions have actions array with action_id
+      if (Array.isArray(payload.actions) && payload.actions.length > 0) {
+        const action = payload.actions[0];
+        // Try to get meaningful action name
+        if (action.value && typeof action.value === 'string') {
+          // Format: "session_id|action" or "url:...|action"
+          const parts = action.value.split('|');
+          if (parts.length >= 2) {
+            return parts[parts.length - 1]; // Return the action part
+          }
+        }
+        return action.action_id || undefined;
+      }
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Forward request to user's tunnel
  */
 async function forwardToTunnel(
@@ -157,13 +235,23 @@ async function forwardToTunnel(
   path: string,
   rawBody: string,
   headers: Record<string, string>,
-  appId: string
+  appId: string,
+  action?: string
 ): Promise<{ ok: boolean; status: number; body: string }> {
   const startTime = Date.now();
-  const url = `${tunnelUrl}${path}`;
+  const tunnelDomain = getSafeDomain(tunnelUrl);
+
+  // Log forward_start before making the request
+  log({
+    event: 'forward_start',
+    app_id: appId,
+    action,
+    tunnel_domain: tunnelDomain,
+    path,
+  });
 
   try {
-    const response = await fetch(url, {
+    const response = await fetch(`${tunnelUrl}${path}`, {
       method: 'POST',
       headers: {
         'Content-Type': headers['content-type'] || 'application/x-www-form-urlencoded',
@@ -181,15 +269,14 @@ async function forwardToTunnel(
     const body = await response.text();
     const latencyMs = Date.now() - startTime;
 
-    console.log(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      event: 'forward_request',
+    log({
+      event: 'forward_success',
       app_id: appId,
-      path,
-      tunnel_domain: getSafeDomain(tunnelUrl),
+      action,
+      tunnel_domain: tunnelDomain,
       response_status: response.status,
       latency_ms: latencyMs,
-    }));
+    });
 
     return { ok: response.ok, status: response.status, body };
   } catch (error) {
@@ -198,15 +285,15 @@ async function forwardToTunnel(
     const isTimeout = message.includes('timeout') || message.includes('TimeoutError');
     const isConnectionRefused = message.includes('ECONNREFUSED');
 
-    console.log(JSON.stringify({
-      timestamp: new Date().toISOString(),
+    log({
       event: 'forward_error',
       app_id: appId,
-      path,
-      tunnel_domain: getSafeDomain(tunnelUrl),
-      error: isTimeout ? 'timeout' : isConnectionRefused ? 'connection_refused' : message,
+      action,
+      tunnel_domain: tunnelDomain,
+      error_type: isTimeout ? 'timeout' : isConnectionRefused ? 'connection_refused' : 'unknown',
+      reason: message,
       latency_ms: latencyMs,
-    }));
+    });
 
     return { ok: false, status: 502, body: '' };
   }
@@ -225,14 +312,12 @@ function handleUrlVerification(req: Request, res: Response, body: Record<string,
 app.post('/slack/actions', async (req: Request, res: Response) => {
   const rawBody = (req as Request & { rawBody?: string }).rawBody || '';
 
-  // Extract app_id from payload
+  // Extract app_id and action from payload
   const appId = extractAppId(req.body);
+  const action = extractAction(req.body as Record<string, unknown>);
+
   if (!appId) {
-    console.log(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      event: 'missing_app_id',
-      path: '/slack/actions',
-    }));
+    log({ event: 'forward_error', path: '/slack/actions', error_type: 'missing_app_id' });
     res.status(200).send(); // Still ACK to prevent Slack retries
     return;
   }
@@ -240,12 +325,7 @@ app.post('/slack/actions', async (req: Request, res: Response) => {
   // Look up tenant
   const tenant = await getTenant(appId);
   if (!tenant) {
-    console.log(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      event: 'tenant_not_found',
-      app_id: appId,
-      path: '/slack/actions',
-    }));
+    log({ event: 'forward_error', app_id: appId, action, error_type: 'tenant_not_found' });
     res.json({
       response_type: 'ephemeral',
       text: 'No active session found. Your tunnel may be offline.',
@@ -266,7 +346,8 @@ app.post('/slack/actions', async (req: Request, res: Response) => {
     '/slack/actions',
     rawBody,
     headers,
-    appId
+    appId,
+    action
   );
 
   if (result.ok) {
@@ -293,11 +374,7 @@ app.post('/slack/events', async (req: Request, res: Response) => {
   // Extract app_id from event
   const appId = extractAppId(req.body);
   if (!appId) {
-    console.log(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      event: 'missing_app_id',
-      path: '/slack/events',
-    }));
+    log({ event: 'forward_error', path: '/slack/events', error_type: 'missing_app_id' });
     res.status(200).send();
     return;
   }
@@ -305,12 +382,7 @@ app.post('/slack/events', async (req: Request, res: Response) => {
   // Look up tenant
   const tenant = await getTenant(appId);
   if (!tenant) {
-    console.log(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      event: 'tenant_not_found',
-      app_id: appId,
-      path: '/slack/events',
-    }));
+    log({ event: 'forward_error', app_id: appId, error_type: 'tenant_not_found', path: '/slack/events' });
     res.status(200).send(); // ACK to prevent retries
     return;
   }
@@ -328,7 +400,8 @@ app.post('/slack/events', async (req: Request, res: Response) => {
     '/slack/events',
     rawBody,
     headers,
-    appId
+    appId,
+    'event'
   );
 
   // Always return 200 for events to prevent Slack retries
@@ -337,12 +410,11 @@ app.post('/slack/events', async (req: Request, res: Response) => {
 
 // Error handler
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  console.error(JSON.stringify({
-    timestamp: new Date().toISOString(),
+  log({
     event: 'server_error',
-    error: err.message,
-    stack: err.stack,
-  }));
+    error_type: err.name || 'Error',
+    reason: err.message,
+  });
   res.status(500).json({ error: 'Internal server error' });
 });
 
@@ -358,30 +430,18 @@ export async function startRelay(): Promise<void> {
 
   // Start HTTP server
   app.listen(PORT, () => {
-    console.log(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      event: 'server_started',
-      port: PORT,
-    }));
+    log({ event: 'server_started', port: PORT });
   });
 
   // Graceful shutdown
   process.on('SIGINT', async () => {
-    console.log(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      event: 'server_shutdown',
-      signal: 'SIGINT',
-    }));
+    log({ event: 'server_shutdown', signal: 'SIGINT' });
     await closeRedis();
     process.exit(0);
   });
 
   process.on('SIGTERM', async () => {
-    console.log(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      event: 'server_shutdown',
-      signal: 'SIGTERM',
-    }));
+    log({ event: 'server_shutdown', signal: 'SIGTERM' });
     await closeRedis();
     process.exit(0);
   });

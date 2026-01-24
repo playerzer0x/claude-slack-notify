@@ -228,8 +228,13 @@ export function requireApiKey(req: Request, res: Response, next: NextFunction): 
   if (!result.valid) {
     console.log(JSON.stringify({
       timestamp: new Date().toISOString(),
-      event: 'auth_failed',
+      event: 'auth_error',
       app_id: appId,
+      error_type: result.error?.includes('Missing') ? 'missing_header' :
+                  result.error?.includes('Invalid Authorization header format') ? 'invalid_format' :
+                  result.error?.includes('Empty') ? 'empty_key' :
+                  result.error?.includes('Invalid API key') ? 'invalid_key' :
+                  result.error?.includes('not authorized') ? 'unauthorized_app' : 'unknown',
       reason: result.error,
     }));
     res.status(401).json({ error: result.error });

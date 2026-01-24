@@ -156,7 +156,13 @@ export function detectTerminal(env: TerminalEnv): TerminalInfo {
   }
 
   // Check for SSH session without link
-  if (isSSHSession()) {
+  // IMPORTANT: Skip SSH detection on macOS if we're in a recognized local terminal
+  // (iTerm2 or Terminal.app). This handles the case where SSH_CONNECTION is set in
+  // shell profile but the user is actually using a local GUI terminal.
+  const skipSshDetection =
+    isMac() && (env.itermSessionId || env.termProgram === 'Apple_Terminal');
+
+  if (isSSHSession() && !skipSshDetection) {
     const sshUser = process.env.USER || 'unknown';
     const sshHost = env.claudeSshHost || hostname();
     const sshPort = parseInt(env.claudeSshPort || '22', 10);

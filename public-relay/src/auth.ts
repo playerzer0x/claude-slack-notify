@@ -13,7 +13,7 @@
 
 import type { NextFunction, Request, Response } from 'express';
 
-import type { ApiKeyEntry } from './types.js';
+import type { ApiKeyEntry, ApiKeyValidationResult } from './types.js';
 
 // ============================================================================
 // Tunnel Secret Authentication (for relay -> tunnel requests)
@@ -113,14 +113,16 @@ export function validateRelayAuth(
 // API Key Authentication (for registration endpoints)
 // ============================================================================
 
-// API keys can be set via environment variable or loaded from a file
-// Format: comma-separated list of "key:app_id" pairs
-// Example: RELAY_API_KEYS="sk_abc123:A0B1C2D3,sk_def456:A4B5C6D7"
+// API keys are set via environment variable RELAY_API_KEYS in JSON format
+// Format: {"key1": ["app_id1", "app_id2"], "key2": ["app_id3"]}
+// Example: RELAY_API_KEYS='{"sk_abc123": ["A0B1C2D3"], "sk_def456": ["A4B5C6D7", "A8B9C0D1"]}'
+// An empty array [] means the key can authorize any app_id (wildcard)
 
 let apiKeys: ApiKeyEntry[] = [];
 
 /**
- * Load API keys from environment
+ * Load API keys from environment variable RELAY_API_KEYS
+ * Expected JSON format: {"key1": ["app_id1"], "key2": ["app_id2", "app_id3"]}
  */
 export function loadApiKeys(): void {
   const keysEnv = process.env.RELAY_API_KEYS || '';
@@ -131,57 +133,87 @@ export function loadApiKeys(): void {
       event: 'warning',
       message: 'No RELAY_API_KEYS configured - registration will be open',
     }));
+    apiKeys = [];
     return;
   }
 
-  apiKeys = keysEnv.split(',').map((entry) => {
-    const parts = entry.trim().split(':');
-    if (parts.length === 2) {
-      return { key: parts[0], appId: parts[1] };
-    }
-    // Key without app_id restriction
-    return { key: parts[0], appId: null };
-  });
+  try {
+    const parsed = JSON.parse(keysEnv) as Record<string, string[]>;
 
-  console.log(JSON.stringify({
-    timestamp: new Date().toISOString(),
-    event: 'api_keys_loaded',
-    count: apiKeys.length,
-  }));
+    apiKeys = Object.entries(parsed).map(([key, appIds]) => ({
+      key,
+      appIds: Array.isArray(appIds) ? appIds : [],
+    }));
+
+    console.log(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      event: 'api_keys_loaded',
+      count: apiKeys.length,
+    }));
+  } catch (error) {
+    console.error(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      event: 'api_keys_parse_error',
+      error: error instanceof Error ? error.message : String(error),
+    }));
+    apiKeys = [];
+  }
 }
 
 /**
  * Validate an API key for a specific app_id
+ *
+ * @param authHeader - The Authorization header value (should be "Bearer <key>")
+ * @param appId - The Slack App ID to authorize
+ * @returns { valid: boolean, error?: string }
  */
-export function validateApiKey(key: string, appId: string): boolean {
+export function validateApiKey(authHeader: string | undefined, appId: string): ApiKeyValidationResult {
   // If no keys configured, allow all (development mode)
   if (apiKeys.length === 0) {
-    return true;
+    return { valid: true };
   }
 
-  return apiKeys.some((entry) => {
-    if (entry.key !== key) {
-      return false;
-    }
-    // Wildcard key or matching app_id
-    return entry.appId === null || entry.appId === appId;
-  });
+  if (!authHeader) {
+    return { valid: false, error: 'Missing Authorization header' };
+  }
+
+  if (!authHeader.startsWith('Bearer ')) {
+    return { valid: false, error: 'Invalid Authorization header format. Expected: Bearer <api_key>' };
+  }
+
+  const key = authHeader.substring(7); // Remove "Bearer " prefix
+
+  if (!key) {
+    return { valid: false, error: 'Empty API key' };
+  }
+
+  const entry = apiKeys.find((e) => e.key === key);
+
+  if (!entry) {
+    return { valid: false, error: 'Invalid API key' };
+  }
+
+  // Empty appIds array means wildcard (any app_id allowed)
+  if (entry.appIds.length === 0) {
+    return { valid: true };
+  }
+
+  // Check if app_id is in the allowed list
+  if (!entry.appIds.includes(appId)) {
+    return { valid: false, error: `API key not authorized for app_id: ${appId}` };
+  }
+
+  return { valid: true };
 }
 
 /**
  * Express middleware for API key authentication
  * Expects: Authorization: Bearer <api_key>
+ *
+ * Validates that the API key is authorized for the requested app_id.
+ * Skips auth in development (when RELAY_API_KEYS not set).
  */
 export function requireApiKey(req: Request, res: Response, next: NextFunction): void {
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Missing or invalid Authorization header' });
-    return;
-  }
-
-  const apiKey = authHeader.substring(7); // Remove "Bearer "
-
   // Get app_id from request body (for registration)
   const appId = req.body?.app_id;
 
@@ -190,14 +222,17 @@ export function requireApiKey(req: Request, res: Response, next: NextFunction): 
     return;
   }
 
-  if (!validateApiKey(apiKey, appId)) {
+  const authHeader = req.headers.authorization;
+  const result = validateApiKey(authHeader, appId);
+
+  if (!result.valid) {
     console.log(JSON.stringify({
       timestamp: new Date().toISOString(),
       event: 'auth_failed',
       app_id: appId,
-      reason: 'invalid_api_key',
+      reason: result.error,
     }));
-    res.status(403).json({ error: 'Invalid API key for this app_id' });
+    res.status(401).json({ error: result.error });
     return;
   }
 

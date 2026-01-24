@@ -27,10 +27,19 @@ export interface TenantRegistration {
 
 /**
  * API key entry for authentication
+ * Each key can authorize one or more Slack App IDs
  */
 export interface ApiKeyEntry {
   key: string;
-  appId: string | null; // null = wildcard (any app_id)
+  appIds: string[]; // Empty array = wildcard (any app_id)
+}
+
+/**
+ * Result of API key validation
+ */
+export interface ApiKeyValidationResult {
+  valid: boolean;
+  error?: string;
 }
 
 /**

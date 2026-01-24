@@ -163,6 +163,56 @@ export interface CleanOptions {
   sessions?: boolean;
   links?: boolean;
   all?: boolean;
+  force?: boolean;
+}
+
+/** Force remove all sessions */
+function forceCleanSessions(): { removed: number } {
+  const instancesDir = getInstancesDir();
+  if (!existsSync(instancesDir)) {
+    return { removed: 0 };
+  }
+
+  const files = readdirSync(instancesDir).filter((f) => f.endsWith('.json'));
+  let removed = 0;
+
+  for (const file of files) {
+    try {
+      const filePath = join(instancesDir, file);
+      const content = readFileSync(filePath, 'utf-8');
+      const data = JSON.parse(content) as InstanceData;
+      rmSync(filePath);
+      console.log(`  Removed: ${data.name || file}`);
+      removed++;
+    } catch {
+      // Ignore errors
+    }
+  }
+
+  return { removed };
+}
+
+/** Force remove all links */
+function forceCleanLinks(): { removed: number } {
+  const linksDir = getLinksDir();
+  if (!existsSync(linksDir)) {
+    return { removed: 0 };
+  }
+
+  const files = readdirSync(linksDir).filter((f) => f.endsWith('.json'));
+  let removed = 0;
+
+  for (const file of files) {
+    try {
+      rmSync(join(linksDir, file));
+      console.log(`  Removed: ${file.replace('.json', '')}`);
+      removed++;
+    } catch {
+      // Ignore errors
+    }
+  }
+
+  return { removed };
 }
 
 /**
@@ -172,6 +222,38 @@ export function clean(options: CleanOptions = {}): void {
   const cleanAll = !options.sessions && !options.links;
   const doSessions = options.sessions || cleanAll || options.all;
   const doLinks = options.links || cleanAll || options.all;
+
+  if (options.force) {
+    console.log('Force cleaning ALL resources...');
+    console.log('');
+
+    let totalRemoved = 0;
+
+    if (doSessions) {
+      console.log('Sessions:');
+      const result = forceCleanSessions();
+      totalRemoved += result.removed;
+      if (result.removed === 0) {
+        console.log('  No sessions to remove');
+      }
+      console.log(`  Removed: ${result.removed}`);
+      console.log('');
+    }
+
+    if (doLinks) {
+      console.log('Links:');
+      const result = forceCleanLinks();
+      totalRemoved += result.removed;
+      if (result.removed === 0) {
+        console.log('  No links to remove');
+      }
+      console.log(`  Removed: ${result.removed}`);
+      console.log('');
+    }
+
+    console.log(`Total removed: ${totalRemoved}`);
+    return;
+  }
 
   console.log('Cleaning up stale resources...');
   console.log('');

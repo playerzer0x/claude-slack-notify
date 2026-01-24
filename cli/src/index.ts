@@ -73,10 +73,12 @@ program
   .description('Clean up stale sessions')
   .option('--sessions', 'Only clean sessions')
   .option('--links', 'Only clean links')
+  .option('--force', 'Remove ALL sessions/links regardless of age')
   .action((opts) => {
     cleanCommand({
       sessions: opts.sessions,
       links: opts.links,
+      force: opts.force,
     });
   });
 

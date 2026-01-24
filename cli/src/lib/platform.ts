@@ -150,6 +150,8 @@ export interface TerminalEnv {
   claudeLinkId?: string;
   /** Claude tmux session (set by claude-slack-notify launch) */
   claudeTmuxSession?: string;
+  /** Claude tmux target (set by claude-slack-notify launch) */
+  claudeTmuxTarget?: string;
   /** Claude iTerm session ID (set by claude-slack-notify launch) */
   claudeItermSessionId?: string;
 }
@@ -203,6 +205,10 @@ export function detectTerminalEnv(): TerminalEnv {
 
   if (process.env.CLAUDE_TMUX_SESSION) {
     env.claudeTmuxSession = process.env.CLAUDE_TMUX_SESSION;
+  }
+
+  if (process.env.CLAUDE_TMUX_TARGET) {
+    env.claudeTmuxTarget = process.env.CLAUDE_TMUX_TARGET;
   }
 
   if (process.env.CLAUDE_ITERM_SESSION_ID) {

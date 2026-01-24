@@ -333,11 +333,11 @@ export function parseFocusUrl(url: string): FocusUrlParams | null {
         return null;
 
       case 'linux-tmux':
-        // /TTY.../TMUX_TARGET (TTY path has slashes)
-        // Minimum 4 parts: linux-tmux + at least 2 for tty + tmux_target
-        if (parts.length >= 4) {
+        // /TTY/TMUX_TARGET (TTY is URL-encoded, so minimum 3 parts)
+        // Format: linux-tmux/%2Fdev%2Fpts%2F0/session%3A0.0
+        if (parts.length >= 3) {
           const tmuxTarget = decode(parts[parts.length - 1]);
-          const tty = parts.slice(1, -1).map(decode).join('/');
+          const tty = decode(parts.slice(1, -1).join('/'));
           return { type, tty, tmuxTarget, action };
         }
         return null;

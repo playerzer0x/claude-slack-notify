@@ -95,8 +95,8 @@ if [[ "${1:-}" == "--update" ]]; then
     # Create directories if needed
     mkdir -p "$BIN_DIR" "$COMMANDS_DIR"
 
-    # Copy scripts
-    for script in claude-slack-notify slack-notify-start slack-notify-waiting slack-notify-stale-watcher slack-notify-check get-session-id focus-helper mcp-server local-tunnel remote-tunnel; do
+    # Copy scripts (excluding claude-slack-notify which is now a symlink)
+    for script in slack-notify-start slack-notify-waiting slack-notify-stale-watcher slack-notify-check get-session-id focus-helper mcp-server local-tunnel remote-tunnel; do
         if [[ -f "$SCRIPT_DIR/bin/$script" ]]; then
             cp "$SCRIPT_DIR/bin/$script" "$BIN_DIR/"
             chmod +x "$BIN_DIR/$script"
@@ -107,6 +107,28 @@ if [[ "${1:-}" == "--update" ]]; then
     # Copy command docs
     cp "$SCRIPT_DIR/commands/slack-notify.md" "$COMMANDS_DIR/"
     echo_info "Updated command docs"
+
+    # Rebuild CLI binary if source exists
+    if [[ -d "$SCRIPT_DIR/cli" ]] && command -v bun &>/dev/null; then
+        echo_info "Rebuilding CLI binary..."
+        cd "$SCRIPT_DIR/cli"
+        bun install --silent && bun run build 2>/dev/null
+        cd "$SCRIPT_DIR"
+        if [[ -f "$SCRIPT_DIR/bin/claude-notify" ]]; then
+            cp "$SCRIPT_DIR/bin/claude-notify" "$BIN_DIR/"
+            chmod +x "$BIN_DIR/claude-notify"
+            rm -f "$BIN_DIR/claude-slack-notify"
+            ln -sf claude-notify "$BIN_DIR/claude-slack-notify"
+            echo_info "CLI binary rebuilt and installed"
+        fi
+    elif [[ -f "$SCRIPT_DIR/bin/claude-notify" ]]; then
+        # Use pre-built binary
+        cp "$SCRIPT_DIR/bin/claude-notify" "$BIN_DIR/"
+        chmod +x "$BIN_DIR/claude-notify"
+        rm -f "$BIN_DIR/claude-slack-notify"
+        ln -sf claude-notify "$BIN_DIR/claude-slack-notify"
+        echo_info "CLI binary updated"
+    fi
 
     # Rebuild MCP server if source exists
     if [[ -d "$SCRIPT_DIR/mcp-server" ]]; then
@@ -382,9 +404,13 @@ mkdir -p "$BIN_DIR" "$COMMANDS_DIR" "$APP_DIR" "$HOME/Library/LaunchAgents"
 
 # Install scripts (copy for portability, especially in Docker containers)
 # Use --link flag for development to create symlinks instead
-SCRIPTS="claude-slack-notify slack-notify-start slack-notify-waiting slack-notify-stale-watcher slack-notify-check get-session-id focus-helper mcp-server local-tunnel remote-tunnel"
+# Note: claude-slack-notify is now a symlink to claude-notify (compiled binary)
+SCRIPTS="slack-notify-start slack-notify-waiting slack-notify-stale-watcher slack-notify-check get-session-id focus-helper mcp-server local-tunnel remote-tunnel"
 if [[ "${1:-}" == "--link" ]]; then
     for script in $SCRIPTS; do ln -sf "$SCRIPT_DIR/bin/$script" "$BIN_DIR/"; done
+    # For link mode, symlink the binary and its alias
+    ln -sf "$SCRIPT_DIR/bin/claude-notify" "$BIN_DIR/"
+    ln -sf "$SCRIPT_DIR/bin/claude-slack-notify" "$BIN_DIR/"
     echo_info "Scripts symlinked to $BIN_DIR/"
 else
     for script in $SCRIPTS; do rm -f "$BIN_DIR/$script"; cp "$SCRIPT_DIR/bin/$script" "$BIN_DIR/"; chmod +x "$BIN_DIR/$script"; done
@@ -417,6 +443,39 @@ if [[ -d "$SCRIPT_DIR/mcp-server" ]]; then
         fi
     fi
     cd "$SCRIPT_DIR"
+fi
+
+# Build CLI binary (requires bun for compilation)
+if [[ -d "$SCRIPT_DIR/cli" ]]; then
+    CLI_BUILD_SUCCESS=false
+    if command -v bun &> /dev/null; then
+        cd "$SCRIPT_DIR/cli"
+        bun install --silent && bun run build 2>/dev/null && CLI_BUILD_SUCCESS=true
+        cd "$SCRIPT_DIR"
+    fi
+
+    if [[ "$CLI_BUILD_SUCCESS" == "true" ]]; then
+        echo_info "CLI binary compiled"
+        if [[ "${1:-}" != "--link" ]]; then
+            # Copy the compiled binary
+            cp "$SCRIPT_DIR/bin/claude-notify" "$BIN_DIR/"
+            chmod +x "$BIN_DIR/claude-notify"
+            # Create symlink for backwards compatibility
+            rm -f "$BIN_DIR/claude-slack-notify"
+            ln -sf claude-notify "$BIN_DIR/claude-slack-notify"
+        fi
+    elif [[ -f "$SCRIPT_DIR/bin/claude-notify" ]]; then
+        # Use pre-built binary if bun not available
+        echo_info "Using pre-built CLI binary"
+        if [[ "${1:-}" != "--link" ]]; then
+            cp "$SCRIPT_DIR/bin/claude-notify" "$BIN_DIR/"
+            chmod +x "$BIN_DIR/claude-notify"
+            rm -f "$BIN_DIR/claude-slack-notify"
+            ln -sf claude-notify "$BIN_DIR/claude-slack-notify"
+        fi
+    else
+        echo_warn "bun not found - CLI binary not built (install bun: curl -fsSL https://bun.sh/install | bash)"
+    fi
 fi
 
 # macOS-specific: Install ClaudeFocus.app and LaunchAgent

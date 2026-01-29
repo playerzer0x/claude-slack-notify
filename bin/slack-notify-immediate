@@ -1,0 +1,59 @@
+#!/bin/bash
+# Notify immediately on every Stop/Notification event with dynamic button support
+# - Falls back to tmux session name lookup when session_id doesn't match
+# - Extracts AskUserQuestion options from transcript for dynamic buttons
+# - Sets CLAUDE_NOTIFY_MIN_SECONDS=0 for immediate notifications
+
+STDIN_DATA=$(cat)
+
+# Extract session_id
+if command -v jq &>/dev/null; then
+    SESSION_ID=$(echo "$STDIN_DATA" | jq -r '.session_id // empty' 2>/dev/null)
+else
+    SESSION_ID=$(echo "$STDIN_DATA" | grep -o '"session_id":"[^"]*"' | sed 's/"session_id":"//;s/"$//' 2>/dev/null)
+fi
+
+[[ -z "$SESSION_ID" ]] && exit 0
+
+INSTANCES_DIR="$HOME/.claude/instances"
+INSTANCE_FILE="${INSTANCES_DIR}/${SESSION_ID}.json"
+
+# Fallback: search by tmux session name if exact match fails
+# This handles directory changes which create new session IDs
+if [[ ! -f "$INSTANCE_FILE" && -n "$TMUX" ]]; then
+    TMUX_SESSION=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+    if [[ -n "$TMUX_SESSION" ]]; then
+        for f in "$INSTANCES_DIR"/*.json; do
+            [[ -f "$f" ]] || continue
+            if grep -qE "\"(term_target|name)\".*\".*${TMUX_SESSION}.*\"" "$f" 2>/dev/null; then
+                INSTANCE_FILE="$f"
+                SESSION_ID=$(basename "$f" .json)
+                break
+            fi
+        done
+    fi
+fi
+
+[[ ! -f "$INSTANCE_FILE" ]] && exit 0
+
+# Extract AskUserQuestion options from transcript for dynamic buttons
+QUESTION_OPTS_FILE="/tmp/claude-question-opts-${SESSION_ID}.json"
+rm -f "$QUESTION_OPTS_FILE"
+
+TRANSCRIPT_PATH=$(echo "$STDIN_DATA" | jq -r '.transcript_path // empty' 2>/dev/null)
+if [[ -n "$TRANSCRIPT_PATH" && -f "$TRANSCRIPT_PATH" && -x "$HOME/.claude/bin/extract-question-opts" ]]; then
+    QUESTION_DATA=$("$HOME/.claude/bin/extract-question-opts" "$TRANSCRIPT_PATH" 100 2>/dev/null)
+    if [[ -n "$QUESTION_DATA" && "$QUESTION_DATA" != "[]" && "$QUESTION_DATA" != "null" ]]; then
+        echo "$QUESTION_DATA" > "$QUESTION_OPTS_FILE"
+    fi
+fi
+
+# Create fake timestamp so check passes with threshold=0
+echo $(($(date +%s) - 1)) > "/tmp/claude-prompt-start-${SESSION_ID}"
+
+# Send notification with question options file
+echo "$STDIN_DATA" | \
+    CLAUDE_NOTIFY_MIN_SECONDS=0 \
+    CLAUDE_INSTANCE_ID="$SESSION_ID" \
+    CLAUDE_QUESTION_OPTS_FILE="$QUESTION_OPTS_FILE" \
+    "$HOME/.claude/bin/claude-slack-notify" check

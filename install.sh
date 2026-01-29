@@ -96,7 +96,7 @@ if [[ "${1:-}" == "--update" ]]; then
     mkdir -p "$BIN_DIR" "$COMMANDS_DIR"
 
     # Copy scripts (excluding claude-slack-notify which is now a symlink)
-    for script in slack-notify-start slack-notify-waiting slack-notify-stale-watcher slack-notify-check get-session-id focus-helper mcp-server local-tunnel remote-tunnel; do
+    for script in slack-notify-start slack-notify-waiting slack-notify-stale-watcher slack-notify-check slack-notify-immediate get-session-id focus-helper mcp-server local-tunnel remote-tunnel; do
         if [[ -f "$SCRIPT_DIR/bin/$script" ]]; then
             cp "$SCRIPT_DIR/bin/$script" "$BIN_DIR/"
             chmod +x "$BIN_DIR/$script"
@@ -405,7 +405,7 @@ mkdir -p "$BIN_DIR" "$COMMANDS_DIR" "$APP_DIR" "$HOME/Library/LaunchAgents"
 # Install scripts (copy for portability, especially in Docker containers)
 # Use --link flag for development to create symlinks instead
 # Note: claude-slack-notify is now a symlink to claude-notify (compiled binary)
-SCRIPTS="slack-notify-start slack-notify-waiting slack-notify-stale-watcher slack-notify-check get-session-id focus-helper mcp-server local-tunnel remote-tunnel"
+SCRIPTS="slack-notify-start slack-notify-waiting slack-notify-stale-watcher slack-notify-check slack-notify-immediate get-session-id focus-helper mcp-server local-tunnel remote-tunnel"
 if [[ "${1:-}" == "--link" ]]; then
     for script in $SCRIPTS; do ln -sf "$SCRIPT_DIR/bin/$script" "$BIN_DIR/"; done
     # For link mode, symlink the binary and its alias
@@ -717,20 +717,19 @@ SLACK_PERMISSIONS='[
 # - PermissionRequest: When user shown a permission dialog (start stale watcher)
 # - Notification: Various notification events (idle_prompt, elicitation_dialog, permission_prompt)
 #
-# Stale response notifications: If Claude's response sits unanswered for 30s, notify.
-# The watcher is started on idle/permission events and cancelled when user responds.
+# Immediate notifications: Notify on every Claude response and when questions/permissions appear.
+# Uses slack-notify-immediate which:
+# - Falls back to tmux session name lookup when session_id changes (directory switches)
+# - Extracts AskUserQuestion options from transcript for dynamic Slack buttons
+# - Sets CLAUDE_NOTIFY_MIN_SECONDS=0 for immediate notifications
 SLACK_HOOKS='{
   "hooks": {
-    "UserPromptSubmit": [
-      {"hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-start", "timeout": 5}]}
-    ],
-    "PermissionRequest": [
-      {"hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-waiting", "timeout": 10}]}
+    "Stop": [
+      {"hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-immediate", "timeout": 10}]}
     ],
     "Notification": [
-      {"matcher": "idle_prompt", "hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-waiting", "timeout": 10}]},
-      {"matcher": "elicitation_dialog", "hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-waiting", "timeout": 10}]},
-      {"matcher": "permission_prompt", "hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-waiting", "timeout": 10}]}
+      {"matcher": "elicitation_dialog", "hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-immediate", "timeout": 10}]},
+      {"matcher": "permission_prompt", "hooks": [{"type": "command", "command": "$HOME/.claude/bin/slack-notify-immediate", "timeout": 10}]}
     ]
   }
 }'
@@ -740,7 +739,7 @@ if [[ -f "$SETTINGS_FILE" ]]; then
     PERMS_CONFIGURED=false
 
     # Check what's already configured
-    if grep -q "slack-notify-start" "$SETTINGS_FILE" 2>/dev/null; then
+    if grep -q "slack-notify-immediate" "$SETTINGS_FILE" 2>/dev/null; then
         HOOKS_CONFIGURED=true
     fi
     if grep -q 'Bash(SESSION_ID=:\*)' "$SETTINGS_FILE" 2>/dev/null; then

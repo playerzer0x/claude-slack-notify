@@ -96,7 +96,7 @@ if [[ "${1:-}" == "--update" ]]; then
     mkdir -p "$BIN_DIR" "$COMMANDS_DIR"
 
     # Copy scripts (excluding claude-slack-notify which is now a symlink)
-    for script in slack-notify-start slack-notify-waiting slack-notify-stale-watcher slack-notify-check slack-notify-immediate get-session-id focus-helper mcp-server local-tunnel remote-tunnel; do
+    for script in slack-notify-immediate extract-question-opts get-session-id focus-helper mcp-server local-tunnel remote-tunnel; do
         if [[ -f "$SCRIPT_DIR/bin/$script" ]]; then
             cp "$SCRIPT_DIR/bin/$script" "$BIN_DIR/"
             chmod +x "$BIN_DIR/$script"
@@ -151,48 +151,6 @@ if [[ "${1:-}" == "--update" ]]; then
         cd "$SCRIPT_DIR"
     fi
 
-    # Migrate hooks from old format (slack-notify-check) to new (slack-notify-waiting)
-    SETTINGS_FILE="$CLAUDE_DIR/settings.json"
-    if [[ -f "$SETTINGS_FILE" ]] && command -v jq &>/dev/null; then
-        # Check if using old hooks (slack-notify-check for Notification events)
-        if grep -q 'slack-notify-check.*idle_prompt\|idle_prompt.*slack-notify-check' "$SETTINGS_FILE" 2>/dev/null; then
-            echo_info "Migrating hooks to stale-response watcher..."
-
-            # Replace slack-notify-check with slack-notify-waiting for Notification and PermissionRequest events
-            # Keep slack-notify-start for UserPromptSubmit (it's already updated in the script)
-            MIGRATED=$(jq '
-              # Update Notification hooks
-              if .hooks.Notification then
-                .hooks.Notification = [.hooks.Notification[] |
-                  .hooks = [.hooks[] |
-                    if .command | test("slack-notify-check") then
-                      .command = (.command | gsub("slack-notify-check"; "slack-notify-waiting"))
-                    else . end
-                  ]
-                ]
-              else . end |
-              # Update PermissionRequest hooks
-              if .hooks.PermissionRequest then
-                .hooks.PermissionRequest = [.hooks.PermissionRequest[] |
-                  .hooks = [.hooks[] |
-                    if .command | test("slack-notify-check") then
-                      .command = (.command | gsub("slack-notify-check"; "slack-notify-waiting"))
-                    else . end
-                  ]
-                ]
-              else . end |
-              # Remove Stop and SubagentStop hooks (no longer needed for stale detection)
-              if .hooks.Stop then del(.hooks.Stop) else . end |
-              if .hooks.SubagentStop then del(.hooks.SubagentStop) else . end
-            ' "$SETTINGS_FILE" 2>/dev/null)
-
-            if [[ -n "$MIGRATED" ]] && echo "$MIGRATED" | jq . > /dev/null 2>&1; then
-                echo "$MIGRATED" > "$SETTINGS_FILE"
-                echo_info "Hooks migrated to stale-response watcher"
-            fi
-        fi
-    fi
-
     # Save repo path for `claude-slack-notify update`
     echo "$SCRIPT_DIR" > "$CLAUDE_DIR/.repo-path"
 
@@ -236,6 +194,9 @@ if [[ "${1:-}" == "--uninstall" ]]; then
 
     # Remove scripts
     rm -f "$BIN_DIR/claude-slack-notify"
+    rm -f "$BIN_DIR/claude-notify"
+    rm -f "$BIN_DIR/slack-notify-immediate"
+    rm -f "$BIN_DIR/extract-question-opts"
     rm -f "$BIN_DIR/slack-notify-start"
     rm -f "$BIN_DIR/slack-notify-waiting"
     rm -f "$BIN_DIR/slack-notify-stale-watcher"
@@ -405,7 +366,7 @@ mkdir -p "$BIN_DIR" "$COMMANDS_DIR" "$APP_DIR" "$HOME/Library/LaunchAgents"
 # Install scripts (copy for portability, especially in Docker containers)
 # Use --link flag for development to create symlinks instead
 # Note: claude-slack-notify is now a symlink to claude-notify (compiled binary)
-SCRIPTS="slack-notify-start slack-notify-waiting slack-notify-stale-watcher slack-notify-check slack-notify-immediate get-session-id focus-helper mcp-server local-tunnel remote-tunnel"
+SCRIPTS="slack-notify-immediate extract-question-opts get-session-id focus-helper mcp-server local-tunnel remote-tunnel"
 if [[ "${1:-}" == "--link" ]]; then
     for script in $SCRIPTS; do ln -sf "$SCRIPT_DIR/bin/$script" "$BIN_DIR/"; done
     # For link mode, symlink the binary and its alias
@@ -713,9 +674,8 @@ SLACK_PERMISSIONS='[
 
 # Our hooks to add
 # Hook events (from official docs):
-# - UserPromptSubmit: When user submits a prompt (cancel stale watcher, start task timer)
-# - PermissionRequest: When user shown a permission dialog (start stale watcher)
-# - Notification: Various notification events (idle_prompt, elicitation_dialog, permission_prompt)
+# - Stop: When Claude finishes responding
+# - Notification: Various notification events (elicitation_dialog, permission_prompt)
 #
 # Immediate notifications: Notify on every Claude response and when questions/permissions appear.
 # Uses slack-notify-immediate which:

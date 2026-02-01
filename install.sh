@@ -218,6 +218,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
 
     # Remove configuration files
     rm -f "$CLAUDE_DIR/slack-webhook-url"
+    rm -f "$CLAUDE_DIR/slack-signing-secret"
     rm -f "$CLAUDE_DIR/button-config"
     rm -rf "$CLAUDE_DIR/instances/"
     rm -f "$CLAUDE_DIR/settings.json.backup"
@@ -766,6 +767,7 @@ fi
 # =============================================================================
 SLACK_CONFIG_FILE="$CLAUDE_DIR/.slack-config"
 WEBHOOK_FILE="$CLAUDE_DIR/slack-webhook-url"
+SIGNING_SECRET_FILE="$CLAUDE_DIR/slack-signing-secret"
 
 if [[ -d "$SCRIPT_DIR/mcp-server/dist" && -t 0 && "${1:-}" != "--link" ]]; then
     if [[ "$(uname)" == "Darwin" ]]; then
@@ -785,6 +787,36 @@ if [[ -d "$SCRIPT_DIR/mcp-server/dist" && -t 0 && "${1:-}" != "--link" ]]; then
             echo_info "Slack config needed"
             echo -e "  Run on Mac: ${BOLD}claude-slack-notify remote${NC} (syncs config automatically)"
         fi
+    fi
+fi
+
+# =============================================================================
+# Slack Signing Secret (Security)
+# =============================================================================
+# Required for webhook signature verification - prevents unauthorized requests
+if [[ -t 0 && "${1:-}" != "--link" ]]; then
+    if [[ ! -f "$SIGNING_SECRET_FILE" ]]; then
+        print_section "Security: Slack Signing Secret"
+        echo -e "  ${YELLOW}⚠${NC}  Without this, anyone can send fake webhook requests"
+        echo ""
+        echo -e "  To find your signing secret:"
+        echo -e "    1. Go to ${CYAN}https://api.slack.com/apps${NC}"
+        echo -e "    2. Select your app → ${BOLD}Basic Information${NC}"
+        echo -e "    3. Scroll to ${BOLD}App Credentials${NC} → ${BOLD}Signing Secret${NC}"
+        echo ""
+        echo -ne "  ${YELLOW}?${NC} Enter Slack Signing Secret (or press Enter to skip): "
+        read -r signing_secret
+
+        if [[ -n "$signing_secret" ]]; then
+            echo "$signing_secret" > "$SIGNING_SECRET_FILE"
+            chmod 600 "$SIGNING_SECRET_FILE"
+            echo_info "Signing secret saved to $SIGNING_SECRET_FILE"
+        else
+            echo_warn "Skipped - webhook signature verification will be disabled"
+            echo -e "  ${DIM}Set later: echo 'your-secret' > ~/.claude/slack-signing-secret${NC}"
+        fi
+    else
+        echo_info "Slack signing secret already configured"
     fi
 fi
 

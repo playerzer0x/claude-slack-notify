@@ -648,6 +648,46 @@ case "$TYPE" in
         switch_terminal_tab "$ARG1"
         send_terminal_input "$ARG1" "$ACTION_INPUT"
         ;;
+    ghostty)
+        # Pure Ghostty - just activate the app (no window/session targeting available)
+        # Ghostty lacks AppleScript dictionary, so we can only bring it to front
+        log "Activating Ghostty"
+        osascript -e 'tell application "Ghostty" to activate'
+        osascript -e 'tell application "System Events" to set frontmost of process "Ghostty" to true'
+        # Send input via System Events keystroke (like Terminal.app frontmost)
+        if [[ -n "$ACTION_INPUT" ]]; then
+            sleep 0.2
+            osascript << APPLESCRIPT 2>/dev/null
+tell application "Ghostty"
+    activate
+    delay 0.1
+    tell application "System Events"
+        tell process "Ghostty"
+            keystroke "$ACTION_INPUT"
+            delay 0.1
+            key code 36
+        end tell
+    end tell
+end tell
+APPLESCRIPT
+        fi
+        ;;
+    ghostty-tmux)
+        # Ghostty + tmux: send input via tmux (reliable), then activate Ghostty
+        # ARG1 = tmux_target
+        tmux_target="$ARG1"
+        log "Ghostty-tmux: target=$tmux_target input='$ACTION_INPUT'"
+
+        # Step 1: Send input to tmux (this works even when Ghostty is not focused)
+        send_tmux_input "$tmux_target" "$ACTION_INPUT"
+
+        # Step 2: Switch tmux to the correct window/pane
+        switch_tmux_window "$tmux_target"
+
+        # Step 3: Activate Ghostty
+        osascript -e 'tell application "Ghostty" to activate'
+        osascript -e 'tell application "System Events" to set frontmost of process "Ghostty" to true'
+        ;;
     tmux)
         # Pure tmux - send input first, then switch and focus
         send_tmux_input "$ARG1" "$ACTION_INPUT"

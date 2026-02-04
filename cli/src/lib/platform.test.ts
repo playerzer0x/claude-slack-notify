@@ -23,6 +23,7 @@ import {
   isSSHSession,
   isInsideTmux,
   isInITerm2,
+  isInGhostty,
   getTmuxEnv,
   getEnvWithTmuxFallback,
 } from './platform';
@@ -131,6 +132,7 @@ describe('detectTerminalEnv', () => {
   beforeEach(() => {
     // Clear relevant env vars before each test
     delete process.env.ITERM_SESSION_ID;
+    delete process.env.GHOSTTY_RESOURCES_DIR;
     delete process.env.TMUX;
     delete process.env.TMUX_PANE;
     delete process.env.WT_SESSION;
@@ -159,6 +161,12 @@ describe('detectTerminalEnv', () => {
     process.env.ITERM_SESSION_ID = 'w0t0p0:ABC-123';
     const env = detectTerminalEnv();
     expect(env.itermSessionId).toBe('w0t0p0:ABC-123');
+  });
+
+  test('detects Ghostty via GHOSTTY_RESOURCES_DIR', () => {
+    process.env.GHOSTTY_RESOURCES_DIR = '/Applications/Ghostty.app/Contents/Resources/ghostty';
+    const env = detectTerminalEnv();
+    expect(env.ghosttyResourcesDir).toBe('/Applications/Ghostty.app/Contents/Resources/ghostty');
   });
 
   test('detects tmux', () => {
@@ -226,6 +234,8 @@ describe('Convenience detection functions', () => {
     delete process.env.SSH_CONNECTION;
     delete process.env.TMUX;
     delete process.env.ITERM_SESSION_ID;
+    delete process.env.GHOSTTY_RESOURCES_DIR;
+    delete process.env.TERM_PROGRAM;
   });
 
   afterEach(() => {
@@ -262,6 +272,22 @@ describe('Convenience detection functions', () => {
     test('returns true with ITERM_SESSION_ID', () => {
       process.env.ITERM_SESSION_ID = 'w0t0p0:ABC';
       expect(isInITerm2()).toBe(true);
+    });
+  });
+
+  describe('isInGhostty', () => {
+    test('returns false without Ghostty env vars', () => {
+      expect(isInGhostty()).toBe(false);
+    });
+
+    test('returns true with GHOSTTY_RESOURCES_DIR', () => {
+      process.env.GHOSTTY_RESOURCES_DIR = '/path/to/ghostty/resources';
+      expect(isInGhostty()).toBe(true);
+    });
+
+    test('returns true with TERM_PROGRAM=ghostty', () => {
+      process.env.TERM_PROGRAM = 'ghostty';
+      expect(isInGhostty()).toBe(true);
     });
   });
 });

@@ -133,6 +133,8 @@ export function getSlackSigningSecretPath(): string {
 export interface TerminalEnv {
   /** iTerm2 session ID if running in iTerm2 */
   itermSessionId?: string;
+  /** Ghostty resources directory if running in Ghostty */
+  ghosttyResourcesDir?: string;
   /** TMUX environment if inside tmux */
   tmux?: string;
   /** TMUX pane ID */
@@ -209,6 +211,11 @@ export function detectTerminalEnv(): TerminalEnv {
   // iTerm2
   if (process.env.ITERM_SESSION_ID) {
     env.itermSessionId = process.env.ITERM_SESSION_ID;
+  }
+
+  // Ghostty
+  if (process.env.GHOSTTY_RESOURCES_DIR) {
+    env.ghosttyResourcesDir = process.env.GHOSTTY_RESOURCES_DIR;
   }
 
   // tmux
@@ -301,4 +308,11 @@ export function isInsideTmux(): boolean {
  */
 export function isInITerm2(): boolean {
   return !!process.env.ITERM_SESSION_ID;
+}
+
+/**
+ * Check if we're running in Ghostty.
+ */
+export function isInGhostty(): boolean {
+  return !!process.env.GHOSTTY_RESOURCES_DIR || process.env.TERM_PROGRAM === 'ghostty';
 }

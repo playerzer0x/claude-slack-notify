@@ -163,6 +163,8 @@ function getEnvironmentInfo(): { type: string; terminal: string | null } {
     type = 'macOS';
     if (process.env.ITERM_SESSION_ID) {
       terminal = 'iTerm2';
+    } else if (process.env.GHOSTTY_RESOURCES_DIR || process.env.TERM_PROGRAM === 'ghostty') {
+      terminal = 'Ghostty';
     } else if (process.env.TERM_PROGRAM === 'Apple_Terminal') {
       terminal = 'Terminal.app';
     } else if (process.env.TERM_PROGRAM) {

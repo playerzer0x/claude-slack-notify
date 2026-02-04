@@ -51,6 +51,7 @@ export {
   getTmuxSocketPath,
   getTunnelUrlPath,
   getUid,
+  isInGhostty,
   isInITerm2,
   isInsideTmux,
   isLinux,

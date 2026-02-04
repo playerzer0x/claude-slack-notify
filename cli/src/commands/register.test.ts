@@ -88,6 +88,43 @@ describe('detectTerminal', () => {
       isMacSpy.mockRestore();
       isSSHSpy.mockRestore();
     });
+
+    test('skips SSH detection when on Mac with Ghostty', () => {
+      const isMacSpy = spyOn(platform, 'isMac').mockReturnValue(true);
+      const isSSHSpy = spyOn(platform, 'isSSHSession').mockReturnValue(true);
+
+      const env: TerminalEnv = {
+        ghosttyResourcesDir: '/Applications/Ghostty.app/Contents/Resources/ghostty',
+        sshConnection: '100.1.2.3 54321 100.5.6.7 22', // SSH_CONNECTION set
+      };
+
+      const result = detectTerminal(env);
+
+      // Should detect as ghostty, NOT ssh
+      expect(result.type).toBe('ghostty');
+      expect(result.target).toBe('frontmost');
+
+      isMacSpy.mockRestore();
+      isSSHSpy.mockRestore();
+    });
+
+    test('skips SSH detection when on Mac with Ghostty via TERM_PROGRAM', () => {
+      const isMacSpy = spyOn(platform, 'isMac').mockReturnValue(true);
+      const isSSHSpy = spyOn(platform, 'isSSHSession').mockReturnValue(true);
+
+      const env: TerminalEnv = {
+        termProgram: 'ghostty',
+        sshConnection: '100.1.2.3 54321 100.5.6.7 22',
+      };
+
+      const result = detectTerminal(env);
+
+      // Should detect as ghostty, NOT ssh
+      expect(result.type).toBe('ghostty');
+
+      isMacSpy.mockRestore();
+      isSSHSpy.mockRestore();
+    });
   });
 
   describe('normal detection scenarios', () => {
@@ -144,6 +181,58 @@ describe('detectTerminal', () => {
       const result = detectTerminal(env);
       expect(result.type).toBe('terminal');
       expect(result.target).toBe('frontmost');
+
+      isMacSpy.mockRestore();
+      isSSHSpy.mockRestore();
+    });
+
+    test('detects ghostty on Mac', () => {
+      const isMacSpy = spyOn(platform, 'isMac').mockReturnValue(true);
+      const isSSHSpy = spyOn(platform, 'isSSHSession').mockReturnValue(false);
+
+      const env: TerminalEnv = {
+        ghosttyResourcesDir: '/Applications/Ghostty.app/Contents/Resources/ghostty',
+      };
+
+      const result = detectTerminal(env);
+      expect(result.type).toBe('ghostty');
+      expect(result.target).toBe('frontmost');
+      expect(result.focusUrl).toBe('claude-focus://ghostty');
+
+      isMacSpy.mockRestore();
+      isSSHSpy.mockRestore();
+    });
+
+    test('detects ghostty on Mac via TERM_PROGRAM', () => {
+      const isMacSpy = spyOn(platform, 'isMac').mockReturnValue(true);
+      const isSSHSpy = spyOn(platform, 'isSSHSession').mockReturnValue(false);
+
+      const env: TerminalEnv = {
+        termProgram: 'ghostty',
+      };
+
+      const result = detectTerminal(env);
+      expect(result.type).toBe('ghostty');
+      expect(result.target).toBe('frontmost');
+
+      isMacSpy.mockRestore();
+      isSSHSpy.mockRestore();
+    });
+
+    test('detects ghostty-tmux on Mac', () => {
+      const isMacSpy = spyOn(platform, 'isMac').mockReturnValue(true);
+      const isSSHSpy = spyOn(platform, 'isSSHSession').mockReturnValue(false);
+
+      const env: TerminalEnv = {
+        ghosttyResourcesDir: '/Applications/Ghostty.app/Contents/Resources/ghostty',
+        tmux: '/tmp/tmux-501/default,1234,0',
+        tmuxPane: '%0',
+      };
+
+      const result = detectTerminal(env);
+      expect(result.type).toBe('ghostty-tmux');
+      expect(result.target).toBe('%0');
+      expect(result.focusUrl).toContain('ghostty-tmux');
 
       isMacSpy.mockRestore();
       isSSHSpy.mockRestore();

@@ -34,6 +34,8 @@ export type FocusUrlType =
   | 'iterm2'
   | 'iterm-tmux'
   | 'terminal'
+  | 'ghostty'
+  | 'ghostty-tmux'
   | 'wt-tmux'
   | 'windows-terminal'
   | 'wsl-tmux'
@@ -167,6 +169,19 @@ export function buildFocusUrl(params: FocusUrlParams): string {
         throw new Error('terminal requires tty');
       }
       path = `terminal/${urlEncode(params.tty)}`;
+      break;
+
+    case 'ghostty':
+      // claude-focus://ghostty (no session ID available - just activates the app)
+      path = 'ghostty';
+      break;
+
+    case 'ghostty-tmux':
+      // claude-focus://ghostty-tmux/TMUX_TARGET
+      if (!params.tmuxTarget) {
+        throw new Error('ghostty-tmux requires tmuxTarget');
+      }
+      path = `ghostty-tmux/${urlEncode(params.tmuxTarget)}`;
       break;
 
     case 'wt-tmux':
@@ -370,6 +385,17 @@ export function parseFocusUrl(url: string): FocusUrlParams | null {
         }
         return null;
 
+      case 'ghostty':
+        // claude-focus://ghostty (no arguments needed)
+        return { type, action };
+
+      case 'ghostty-tmux':
+        // claude-focus://ghostty-tmux/TMUX_TARGET
+        if (parts.length >= 2) {
+          return { type, tmuxTarget: decode(parts[1]), action };
+        }
+        return null;
+
       case 'wt-tmux':
         if (parts.length >= 3) {
           return {
@@ -453,7 +479,7 @@ export function isRemoteSessionUrl(url: string): boolean {
  * Check if a focus URL is for a Mac-native session.
  */
 export function isMacSessionUrl(url: string): boolean {
-  const macTypes: FocusUrlType[] = ['iterm2', 'iterm-tmux', 'terminal', 'local-tmux'];
+  const macTypes: FocusUrlType[] = ['iterm2', 'iterm-tmux', 'terminal', 'local-tmux', 'ghostty', 'ghostty-tmux'];
   const params = parseFocusUrl(url);
   return params ? macTypes.includes(params.type) : false;
 }

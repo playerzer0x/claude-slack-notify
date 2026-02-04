@@ -163,6 +163,30 @@ describe('buildFocusUrl', () => {
     });
   });
 
+  describe('ghostty', () => {
+    test('builds simple URL without session ID', () => {
+      const params: FocusUrlParams = {
+        type: 'ghostty',
+      };
+      expect(buildFocusUrl(params)).toBe('claude-focus://ghostty');
+    });
+  });
+
+  describe('ghostty-tmux', () => {
+    test('builds with tmux target', () => {
+      const params: FocusUrlParams = {
+        type: 'ghostty-tmux',
+        tmuxTarget: 'main:0.0',
+      };
+      expect(buildFocusUrl(params)).toBe('claude-focus://ghostty-tmux/main%3A0.0');
+    });
+
+    test('throws error without tmux target', () => {
+      const params: FocusUrlParams = { type: 'ghostty-tmux' };
+      expect(() => buildFocusUrl(params)).toThrow('ghostty-tmux requires tmuxTarget');
+    });
+  });
+
   describe('Windows terminals', () => {
     test('builds wt-tmux', () => {
       const params: FocusUrlParams = {
@@ -317,6 +341,23 @@ describe('parseFocusUrl', () => {
     });
   });
 
+  describe('ghostty', () => {
+    test('parses simple URL', () => {
+      const url = 'claude-focus://ghostty';
+      const result = parseFocusUrl(url);
+      expect(result?.type).toBe('ghostty');
+    });
+  });
+
+  describe('ghostty-tmux', () => {
+    test('parses URL with tmux target', () => {
+      const url = 'claude-focus://ghostty-tmux/main%3A0.0';
+      const result = parseFocusUrl(url);
+      expect(result?.type).toBe('ghostty-tmux');
+      expect(result?.tmuxTarget).toBe('main:0.0');
+    });
+  });
+
   describe('Query params', () => {
     test('parses action query param', () => {
       const url = 'claude-focus://iterm2/abc?action=focus';
@@ -401,6 +442,8 @@ describe('isMacSessionUrl', () => {
     expect(isMacSessionUrl('claude-focus://iterm-tmux/%2Fdev%2Fttys0/s')).toBe(true);
     expect(isMacSessionUrl('claude-focus://terminal/%2Fdev%2Fttys000')).toBe(true);
     expect(isMacSessionUrl('claude-focus://local-tmux/target')).toBe(true);
+    expect(isMacSessionUrl('claude-focus://ghostty')).toBe(true);
+    expect(isMacSessionUrl('claude-focus://ghostty-tmux/main%3A0.0')).toBe(true);
   });
 
   test('returns false for remote types', () => {
@@ -423,6 +466,8 @@ describe('round-trip tests', () => {
     { type: 'iterm2', itermSessionId: 'w0t0p0:ABC-123' },
     { type: 'terminal', tty: '/dev/ttys000' },
     { type: 'terminal', tty: 'frontmost' },
+    { type: 'ghostty' },
+    { type: 'ghostty-tmux', tmuxTarget: 'main:0.0' },
     { type: 'gnome-terminal', pid: '1234' },
     { type: 'konsole', dbusSession: 'session-abc' },
   ];

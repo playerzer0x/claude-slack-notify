@@ -157,10 +157,11 @@ export function detectTerminal(env: TerminalEnv): TerminalInfo {
 
   // Check for SSH session without link
   // IMPORTANT: Skip SSH detection on macOS if we're in a recognized local terminal
-  // (iTerm2 or Terminal.app). This handles the case where SSH_CONNECTION is set in
+  // (iTerm2, Terminal.app, or Ghostty). This handles the case where SSH_CONNECTION is set in
   // shell profile but the user is actually using a local GUI terminal.
+  const isGhostty = env.ghosttyResourcesDir || env.termProgram === 'ghostty';
   const skipSshDetection =
-    isMac() && (env.itermSessionId || env.termProgram === 'Apple_Terminal');
+    isMac() && (env.itermSessionId || env.termProgram === 'Apple_Terminal' || isGhostty);
 
   if (isSSHSession() && !skipSshDetection) {
     const sshUser = process.env.USER || 'unknown';
@@ -195,11 +196,22 @@ export function detectTerminal(env: TerminalEnv): TerminalInfo {
 
   // macOS terminal detection
   if (isMac()) {
+    // Check for Ghostty
+    const isGhostty = env.ghosttyResourcesDir || env.termProgram === 'ghostty';
+
     if (env.tmux) {
       // Inside tmux on Mac
       const tmuxTargetStr = env.tmuxPane || '0.0';
 
-      if (env.itermSessionId) {
+      if (isGhostty) {
+        // Ghostty + tmux: use tmux for targeting, Ghostty just needs activation
+        result.type = 'ghostty-tmux';
+        result.target = tmuxTargetStr;
+        result.focusUrl = buildFocusUrl({
+          type: 'ghostty-tmux',
+          tmuxTarget: tmuxTargetStr,
+        });
+      } else if (env.itermSessionId) {
         result.type = 'iterm-tmux';
         result.target = `${tmuxTargetStr}`;
         result.focusUrl = buildFocusUrl({
@@ -215,6 +227,13 @@ export function detectTerminal(env: TerminalEnv): TerminalInfo {
           tmuxTarget: tmuxTargetStr,
         });
       }
+    } else if (isGhostty) {
+      // Pure Ghostty (no tmux) - can only activate app, no window targeting
+      result.type = 'ghostty';
+      result.target = 'frontmost';
+      result.focusUrl = buildFocusUrl({
+        type: 'ghostty',
+      });
     } else if (env.itermSessionId) {
       result.type = 'iterm2';
       result.target = env.itermSessionId;
